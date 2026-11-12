@@ -1,0 +1,36 @@
+# GuildLedger bot configuration. On the server: /etc/guildledger/config.toml (mode 600, owner guildledger).
+# For a local test: copy to bot/config.toml (git-ignored). Token and webhook URLs are secrets.
+
+[discord]
+# Developer Portal -> your application -> Bot -> Reset Token. Keep it only in this file.
+token = ""
+# Discord: User Settings -> Advanced -> Developer Mode on; then right-click #gl-ingest -> Copy Channel ID.
+ingest_channel_id = 0
+
+# One webhook per collector in #gl-ingest. Key = the webhook ID (the number right after
+# /api/webhooks/ in its URL), value = the collector's name. Uploads from any other author are ignored;
+# delete a collector's line (and its webhook) to revoke it.
+[collectors]
+# 1234567890123456789 = "Maupa"
+
+[post]
+# Webhooks of the two log channels (the same ones direct mode used is fine).
+chat_webhook = ""
+roster_webhook = ""
+timezone = "Europe/Zurich"
+# Chat lines without text: "summary" | "lines" | "skip"
+meta = "summary"
+# Chat waits this long before posting so another collector's copy can add missing text.
+hold_chat_seconds = 600
+every_seconds = 30
+# Rows older than this (unix seconds) are archived but not posted. Default: the bot's first start,
+# because direct mode already posted everything before that.
+# since = 1794355200
+
+[storage]
+db_path = "/var/lib/guildledger/guildledger.db"
+
+[backup]
+# Optional: webhook of a private #gl-backup channel. The daily backup (gzip) is also posted there,
+# so the archive survives the loss of the server. Empty = local backups only (14 days).
+webhook = ""

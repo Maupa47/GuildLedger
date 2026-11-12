@@ -1,0 +1,14 @@
+config.toml
+*.db
+*.db-wal
+*.db-shm
+logs/
+vendor-ref/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.log
+dist/
+build/
+*.egg-info/

@@ -1,0 +1,13 @@
+[Unit]
+Description=GuildLedger archive backup (gzip, keep 14 days, optional copy to #gl-backup)
+
+[Service]
+Type=oneshot
+User=guildledger
+Group=guildledger
+ExecStart=/bin/bash /opt/guildledger/src/bot/deploy/backup.sh
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/guildledger
+PrivateTmp=yes
+ProtectHome=yes

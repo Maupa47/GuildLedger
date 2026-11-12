@@ -1,0 +1,36 @@
+# GuildLedger companion configuration.
+# Copy to config.toml (git-ignored) and fill in. Webhook URLs are secrets: never share or commit them.
+
+# Full path to the addon's SavedVariables file (written by WoW on /reload, logout or exit).
+sv_path = 'D:\World of Warcraft\_forever_\WTF\Account\YOURACCOUNT\SavedVariables\GuildLedger.lua'
+
+# Time zone for log files and Discord. On Windows without the "tzdata" package the computer's own
+# local time is used instead (pip install tzdata to use the name below exactly).
+timezone = "Europe/Zurich"
+
+# "direct": post straight to two webhooks (single collector, no bot).
+# "upload": send rows to the bot through #gl-ingest (several collectors).
+mode = "direct"
+
+# Your name as a collector (shown in the archive).
+collector = "YourName"
+
+# Where spool.db and logs/ go. Default: the folder this file is in.
+# data_dir = "data"
+
+[direct]
+# Discord: channel -> Edit Channel -> Integrations -> Webhooks -> New Webhook -> Copy Webhook URL.
+chat_webhook = ""
+roster_webhook = ""
+# Chat lines whose text was not captured (written while no collector was online):
+# "summary" = one line per stretch ("14:02-17:40 312 messages from 40 members - text not captured"),
+# "lines" = each as "(text not captured)", "skip" = nothing.
+meta = "summary"
+
+[upload]
+# mode = "upload": this collector's own webhook in #gl-ingest (one webhook per collector).
+ingest_webhook = ""
+
+[watch]
+poll_seconds = 2
+stable_seconds = 1
