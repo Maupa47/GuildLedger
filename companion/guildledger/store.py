@@ -16,7 +16,8 @@ from .svparse import as_dict, as_list
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SCHEMAS_READ = (1, 2)  # 2 (2026-11-13): chat key rb -> relayed_by; nothing else changed
 STREAMS = {"g", "o", "d", "x"}
 CHAT_SRC = {"live", "meta", "event"}
 EVENT_KINDS = {"join", "leave", "kick", "promote", "demote"}
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS chat(
   author TEXT NOT NULL, guid TEXT, text TEXT, from_discord INTEGER NOT NULL DEFAULT 0,
   edited INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0, src TEXT NOT NULL,
   first_collector TEXT, posted INTEGER NOT NULL DEFAULT 0, uploaded INTEGER NOT NULL DEFAULT 0,
+  relayed_by TEXT,
   PRIMARY KEY (guild, stream, id));
 CREATE INDEX IF NOT EXISTS chat_ts ON chat(guild, ts_utc);
 CREATE INDEX IF NOT EXISTS chat_stream_ts ON chat(guild, stream, ts_utc);
@@ -103,6 +105,10 @@ class Spool:
         if "window_from" not in cols:
             with self.db:
                 self.db.execute("ALTER TABLE events ADD COLUMN window_from INTEGER")
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(chat)")}
+        if "relayed_by" not in cols:  # schema 2
+            with self.db:
+                self.db.execute("ALTER TABLE chat ADD COLUMN relayed_by TEXT")
 
     def close(self) -> None:
         self.db.close()
@@ -121,8 +127,8 @@ class Spool:
         if not isinstance(root, dict):
             raise SchemaError("no GuildLedgerDB table in file")
         schema = root.get("schema")
-        if schema != SCHEMA_VERSION:
-            raise SchemaError(f"unsupported schema {schema!r} (expected {SCHEMA_VERSION})")
+        if schema not in SCHEMAS_READ:
+            raise SchemaError(f"unsupported schema {schema!r} (this version reads {SCHEMAS_READ})")
         res = ImportResult()
         with self.db:
             for club_id, g in as_dict(root.get("guilds")).items():
@@ -179,8 +185,11 @@ class Spool:
             if row["deleted"] and not cur["deleted"]:
                 sets.append("deleted=1")
             if cur["text"] is None and row["text"] is not None:
-                sets += ["text=?", "src='live'"]
-                args.append(row["text"])
+                sets += ["text=?", "src='live'", "relayed_by=?"]
+                args += [row["text"], row["relayed_by"]]
+                if cur["posted"] and not row["posted"]:
+                    # it went out as "text not captured": post it again, now with text, as a late entry
+                    sets.append("posted=0")
             if cur["author"] == UNKNOWN_AUTHOR and row["author"] != UNKNOWN_AUTHOR:
                 sets.append("author=?")
                 args.append(row["author"])
@@ -224,9 +233,10 @@ class Spool:
 
         db.execute(
             "INSERT INTO chat(guild, id, stream, ts_utc, author, guid, text, from_discord, edited, deleted, src,"
-            " first_collector, posted, uploaded) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " first_collector, posted, uploaded, relayed_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (guild, row["id"], row["stream"], row["t"], row["author"], row["guid"], row["text"], row["fd"],
-             row["edited"], row["deleted"], row["src"], collector, row.get("posted", 0), row.get("uploaded", 0)),
+             row["edited"], row["deleted"], row["src"], collector, row.get("posted", 0), row.get("uploaded", 0),
+             row["relayed_by"]),
         )
         if not replaced:
             res.chat_new += 1
@@ -469,6 +479,7 @@ def _chat_row(r: Any) -> dict[str, Any] | None:
         "fd": 1 if r.get("fd") is True else 0, "edited": 1 if r.get("ed") is True else 0,
         "deleted": 1 if r.get("del") is True else 0, "src": src,
         "posted": 1 if r.get("pd") is True else 0,  # upload: direct mode already posted it
+        "relayed_by": _str(r.get("rb")) if text is not None else None,  # schema 2
     }
 
 
@@ -478,6 +489,8 @@ def _chat_wire(r: sqlite3.Row) -> dict[str, Any]:
         out["g"] = r["guid"]
     if r["text"] is not None:
         out["m"] = r["text"]
+    if r["relayed_by"]:
+        out["rb"] = r["relayed_by"]
     for key, col in (("fd", "from_discord"), ("ed", "edited"), ("del", "deleted")):
         if r[col]:
             out[key] = True

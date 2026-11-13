@@ -20,8 +20,9 @@ roster_webhook = ""
 timezone = "Europe/Zurich"
 # Chat lines without text: "summary" | "lines" | "skip"
 meta = "summary"
-# Chat waits this long before posting so another collector's copy can add missing text.
-hold_chat_seconds = 600
+# Chat waits this long after it arrives before posting, so another collector's copy can add missing text.
+# Longer = more chance to fill gaps, but lines trickle out instead of appearing at once after an upload.
+hold_chat_seconds = 60
 every_seconds = 30
 # Rows older than this (unix seconds) are archived but not posted. Default: the bot's first start,
 # because direct mode already posted everything before that.

@@ -20,6 +20,7 @@ Must have (v1):
 Later (v2): slash commands in Discord (`/seen`, `/joined`, `/activity`), per-member activity report.
 
 Non-goals: raid tools, loot, in-game UI beyond slash commands, anything that sends chat or performs guild actions.
+(Hidden **addon messages** on the guild channel are allowed for the relay in 5.7 only; decided by the admin 2026-11-13.)
 
 ## 2. Platform facts (verified — do not contradict)
 
@@ -78,7 +79,7 @@ Collector PCs (any officer)                         Always-on machine (one)
 ## 4. Repository layout
 
 ```
-/addon/GuildLedger/     GuildLedger.toc, Compat.lua, Store.lua, Core.lua, Chat.lua, Roster.lua
+/addon/GuildLedger/     GuildLedger.toc, Compat.lua, Store.lua, Core.lua, Chat.lua, Roster.lua, Relay.lua (5.7)
 /addon/GLProbe/         Phase 0 throwaway probe addon
 /companion/guildledger/ __main__.py, svparse.py, store.py, discord.py, upload.py, config.py
 /companion/tests/       pytest; fixtures/*.lua (synthetic SavedVariables)
@@ -92,7 +93,8 @@ Collector PCs (any officer)                         Always-on machine (one)
                         (-FirstTime: also config + archive; -UpdateConfig: config only; -DryRun: list only)
 /tools/package-collector.ps1  dist/GuildLedger-collector-<version>.zip for another officer
 /companion/start-companion.cmd  double-click starter for collectors
-/docs/COLLECTOR.md      officer guide (in the collector zip); /README.md admin + server operations
+/docs/COLLECTOR.md      officer guide (in the collector zip); /docs/MEMBER.txt (in the member zip)
+/README.md              admin + server operations; /STATUS.md what runs, what is done, what is next
 /vendor-ref/            read-only reference checkouts (git-ignored), see section 9
 .luacheckrc  .gitignore (config.toml, *.db, logs/, vendor-ref/)
 ```
@@ -120,7 +122,7 @@ No libraries. Plain frames and an event table.
 
 ```lua
 GuildLedgerDB = {
-  schema = 1,
+  schema = 2,                -- 1 -> 2 (2026-11-13): chat key rb, opts.collector; nothing else changed
   meta = { addon = "0.1.0", writer = "<character name>", saved = 1731330000 },
   guilds = {
     ["<clubId>"] = {
@@ -134,6 +136,7 @@ GuildLedgerDB = {
           m = "message text",         -- control chars replaced by a space; NIL when text unknown
           fd = false,                 -- came from Discord
           ed = false, del = false,
+          rb = "Member Name",         -- schema 2: text relayed by this member (5.7); nil = own capture
           src = "live" },             -- "live" = club ID + live text | "meta" = club ID, no text
                                       -- | "event" = live text, no club ID (see 5.3)
       },
@@ -197,7 +200,36 @@ Cost: one pass over up to ~1000 rows per snapshot; no per-row string building be
 - Every Blizzard API call lives in `Compat.lua` behind an existence check; missing API disables the feature and shows in `/gl status`. No Lua errors on login, ever.
 - `Compat.IsSecret(...)`: true if any argument is secret; false when `issecretvalue` does not exist.
 - Wrap event handlers in `xpcall`; rate-limit error prints.
-- Never send chat or addon messages.
+- Never send chat messages. Addon messages: only `Relay.lua`, only on the `GUILD` channel with the prefix
+  `GuildLedger`, only the four kinds in 5.7, paced and held during lockdown (decision 2026-11-13).
+
+### 5.7 Relay (`Relay.lua`): members fill collectors' text gaps (added 2026-11-13, schema 2)
+
+One addon, two roles. **Member** (default for new installs): live chat capture only (rows with club ID and
+text), no history sync, no roster; keeps at most 2 000 lines and 3 days. **Collector** (`/gl collector on`,
+whoever runs the companion; existing schema-1 installs are migrated to collector): everything in 5.3/5.4,
+plus asking members for its gaps. Role changes apply after `/reload`.
+
+Verified API (ChatInfoDocumentation.lua, forever branch): `C_ChatInfo.RegisterAddonMessagePrefix(prefix)`,
+`C_ChatInfo.SendAddonMessage(prefix, message, "GUILD")` → `Enum.SendAddonMessageResult` (0 Success,
+3 AddonMessageThrottle, 8 ChannelThrottle, 11 AddOnMessageLockdown), `C_ChatInfo.AreOutgoingAddonChatMessagesRestricted()`,
+event `CHAT_MSG_ADDON(prefix, text, channel, sender, …)` (not secret). Prefix ≤ 16 chars, message ≤ 255 bytes,
+`SecretArguments = NotAllowed`.
+
+Messages (fields separated by TAB; stored text never contains control characters):
+- `H` version role(c|m) held — hello, 20 s after login.
+- `N` stream ranges — collector: "who has text for these times?" `ranges` = `t1-t2,t3-t4,…` (unix s) built from
+  its own text-less rows of the last 27 h (rows a few minutes apart form one range). Sent ~30 s after its history
+  sync, when a member says hello (at most every 2 min) and every 15 min while gaps remain.
+- `T` id k/n chunk — member: one line, split into n chunks of ≤ 200 bytes (UTF-8 safe). Chunk 1 starts with
+  `stream TAB t TAB author TAB guid TAB fd TAB`, then the text.
+- `G` id,id,… — collector: "have it"; every member deletes those lines.
+
+Members answer a `N` after a random 2–8 s, at most 150 lines per `N`, and skip a line another member already
+sent (they hear every `T`). Outgoing messages are paced to 1 per second, held during lockdown or a throttle,
+queue capped at 300. A collector accepts a line only for a text-less row it already has with the same stream
+and author GUID (else name); the row gets the text, `src = "live"` and `rb = <sender>` (relayed by). It never
+replaces existing text. Rows the collector does not have are ignored (members expire them).
 
 ## 6. Companion (Python ≥ 3.11, stdlib only; runs on each collector PC)
 

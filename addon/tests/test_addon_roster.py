@@ -189,6 +189,7 @@ def test_missing_roster_api_without_errors():
     L = lupa.LuaRuntime(unpack_returned_tuples=True)
     W = L.eval(f"dofile([[{STUB}]])")
     L.execute("C_GuildInfo = nil; QueryGuildEventLog = nil")
+    L.execute("GuildLedgerDB = { schema = 2, opts = { collector = true } }")
     W.loadAddon(ADDON_DIR, L.table_from(FILES), "GuildLedger")
     W.login()
     W.advance(120)

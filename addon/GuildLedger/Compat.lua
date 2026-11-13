@@ -265,3 +265,37 @@ function C.GuildFormats()
     if not next(out) then C.missing.sysformats = true end
     return out
 end
+
+---------------------------------------------------------------------------------------------------
+-- Addon messages on the guild channel, for the relay only (CLAUDE.md 5.7; ChatInfoDocumentation.lua)
+---------------------------------------------------------------------------------------------------
+
+local Chat = C_ChatInfo
+local hasComm = Chat and Chat.RegisterAddonMessagePrefix and Chat.SendAddonMessage
+if not hasComm then C.missing.comm = true end
+C.HasComm = hasComm and true or false
+
+-- Enum.SendAddonMessageResult (documented values, used when the Enum is absent)
+local RESULT = (Enum and Enum.SendAddonMessageResult) or {}
+C.SEND_OK = RESULT.Success or 0
+C.SEND_THROTTLED = { [RESULT.AddonMessageThrottle or 3] = true, [RESULT.ChannelThrottle or 8] = true }
+C.SEND_LOCKDOWN = RESULT.AddOnMessageLockdown or 11
+
+function C.RegisterPrefix(prefix)
+    if hasComm then return Chat.RegisterAddonMessagePrefix(prefix) end
+end
+
+-- True when sending now would be refused anyway (chat lockdown). Phase 7: the realm flag
+-- AreOutgoingAddonChatMessagesRestricted is NOT a reason to hold: the send result decides (as in GuildOS).
+function C.CommBlocked()
+    return not hasComm or C.InLockdown()
+end
+
+-- Sends on GUILD. Returns the result code (C.SEND_OK on success), or nil when it cannot send at all.
+function C.SendGuild(prefix, message)
+    if not hasComm or IsSecret(prefix, message) then return nil end
+    local r = Chat.SendAddonMessage(prefix, message, "GUILD")
+    if IsSecret(r) then return nil end
+    if r == nil or r == true then return C.SEND_OK end -- older clients returned a bool
+    return r
+end

@@ -1,10 +1,11 @@
 ## Interface: 16001
 ## Title: GuildLedger
 ## Notes: Logs guild chat and roster changes for export to Discord.
-## Version: 0.1.0
+## Version: 0.2.1
 ## SavedVariables: GuildLedgerDB
 Compat.lua
 Store.lua
 Core.lua
 Chat.lua
 Roster.lua
+Relay.lua

@@ -83,6 +83,21 @@ end
 
 C_ChatInfo = { InChatMessagingLockdown = function() return W.lockdown end }
 
+-- Addon messages: what this client sends goes to W.addonOut; the test harness delivers it to the guild.
+W.addonOut, W.prefixes = {}, {}
+W.sendResult = nil -- force a SendAddonMessageResult (e.g. 3 throttle, 11 lockdown); nil = real behaviour
+function C_ChatInfo.RegisterAddonMessagePrefix(p) W.prefixes[p] = true return 0 end
+function C_ChatInfo.AreOutgoingAddonChatMessagesRestricted() return true end -- like a normal realm may answer
+function C_ChatInfo.SendAddonMessage(prefix, msg, chatType)
+    if prefix == W.SECRET or msg == W.SECRET then error("secret argument") end
+    assert(#prefix <= 16, "prefix too long")
+    assert(#msg <= 255, "addon message too long: " .. #msg)
+    if W.sendResult then return W.sendResult end
+    if W.lockdown then return 11 end
+    W.addonOut[#W.addonOut + 1] = { prefix = prefix, msg = msg, chatType = chatType }
+    return 0
+end
+
 function W.setLockdown(on)
     W.lockdown = on
     W.fire("ADDON_RESTRICTION_STATE_CHANGED", 5, on and 2 or 0)
@@ -179,13 +194,13 @@ end
 -- Server-side message (not delivered live): history written while nobody was online.
 -- discord: a Discord display name -> the message came over Blizzard's Discord link (author has only
 -- discordInfo; Phase 2 measured no name and no GUID on such club messages).
-function W.addHistory(sid, author, guid, at, discord)
+function W.addHistory(sid, author, guid, at, discord, pos)
     local a = { name = author, guid = guid }
     if discord then
         a = { discordInfo = { fromDiscord = true, globalName = discord, lastOnlineName = "",
             userID = "d1", hasEmoji = false } }
     end
-    local m = { messageId = { epoch = at * 1e6 + 123, position = #W.msgs[sid] + 1 },
+    local m = { messageId = { epoch = at * 1e6 + 123, position = pos or (#W.msgs[sid] + 1) },
         author = a, destroyed = false, edited = false }
     table.insert(W.msgs[sid], m)
     return m
@@ -196,7 +211,7 @@ end
 --       bridged (Discord display name: club author has only discordInfo; chat name = opts.chatName or "")
 function W.say(sid, author, guid, text, opts)
     opts = opts or {}
-    local m = W.addHistory(sid, author, guid, W.server, opts.bridged)
+    local m = W.addHistory(sid, author, guid, W.server, opts.bridged, opts.pos)
     if opts.bridged then
         opts.discord, author, guid = true, opts.chatName or "", ""
     end

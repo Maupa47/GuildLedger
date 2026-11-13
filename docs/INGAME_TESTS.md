@@ -247,3 +247,19 @@ logs), copies it over SSH and runs `bot/deploy/setup.sh` on the server.
    (README "Adding an officer") and check their uploads get ✅.
 4. **Starter.** Close your companion window; double-click `companion\start-companion.cmd` → window
    `GuildLedger companion` with `watching …`.
+
+## Phase 7: Relay (members fill collectors' gaps) — v0.2.0, schema 2
+
+Update order: server first (`deploy.ps1`), then every collector's addon **and** companion together (an old
+companion refuses a schema-2 file), then members.
+
+1. **Your addon stays a collector.** `/reload` → `/gl status` shows `collector on` (old installs are migrated).
+2. **A member.** One guild member installs `GuildLedger-member-0.2.1.zip`. On their side `/gl status` shows
+   `relay: role member; holding N line(s)`.
+3. **The gap test.** You log out; the member stays online while the guild chats ~10 minutes; you log in and
+   wait ~2 minutes (history sync, then the ask), then `/gl status` → `filled N line(s) from members`.
+   Member side: `holding` goes down (confirmed lines are dropped).
+4. `/reload`: those lines reach Discord with their text (lines already posted as "text not captured" come
+   again as a late entry).
+5. With `/gl debug on`: grey `relay: asking for text gaps …` (you) and `relay: … needs … ranges; I have …`
+   (member).

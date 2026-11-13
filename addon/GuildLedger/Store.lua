@@ -5,8 +5,10 @@ local _, ns = ...
 local S = {}
 ns.Store = S
 
-S.VERSION = "0.1.0"
-S.SCHEMA = 1
+S.VERSION = "0.2.1"
+S.SCHEMA = 2
+S.MEMBER_MAX = 2000 -- member role: lines kept for collectors (CLAUDE.md 5.7)
+S.MEMBER_AGE = 3 * 86400
 S.MAX_CHAT = 20000
 S.MAX_EV = 5000
 local TRIM_SLACK = 500
@@ -16,11 +18,17 @@ local index = {} -- [guildKey] = { ["<s>|<id>"] = row }
 local evIndex = {} -- [guildKey] = { byId = { [id] = ev }, byName = { ["<family>|<name>"] = { ev, ... } } }
 S.unsaved = 0 -- rows added or changed since this session's load
 
-local DEFAULT_OPTS = { officer = false, other = false, debug = false, pageCap = 50 }
+local DEFAULT_OPTS = { officer = false, other = false, debug = false, pageCap = 50, collector = false }
 
 function S.Init()
     GuildLedgerDB = GuildLedgerDB or {}
     db = GuildLedgerDB
+    if db.schema == 1 then
+        -- 1 -> 2: only collectors ran schema 1, so they stay collectors; rows need no change.
+        db.opts = db.opts or {}
+        db.opts.collector = true
+        db.schema = 2
+    end
     db.schema = db.schema or S.SCHEMA
     db.meta = db.meta or {}
     db.meta.addon = S.VERSION
@@ -34,6 +42,7 @@ function S.Init()
 end
 
 function S.Opts() return db and db.opts or DEFAULT_OPTS end
+function S.IsCollector() return S.Opts().collector == true end
 function S.DB() return db end
 
 function S.MarkSaved()
@@ -224,4 +233,45 @@ function S.AddEvent(clubId, ev)
         S.BuildEventIndex(key, g)
     end
     return true
+end
+
+---------------------------------------------------------------------------------------------------
+-- Member role (CLAUDE.md 5.7): a small buffer of lines with text, for collectors
+---------------------------------------------------------------------------------------------------
+
+local function keepRows(clubId, keep)
+    local g, key = S.Guild(clubId)
+    local out = {}
+    for _, row in ipairs(g.chat) do
+        if keep(row) then out[#out + 1] = row end
+    end
+    local removed = #g.chat - #out
+    if removed > 0 then
+        g.chat = out
+        buildIndex(key, g)
+        S.unsaved = S.unsaved + 1
+    end
+    return removed
+end
+
+-- Drop the lines a collector confirmed (ids = { [id] = true }). Returns how many were removed.
+function S.RemoveChat(clubId, ids)
+    return keepRows(clubId, function(row) return not ids[row.id] end)
+end
+
+-- Member buffer limits: nothing older than MEMBER_AGE, at most MEMBER_MAX lines (oldest go first).
+function S.PruneMember(clubId, now)
+    local g = S.Guild(clubId)
+    local cutoff = now - S.MEMBER_AGE
+    local removed = keepRows(clubId, function(row) return row.t >= cutoff and row.m ~= nil end)
+    local extra = #g.chat - S.MEMBER_MAX
+    if extra > 0 then
+        table.sort(g.chat, function(a, b)
+            if a.t ~= b.t then return a.t < b.t end
+            return a.id < b.id
+        end)
+        local i = 0
+        removed = removed + keepRows(clubId, function() i = i + 1 return i > extra end)
+    end
+    return removed
 end

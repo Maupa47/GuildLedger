@@ -337,6 +337,7 @@ local function tryInit()
     if not S.DB() then return false end
     if ready then return true end
     if not C.HasRoster then return true end -- nothing to do; /gl status shows "missing API: roster"
+    if not S.IsCollector() then return true end -- member role: collectors track the roster (CLAUDE.md 5.7)
     local id = C.GuildClubId()
     if not id then return false end
     clubId, ready = id, true
@@ -379,7 +380,8 @@ end
 
 function M.Status()
     if not ready then
-        ns.Print("roster: |cffffaa00idle|r" .. (C.HasRoster and " (no guild yet)" or " (API missing)"))
+        ns.Print("roster: |cffffaa00idle|r" .. (not S.IsCollector() and " (member role: collectors track it)"
+            or C.HasRoster and " (no guild yet)" or " (API missing)"))
         return
     end
     local g = S.Guild(clubId)

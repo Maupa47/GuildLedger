@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-  Builds dist\GuildLedger-collector.zip for another officer: the addon, the companion (code only, upload
+  Builds dist\GuildLedger-collector-<v>.zip for another officer and dist\GuildLedger-member-<v>.zip
+  (addon only) for everyone else. The collector zip: the addon, the companion (code only, upload
   mode preset, no config, no data) and COLLECTOR.md. Send the zip and, separately and privately, the
   officer's own #gl-ingest webhook URL.
 .EXAMPLE
@@ -33,5 +34,12 @@ $version = (Select-String -Path (Join-Path $addonSrc "GuildLedger.toc") -Pattern
 $zip = Join-Path $dist "GuildLedger-collector-$version.zip"
 if (Test-Path $zip) { Remove-Item $zip }
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip
-Remove-Item -Recurse -Force $stage
 Write-Host "==> $zip"
+
+# Member package: just the addon and a short note (members need no Python and no companion).
+$memberZip = Join-Path $dist "GuildLedger-member-$version.zip"
+if (Test-Path $memberZip) { Remove-Item $memberZip }
+Copy-Item (Join-Path $root "docs\MEMBER.txt") $addonDst
+Compress-Archive -Path $addonDst -DestinationPath $memberZip
+Remove-Item -Recurse -Force $stage
+Write-Host "==> $memberZip"

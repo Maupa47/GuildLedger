@@ -131,12 +131,13 @@ local function status()
     end
     ns.Print(string.format("unsaved rows this session: %d (saved on /reload or logout; /gl flush)", ns.Store.unsaved))
     local o = ns.Store.Opts()
-    ns.Print(string.format("officer %s, debug %s", onOff(o.officer), onOff(o.debug)))
+    ns.Print(string.format("collector %s, officer %s, debug %s", onOff(o.collector), onOff(o.officer),
+        onOff(o.debug)))
     if ns.lastError then ns.Print("last error: " .. ns.lastError) end
 end
 
 local function usage()
-    ns.Print("/gl status | sync | flush | officer on|off | debug on|off")
+    ns.Print("/gl status | sync | flush | collector on|off | officer on|off | debug on|off")
 end
 
 SLASH_GUILDLEDGER1 = "/gl"
@@ -155,9 +156,13 @@ SlashCmdList.GUILDLEDGER = function(msg)
     elseif cmd == "flush" then
         ns.Store.MarkSaved()
         C.Reload()
-    elseif (cmd == "officer" or cmd == "debug") and (arg == "on" or arg == "off") then
+    elseif (cmd == "officer" or cmd == "debug" or cmd == "collector") and (arg == "on" or arg == "off") then
         o[cmd] = arg == "on"
         ns.Print(cmd .. " " .. onOff(o[cmd]))
+        if cmd == "collector" then
+            ns.Print("role " .. (o.collector and "collector (run the companion)" or "member")
+                .. ": takes effect after /reload")
+        end
         for _, m in ipairs(ns.modules) do
             if m.OnOption then ns.Safe(m.name .. ".OnOption", m.OnOption, cmd) end
         end

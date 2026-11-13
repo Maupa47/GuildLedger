@@ -21,6 +21,16 @@ Officer PCs                                         Server (Infomaniak VPS, <ser
 Design, rules and API facts: [CLAUDE.md](CLAUDE.md). Row formats and merge rules: [shared/schema.md](shared/schema.md).
 Measured game behaviour: [docs/API_FINDINGS.md](docs/API_FINDINGS.md). Test checklists: [docs/INGAME_TESTS.md](docs/INGAME_TESTS.md).
 
+## Roles (since v0.2)
+
+Everybody installs the same addon. **Members** (the default) keep recent guild chat lines with text (at most
+2 000 lines / 3 days) and send them, over hidden guild addon messages, to a collector that asks for lines it
+missed. **Collectors** (`/gl collector on`, then `/reload`) also run the companion, read the guild history and
+the roster, and fill their gaps from members' answers (CLAUDE.md 5.7).
+
+Members get `dist\GuildLedger-member-<version>.zip` (addon only; see `docs/MEMBER.txt`), e.g. pinned in the
+guild Discord. Built by `tools\package-collector.ps1` together with the collector zip.
+
 ## Adding an officer as a collector (admin)
 
 1. Discord: `#gl-ingest` → *Edit Channel → Integrations → Webhooks → New Webhook*, name it after the officer.
@@ -29,7 +39,8 @@ Measured game behaviour: [docs/API_FINDINGS.md](docs/API_FINDINGS.md). Test chec
 3. Send it to the server: `powershell -ExecutionPolicy Bypass -File .\tools\deploy.ps1 -UpdateConfig`.
 4. Build the package: `powershell -ExecutionPolicy Bypass -File .\tools\package-collector.ps1` →
    `dist\GuildLedger-collector-<version>.zip`.
-5. Send the officer the zip, and the webhook URL privately (DM). They follow [docs/COLLECTOR.md](docs/COLLECTOR.md).
+5. Send the officer the zip, and the webhook URL privately (DM). They follow [docs/COLLECTOR.md](docs/COLLECTOR.md)
+   (which includes `/gl collector on`).
 
 **Revoking** a collector: delete their webhook in Discord (takes effect at once) and remove their line from
 `[collectors]` (`deploy.ps1 -UpdateConfig`). Their earlier rows stay in the archive.

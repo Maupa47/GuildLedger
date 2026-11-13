@@ -19,7 +19,9 @@ From the guild admin you get: this zip, and a **webhook URL** (a long link start
 2. Copy the folder **`GuildLedger`** (the one with `GuildLedger.toc` inside) into your WoW AddOns folder:
    `…\World of Warcraft\_forever_\Interface\AddOns\`
 3. Start WoW. At character select, *AddOns* → make sure **GuildLedger** is ticked.
-4. In game you'll see `GuildLedger: ready, club …` after login. `/gl status` shows what it collected.
+4. In game type **`/gl collector on`**, then **`/reload`**. This makes your addon a collector (it also reads
+   the guild history and the roster, and asks members' addons for lines it missed).
+   `/gl status` shows `collector on` and what it collected.
 
 ## 3. Set up the companion (the small program that sends the log to Discord)
 

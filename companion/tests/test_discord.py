@@ -270,3 +270,21 @@ def test_cli_dry_run_sends_nothing_and_marks_nothing(tmp_path, fixtures, capsys)
     with Spool(tmp_path / "spool.db") as spool:
         assert spool.db.execute("SELECT SUM(posted) FROM chat").fetchone()[0] == 0
         assert spool.get_state(f"direct_init:{G}") is None
+
+
+def test_text_relayed_after_posting_goes_out_as_late_entry(spool, fake):
+    meta = chat(1, T0, None, a="Cora Sample")
+    spool.import_sv(sv([meta, chat(2, T0 + 60, "later line")]), "c1")
+    poster(spool, fake).run(post_backlog=True)
+    assert "text not captured" in fake.contents()[0]
+    filled = dict(meta, m="the words, relayed by a member", src="live", rb="Mem Ber-Forever")
+    res = spool.import_sv(sv([filled]), "c1")
+    assert res.chat_updated == 1
+    row = spool.db.execute("SELECT relayed_by, posted FROM chat WHERE id=?", (meta["id"],)).fetchone()
+    assert row[0] == "Mem Ber-Forever" and row[1] == 0
+    poster(spool, fake).run()
+    late = fake.contents()[-1].splitlines()
+    assert late[0].startswith("**Late entries**")
+    assert late[1].endswith("**Cora Sample**: the words, relayed by a member")
+    poster(spool, fake).run()
+    assert len(fake.contents()) == 2  # once

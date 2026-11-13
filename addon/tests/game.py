@@ -14,7 +14,7 @@ from guildledger.svparse import parse  # noqa: E402
 
 ADDON_DIR = (ROOT / "addon" / "GuildLedger").as_posix()
 STUB = (Path(__file__).parent / "wowstub.lua").as_posix()
-FILES = ["Compat.lua", "Store.lua", "Core.lua", "Chat.lua", "Roster.lua"]  # TOC order
+FILES = ["Compat.lua", "Store.lua", "Core.lua", "Chat.lua", "Roster.lua", "Relay.lua"]  # TOC order
 
 ALIA = ("Alia Testwood", "Player-1111-0000AAAA")
 BRAM = ("Bram Exampleson", "Player-1111-0000BBBB")
@@ -22,9 +22,13 @@ CORA = ("Cora Sample", "Player-1111-0000CCCC")
 
 
 class Game:
-    def __init__(self, history=0, club=True, members=0):
+    def __init__(self, history=0, club=True, members=0, role="collector", name="Testa Collector"):
         self.L = lupa.LuaRuntime(unpack_returned_tuples=True)
         self.W = self.L.eval(f"dofile([[{STUB}]])")
+        self.name = name
+        self.L.execute(f"function UnitName(u) if u == 'player' then return W.lockdown and W.SECRET or [[{name}]] end end")
+        if role:  # an existing install with this role; role=None = brand-new install (defaults)
+            self.L.execute(f"GuildLedgerDB = {{ schema = 2, opts = {{ collector = {str(role == 'collector').lower()} }} }}")
         if not club:
             self.W.clubId = None
         for i in range(members):  # roster before this collector ever logged in

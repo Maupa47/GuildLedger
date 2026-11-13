@@ -4,7 +4,7 @@
   databases or logs, copies them over SSH and runs bot/deploy/setup.sh there.
 .DESCRIPTION
   -FirstTime also takes your local bot setup along:
-    * bot\config.toml -> /etc/guildledger/config.toml (db_path set to the server path, hold back to 600 s)
+    * bot\config.toml -> /etc/guildledger/config.toml (db_path set to the server path, all else as written)
     * bot\archive.db  -> /var/lib/guildledger/guildledger.db (only if the server has no archive yet),
       so the server continues exactly where your PC stopped: nothing is posted twice.
   Stop the bot on your PC first. Without -FirstTime the server keeps its config and data (update).
@@ -70,7 +70,6 @@ try {
         if (-not (Test-Path $cfgPath)) { throw "bot\config.toml not found" }
         $cfg = [IO.File]::ReadAllText($cfgPath)
         $cfg = $cfg -replace '(?m)^db_path\s*=.*$', 'db_path = "/var/lib/guildledger/guildledger.db"'
-        $cfg = $cfg -replace '(?m)^hold_chat_seconds\s*=.*$', 'hold_chat_seconds = 600'
         if ($cfg -notmatch '(?m)^db_path\s*=') { $cfg += "`n[storage]`ndb_path = `"/var/lib/guildledger/guildledger.db`"`n" }
         [IO.File]::WriteAllText((Join-Path $import "config.toml"), $cfg.Replace("`r`n", "`n"), (New-Object Text.UTF8Encoding $false))
         $toCopy += (Join-Path $import "config.toml")

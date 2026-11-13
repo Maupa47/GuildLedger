@@ -10,6 +10,7 @@
 local _, ns = ...
 local C, S = ns.Compat, ns.Store
 local M = ns.Module("Chat")
+ns.Chat = M
 
 local PAIR_WINDOW = 3 -- seconds between the two halves of one line (measured: 0-0.6 s)
 local FLUSH_AFTER = 5 -- seconds before an unpaired half is stored on its own
@@ -54,6 +55,8 @@ local function sameAuthor(a, b)
 end
 
 local function store(row)
+    -- Member role (CLAUDE.md 5.7): only lines with text and a server ID are worth keeping for collectors.
+    if not S.IsCollector() and row.src ~= "live" then return nil end
     local r = S.AddChat(clubId, row)
     if r == "new" then stats[row.src] = (stats[row.src] or 0) + 1 end
     return r
@@ -222,6 +225,7 @@ local function finishSync(sid, note)
     sync[sid] = nil
     lastSync, lastSyncNote = C.Now(), note
     ns.Debug("sync " .. tostring(streams[sid]) .. " done: " .. note)
+    if ns.RelaySynced then ns.Safe("Relay.synced", ns.RelaySynced) end
 end
 
 local function idText(id)
@@ -330,7 +334,7 @@ syncStream = function(sid)
 end
 
 function M.Sync(force)
-    if not ready then return end
+    if not ready or not S.IsCollector() then return end -- members keep live lines only
     if C.InLockdown() then needSync = true return end
     needSync = false
     for sid in pairs(streams) do
@@ -428,6 +432,11 @@ function M.OnOption(name)
         selectStreams()
         M.Sync(true)
     end
+end
+
+-- For Relay.lua: the guild club and the stream letters in use (nil while not ready).
+function M.Club()
+    if ready then return clubId, letterStream end
 end
 
 function M.Status()

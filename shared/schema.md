@@ -1,7 +1,9 @@
 # GuildLedger row formats and ID rules
 
 Shared contract between the addon (SavedVariables), the companion (spool.db, uploads) and the bot (archive).
-Schema version **1**. Any change after Phase 2 needs a `schema` bump and a migration in all three (CLAUDE.md 10.6).
+Schema version **2** (since 2026-11-13; 1 → 2 adds the chat key `rb`, the archive column `relayed_by` and
+`opts.collector`; schema-1 files and uploads stay readable). Any change needs a `schema` bump and a migration
+in all three (CLAUDE.md 10.6).
 
 ## 1. SavedVariables (`GuildLedgerDB`)
 
@@ -20,6 +22,7 @@ See CLAUDE.md 5.2 for the full Lua layout. Per guild (`guilds["<clubId>"]`):
 | `fd` | bool | came from Discord |
 | `ed`, `del` | bool | edited / deleted |
 | `src` | string | `live` (club ID + live text), `meta` (club ID, no text), `event` (live text, no club ID) |
+| `rb` | string? | schema 2: the text was relayed in game by this member (CLAUDE.md 5.7); nil = captured by the collector itself |
 
 ### Roster event row
 
@@ -45,7 +48,7 @@ kind, name and actor within ±2 h of a stored one is the same event.
 
 ### Addon-only keys (ignored by companion and bot)
 
-`cursor[<s>]` newest club ID up to which a history sync completed; `floor` unix s of the oldest row kept
+`opts.collector` (schema 2: true = collector role, false/nil = member); `cursor[<s>]` newest club ID up to which a history sync completed; `floor` unix s of the oldest row kept
 after a ring-buffer trim (history sync never re-adds older rows); `opts` (`officer`, `other`, `debug`, `pageCap`).
 
 ### Roster entry (`roster["<GUID>"]`)
@@ -56,7 +59,7 @@ after a ring-buffer trim (history sync never re-adds older rows); `opts` (`offic
 
 ```sql
 chat(guild, id, stream, ts_utc, author, guid, text, from_discord, edited, deleted, src,
-     first_collector, posted, uploaded,               -- uploaded: companion only
+     first_collector, posted, uploaded, relayed_by,   -- uploaded: companion only; relayed_by: schema 2
      PRIMARY KEY (guild, stream, id))
 events(guild, id, ts_utc, precise, kind, name, guid, actor, detail, src,
        first_collector, superseded_by, posted, uploaded,
@@ -70,7 +73,8 @@ guilds(guild PRIMARY KEY, name)
 ## 3. Merge rules (chat)
 
 1. Same `(guild, stream, id)` → same message. A later copy may set `edited`/`deleted` to 1 and may fill
-   `text` where it is NULL (then `src` becomes `live`). Existing text is never changed.
+   `text` where it is NULL (then `src` becomes `live`, `relayed_by` comes with it). Existing text is never
+   changed. If the text-less row was already posted, it is posted again with its text as a late entry.
 2. An `event` row (text, no club ID) whose author (GUID, else name) has a `meta`/`live` row in the same
    stream within ±3 s is not stored as its own row: it fills the text of a `meta` row, or is dropped
    when the row already has text.
