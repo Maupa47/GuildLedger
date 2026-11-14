@@ -27,8 +27,9 @@ local needSync = false
 local pendingChat, pendingClub = {}, {}
 local flushScheduled = false
 local sync = {} -- [streamId] = { from = messageId?, pages = n, active = bool }
-local lastSync, lastSyncNote = nil, "never"
+local lastSync, lastSyncNote = nil, "not done yet"
 local stats = { live = 0, meta = 0, event = 0 }
+local unknownLogged = 0 -- debug: history messages without an author name (Phase 7 open question)
 
 ---------------------------------------------------------------------------------------------------
 -- Helpers
@@ -253,7 +254,8 @@ local function request(sid, st, before)
         st.waiting = nil
         st.retries = (st.retries or 0) + 1
         if st.retries > REQUEST_RETRIES then
-            finishSync(sid, string.format("server sent nothing older (+%d)", st.added))
+            finishSync(sid, string.format("up to date, back to the oldest messages the server keeps (%d new)",
+                st.added))
         else
             st.pages = st.pages - 1 -- a retry is not a new page
             ns.Safe("Chat.sync", syncStream, sid)
@@ -279,7 +281,7 @@ local function syncStep(sid)
     local oldestR, newestR = C.LastRange(clubId, sid)
     if not newestR then
         -- Empty or not yet downloaded: ask a few times, then leave it to the periodic sync.
-        if st.pages >= 3 then finishSync(sid, "no history") return end
+        if st.pages >= 3 then finishSync(sid, "the server has no guild chat history") return end
         request(sid, st, nil)
         return
     end
@@ -293,6 +295,13 @@ local function syncStep(sid)
         local oldest, oe, op
         for _, m in ipairs(msgs) do
             local row = C.ReadMessage(m)
+            if row and row.a == "?" and unknownLogged < 5 and S.Opts().debug then
+                unknownLogged = unknownLogged + 1
+                local a = type(m) == "table" and not C.IsSecret(m) and m.author or nil
+                ns.Debug(string.format("history message without author name: author {%s}, discordInfo {%s}",
+                    C.FieldNames(a), C.FieldNames(type(a) == "table" and not C.IsSecret(a) and a.discordInfo or nil)),
+                    true)
+            end
             if row then
                 if not oe or S.Newer(oe, op, row.epoch, row.pos) then
                     oldest, oe, op = m.messageId, row.epoch, row.pos
@@ -303,20 +312,21 @@ local function syncStep(sid)
                 end
             end
         end
-        if not oldest then finishSync(sid, "nothing readable") return end
+        if not oldest then finishSync(sid, "could not read the history") return end
         if (ce and not S.Newer(oe, op, ce, cp)) or math.floor(oe / 1e6) < floor then
-            finishSync(sid, string.format("caught up (+%d)", st.added))
+            finishSync(sid, string.format("up to date (%d new)", st.added))
             return
         end
         local fe, fp = C.ReadId(from)
         if fe and oe == fe and op == fp then
             -- Nothing older is downloaded: ask the server, unless we are at the start or the cap.
             if C.IsBeginning(clubId, sid, oldest) then
-                finishSync(sid, string.format("beginning of stream (+%d)", st.added))
+                finishSync(sid, string.format("up to date, back to the start of the guild chat (%d new)", st.added))
                 return
             end
             if st.pages >= S.Opts().pageCap then
-                finishSync(sid, string.format("page cap %d (+%d)", st.pages, st.added))
+                finishSync(sid, string.format("stopped after %d pages (%d new), the rest follows next time", st.pages,
+                    st.added))
                 return
             end
             st.from = oldest
@@ -440,24 +450,39 @@ function M.Club()
 end
 
 function M.Status()
+    ns.Head("Guild chat")
     if not ready then
-        ns.Print("chat: |cffffaa00idle|r (no guild club yet" .. (clubId and "" or " / not in a guild") .. ")")
+        ns.Line("Waiting for the guild (not in a guild, or the game has not loaded it yet).")
         return
     end
     local g = S.Guild(clubId)
-    local letters = {}
-    for _, l in pairs(streams) do letters[#letters + 1] = l end
-    table.sort(letters)
+    local channels = {}
+    if letterStream.g then channels[#channels + 1] = "guild chat" end
+    if letterStream.o then channels[#channels + 1] = "officer chat" end
+    if letterStream.d then channels[#channels + 1] = "Discord chat" end
+    ns.Line(string.format("Guild: %s. Logging: %s.", tostring(g.name or clubId), table.concat(channels, " and ")))
     local total, text, meta, ev = S.Counts(clubId)
-    ns.Print(string.format("guild %s (club %s), streams %s", tostring(g.name), tostring(clubId),
-        table.concat(letters, ",")))
-    ns.Print(string.format("chat spooled %d: %d with text, %d without, %d unpaired live lines", total, text, meta, ev))
-    ns.Print(string.format("this session: +%d live, +%d meta, +%d event; pending %d/%d",
-        stats.live or 0, stats.meta or 0, stats.event or 0, #pendingChat, #pendingClub))
-    ns.Print(string.format("last sync: %s; needs sync: %s; history events: %d",
-        lastSync and (date("%H:%M:%S", lastSync) .. " " .. lastSyncNote) or "never", tostring(needSync), histEvents))
-    for sid, st in pairs(sync) do
-        ns.Print(string.format("sync %s running: %d pages, +%d rows, %s", tostring(streams[sid]), st.pages,
-            st.added, st.waiting and ("waiting for server (retry " .. (st.retries or 0) .. ")") or "walking"))
+    local newText = (stats.live or 0) + (stats.event or 0)
+    if S.IsCollector() then
+        ns.Line(string.format("Lines saved: %s (%s with text, %s only as 'someone wrote' without text).",
+            ns.Num(total), ns.Num(text + ev), ns.Num(meta)))
+        ns.Line(string.format("Since login: %s line(s) seen live with text, %s found in the guild history"
+            .. " (without text, members may fill them in).", ns.Num(newText), ns.Num(stats.meta or 0)))
+        if next(sync) ~= nil then
+            for _, st in pairs(sync) do
+                ns.Line(string.format("History check: running (%d page(s) read, %d new line(s))%s.", st.pages,
+                    st.added, st.waiting and ", waiting for the server" or ""))
+            end
+        elseif needSync then
+            ns.Line("History check: waits until the boss-fight chat lock ends.")
+        else
+            ns.Line(string.format("Last history check: %s - %s.", ns.Clock(lastSync), lastSyncNote))
+        end
+    else
+        ns.Line(string.format("Lines kept for collectors: %s (deleted once a collector has them; at most %s"
+            .. " lines and 3 days).", ns.Num(total), ns.Num(S.MEMBER_MAX)))
+        ns.Line(string.format("Since login: %s new line(s).", ns.Num(newText)))
     end
+    local pending = #pendingChat + #pendingClub
+    if pending > 0 then ns.Line(string.format("Lines still being matched: %d.", pending)) end
 end

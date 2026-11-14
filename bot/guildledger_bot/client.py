@@ -11,10 +11,15 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
-import discord as dpy
+import time
 
-from . import ingest
+import discord as dpy
+from discord import app_commands
+
+from . import commands, ingest
+from .link import Links
 from .config import BotConfig
+from .ops import Ops
 from .post import make_poster, post_once
 from .store import Archive, Outcome
 
@@ -36,6 +41,10 @@ class LedgerBot(dpy.Client):
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="archive")
         self._archive: Archive | None = None
         self._poster = None
+        self._ops: Ops | None = None
+        self._links: Links | None = None
+        self.tree = app_commands.CommandTree(self)
+        self._roles_at = 0.0
         self._post_task: asyncio.Task | None = None
         self._backfilling = asyncio.Lock()
         self._missed = False  # a live upload arrived during a backfill: run it once more
@@ -45,9 +54,27 @@ class LedgerBot(dpy.Client):
 
     async def setup_hook(self) -> None:
         def open_archive():
+            from guildledger import discord as gl_discord
             self._archive = Archive(self.cfg.db_path)
             self._poster = make_poster(self._archive, self.cfg)
+            hook = gl_discord.Webhook(self.cfg.ops_webhook, "ops") if self.cfg.ops_webhook else None
+            self._ops = Ops(self._archive, hook, self.cfg.timezone, self.cfg.report_hour,
+                            self.cfg.alert_after_hours)
+            self._links = Links(self._archive)
         await self._db(open_archive)
+        commands.register(self)
+        self.add_dynamic_items(commands.LinkButton)
+        if not self.once:
+            try:
+                if self.cfg.server_id:
+                    server = dpy.Object(id=self.cfg.server_id)
+                    self.tree.copy_global_to(guild=server)
+                    await self.tree.sync(guild=server)
+                else:
+                    await self.tree.sync()
+            except dpy.DiscordException as e:
+                log.error("could not register slash commands (re-invite the bot with the applications.commands"
+                          " scope?): %s", e)
 
     async def on_ready(self) -> None:
         log.info("connected as %s; ingest channel %s; %d collector webhook(s)",
@@ -64,9 +91,78 @@ class LedgerBot(dpy.Client):
         while not self.is_closed():
             try:
                 await self._db(post_once, self._archive, self.cfg, self._poster)
+                await self._db(self._ops.tick)
+                await self._link_round()
             except Exception:  # noqa: BLE001 - keep the loop alive; the next round retries
                 log.exception("posting round failed")
             await asyncio.sleep(self.cfg.post_every)
+
+    async def _link_round(self) -> None:
+        """New link requests -> confirmations -> a DM with Confirm / Not me; hourly role sync."""
+        if self._links is None:
+            return
+        await self._db(self._links.process)
+        for line in self._links.log:
+            log.info(line)
+        self._links.log.clear()
+        for c in await self._db(self._links.to_notify):
+            delivered = False
+            try:
+                user = self.get_user(c.discord_user_id) or await self.fetch_user(c.discord_user_id)
+                await user.send(commands.confirm_text(c.name, c.kind), view=commands.confirm_view(c.id),
+                                allowed_mentions=NO_MENTIONS)
+                delivered = True
+            except dpy.DiscordException as e:
+                log.info("link confirmation for %s: DM not possible (%s); /link shows it", c.discord_user_id, e)
+            await self._db(self._links.mark_notified, c.id, delivered)
+        if time.monotonic() - self._roles_at > 3600:
+            self._roles_at = time.monotonic()
+            for uid in await self._db(self._links.linked_users):
+                await self.sync_roles(uid)
+
+    async def sync_roles(self, user_id: int) -> None:
+        """Decision 5 (docs/PACK_PLAN.md): roles by guild rank, verified role, nickname. Off unless configured."""
+        cfg = self.cfg
+        if not cfg.server_id or not self._links:
+            return
+        verified_id, rank_roles = await self._db(self._links.role_settings, cfg.verified_role_id, cfg.rank_roles)
+        if not (rank_roles or verified_id or cfg.set_nickname):
+            return
+        server = self.get_guild(cfg.server_id)
+        if server is None:
+            return
+        try:
+            member = server.get_member(user_id) or await server.fetch_member(user_id)
+        except dpy.DiscordException:
+            return
+        rank, inside = await self._db(self._links.desired_rank, user_id)
+        out_since = await self._db(self._links.out_of_guild_since, user_id)
+        managed = set(rank_roles.values()) | ({verified_id} if verified_id else set())
+        if inside:
+            want = {rank_roles[rank]} if rank in rank_roles else set()
+            if verified_id:
+                want.add(verified_id)
+        elif out_since is not None and time.time() - out_since > cfg.grace_days * 86400:
+            want = set()
+        else:
+            return  # left recently: keep roles during the grace period
+        have = {r.id for r in member.roles} & managed
+        try:
+            add = [server.get_role(i) for i in want - have if server.get_role(i)]
+            remove = [server.get_role(i) for i in have - want if server.get_role(i)]
+            if add:
+                await member.add_roles(*add, reason="GuildLedger link: guild rank")
+            if remove:
+                await member.remove_roles(*remove, reason="GuildLedger link: guild rank changed or left")
+            if cfg.set_nickname and inside and member.id != server.owner_id:
+                nick = await self._db(self._links.main_name, user_id)
+                if nick and member.nick != nick:
+                    await member.edit(nick=nick[:32], reason="GuildLedger link: main character")
+        except dpy.Forbidden:
+            log.error("roles/nickname for %s refused: give the bot Manage Roles and Manage Nicknames and move its"
+                      " role above the roles it assigns", user_id)
+        except dpy.DiscordException as e:
+            log.error("roles/nickname for %s failed: %s", user_id, e)
 
     async def backfill(self) -> None:
         async with self._backfilling:
@@ -121,6 +217,7 @@ class LedgerBot(dpy.Client):
                 await msg.add_reaction(OK)
             else:
                 log.warning("upload %s from %s rejected: %s", msg.id, collector, out.reason)
+                await self._db(self._ops.send, f"❌ Upload from {collector} rejected: {out.reason}")
                 await msg.add_reaction(BAD)
                 await msg.reply(f"rejected: {out.reason}", mention_author=False, allowed_mentions=NO_MENTIONS)
         except dpy.DiscordException as e:

@@ -6,6 +6,8 @@
 token = ""
 # Discord: User Settings -> Advanced -> Developer Mode on; then right-click #gl-ingest -> Copy Channel ID.
 ingest_channel_id = 0
+# Your Discord server's ID (right-click the server icon -> Copy Server ID): slash commands appear at once.
+server_id = 0
 
 # One webhook per collector in #gl-ingest. Key = the webhook ID (the number right after
 # /api/webhooks/ in its URL), value = the collector's name. Uploads from any other author are ignored;
@@ -35,3 +37,21 @@ db_path = "/var/lib/guildledger/guildledger.db"
 # Optional: webhook of a private #gl-backup channel. The daily backup (gzip) is also posted there,
 # so the archive survives the loss of the server. Empty = local backups only (14 days).
 webhook = ""
+
+[ops]
+# Optional: webhook of a private #gl-ops channel. Daily coverage report (lines, share with text, gaps,
+# uploads per collector) and warnings (no upload for alert_after_hours, rejected uploads).
+webhook = ""
+report_hour = 6          # local time; the report covers the previous day
+alert_after_hours = 6
+
+[link]
+# Decision 5 (docs/PACK_PLAN.md): what a confirmed link does on the Discord server. All off by default.
+# Easier: set the roles with /roles in Discord (saved on the server, wins over the values here).
+# Needs the bot permissions Manage Roles / Manage Nicknames, and the bot's role above the roles it assigns.
+verified_role_id = 0     # role for members with a linked character in the guild (0 = off)
+set_nickname = false     # nickname = highest-level linked character in the guild
+grace_days = 7           # roles stay this long after the last linked character left the guild
+[link.rank_roles]
+# guild rank name = Discord role ID, e.g.
+# "Officer" = 123456789012345678

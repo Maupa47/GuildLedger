@@ -28,8 +28,11 @@ Everybody installs the same addon. **Members** (the default) keep recent guild c
 missed. **Collectors** (`/gl collector on`, then `/reload`) also run the companion, read the guild history and
 the roster, and fill their gaps from members' answers (CLAUDE.md 5.7).
 
-Members get `dist\GuildLedger-member-<version>.zip` (addon only; see `docs/MEMBER.txt`), e.g. pinned in the
-guild Discord. Built by `tools\package-collector.ps1` together with the collector zip.
+Members install the addon from **CurseForge** (or `dist\GuildLedger-<version>.zip`, the same package: the
+addon folder with `README.md`, no programs). Collectors additionally get `dist\GuildLedger-collector-<version>.zip`
+from the admin. Both are built by `tools\package-collector.ps1`; CurseForge text and upload steps:
+[docs/CURSEFORGE.md](docs/CURSEFORGE.md). The addon is silent: nothing in chat unless a `/gl` command is typed.
+`/gl who` lists everyone online with GuildLedger (role, version, lines kept/given/filled).
 
 ## Adding an officer as a collector (admin)
 
@@ -51,6 +54,31 @@ guild Discord. Built by `tools\package-collector.ps1` together with the collecto
 - Companion: `companion\config.toml` (git-ignored), started with `companion\start-companion.cmd` or
   `python -m guildledger --config config.toml watch` in `companion\`.
 - Useful: `python -m guildledger --config config.toml stats`, `… export` (plain-text logs in `companion\logs\`).
+
+## Monitoring
+
+- **#gl-ops** (optional, `[ops] webhook` in `bot/config.toml`): every morning (06:00) a report for the
+  previous day — chat lines, share with text, lines filled by members, longest stretches without text,
+  uploads per collector, roster changes — plus a warning when no upload arrived for 6 h and a note for
+  every rejected upload. Same report on demand:
+  `ssh <server> "sudo -u guildledger /opt/guildledger/venv/bin/python -m guildledger_bot --config /etc/guildledger/config.toml report"`
+  (`--day YYYY-MM-DD` for another day).
+- **GitHub Actions** runs all tests on every push (repository → *Actions* tab; ✅/❌ next to each commit).
+- In game: `/gl status` shows the relay (messages sent/received, last send result) and which addon
+  versions other players run, with the outdated ones listed.
+
+## Discord link and activity commands (since 0.4.0)
+
+Slash commands: `/link`, `/unlink`, `/chars`, `/whois`, `/seen`, `/joined`, `/activity`; officers (Manage Roles):
+`/linkstatus`, `/inactive`, `/roles`. Setup once:
+1. Developer Portal → your app → *Installation*: scopes `bot` **and** `applications.commands`; permissions as
+   before plus **Manage Roles** and **Manage Nicknames** (only needed for decision 5). Open the link, re-authorise.
+2. `bot/config.toml`: `[discord] server_id` = your server's ID (right-click the server icon → Copy Server ID).
+3. Roles (decision 5), in Discord as an officer: `/roles verified role:@guild-member`, then
+   `/roles rank rank:<guild rank> role:<Discord role>` per rank (ranks are suggested), `/roles show` to check,
+   `/roles sync` to apply now. Saved on the server; no config file needed. In Server Settings → Roles, drag
+   the bot's role **above** every role it should assign.
+4. `deploy.ps1 -UpdateConfig`. The bot logs a clear line if it lacks a permission.
 
 ## Bot host (server)
 

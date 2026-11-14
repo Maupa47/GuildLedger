@@ -48,8 +48,14 @@ class Archive(Spool):
         total = ImportResult()
         for guild, rows in guilds.items():
             res = self.import_rows(guild, rows.name, rows.chat, rows.events, collector)
+            if rows.roster is not None:
+                with self.db:
+                    self.import_roster(guild, rows.roster[0], rows.roster[1], res)
+            if rows.links:
+                with self.db:
+                    self.import_links(guild, rows.links, collector, res)
             for k in ("chat_new", "chat_updated", "chat_merged", "chat_dup", "events_new", "events_dup",
-                      "events_updated", "skipped"):
+                      "events_updated", "members_new", "links_new", "skipped"):
                 setattr(total, k, getattr(total, k) + getattr(res, k))
             total.guilds.append(guild)
         self._record(message_id, collector, header.rows, header.sha256, "ok", "")

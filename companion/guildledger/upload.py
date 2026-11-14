@@ -31,15 +31,21 @@ PROTOCOL = "gl1"
 class UploadResult:
     files: int = 0
     rows: int = 0
+    rosters: int = 0
 
     def summary(self) -> str:
-        return f"uploaded {self.rows} row(s) in {self.files} file(s)"
+        return f"uploaded {self.rows} row(s)" + (" and the member list" if self.rosters else "") + \
+            f" in {self.files} file(s)"
 
 
 def build_file(guild: str, name: str | None, collector: str, chat: list[dict[str, Any]],
-               events: list[dict[str, Any]]) -> bytes:
+               events: list[dict[str, Any]], roster: tuple[int, list[dict[str, Any]]] | None = None,
+               links: list[dict[str, Any]] = ()) -> bytes:
     lines = [json.dumps({"type": "guild", "guild": guild, "name": name}, ensure_ascii=False)]
-    for kind, rows in (("chat", chat), ("event", events)):
+    if roster is not None:  # pack step R: one record with the whole snapshot (counts as one row)
+        lines.append(json.dumps({"type": "roster", "guild": guild, "at": roster[0], "members": roster[1]},
+                                ensure_ascii=False))
+    for kind, rows in (("chat", chat), ("event", events), ("link", links)):
         for r in rows:
             lines.append(json.dumps({"type": kind, "guild": guild, "collector": collector, **r}, ensure_ascii=False))
     raw = ("\n".join(lines) + "\n").encode("utf-8")
@@ -76,4 +82,21 @@ class Uploader:
                 res.files += 1
                 res.rows += len(part)
                 i += len(part)
+            links = self.spool.pending_links(guild)
+            if links:
+                data = build_file(guild, name if name != guild else None, self.collector, [], [], None, links)
+                stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(self.now()))
+                self.hook.post_file(describe(self.collector, len(links), data),
+                                    f"gl-{guild}-{stamp}-links.jsonl.gz", data)
+                self.spool.mark_links_uploaded(guild, [r["id"] for r in links])
+                res.files += 1
+                res.rows += len(links)
+            roster = self.spool.pending_roster(guild)
+            if roster is not None:
+                data = build_file(guild, name if name != guild else None, self.collector, [], [], roster)
+                stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(self.now()))
+                self.hook.post_file(describe(self.collector, 1, data), f"gl-{guild}-{stamp}-roster.jsonl.gz", data)
+                self.spool.mark_roster_uploaded(guild, roster[0])
+                res.files += 1
+                res.rosters += 1
         return res

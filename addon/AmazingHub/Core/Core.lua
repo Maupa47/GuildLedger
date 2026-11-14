@@ -1,0 +1,1158 @@
+----------------------------------------------------------------------
+-- Amazing Hub - Core
+-- Global namespace bootstrap, database lifecycle, event handling.
+-- Constants are defined in Core/Config.lua (loaded first).
+----------------------------------------------------------------------
+local ADDON_NAME, ns = ...
+
+-- Safety net: Config.lua should have run first, but guard defensively.
+_G.AmazingHub = _G.AmazingHub or {}
+
+-- Attach the file-local namespace table (only accessible from this file)
+AmazingHub.ns = ns
+
+local L = AmazingHub.L
+
+----------------------------------------------------------------------
+-- Session state (runtime-only, never persisted)
+----------------------------------------------------------------------
+AmazingHub.State = {
+    comm        = { lastBroadcast = 0, pendingMessages = {} },
+    lootMaster  = {},
+    recruitment = {},
+    raid        = {},
+    consumables = {},
+    raidCD      = { state = {}, members = {} },
+    errors      = {},  -- session error ring (see AmazingHub:RecordError / /amazing errors)
+    -- What failed to start (AmazingHub:RunStartup) and what this client lacks
+    -- (AmazingHub:RecordMissing). Feeds /amazing errors and the login line.
+    startup     = { failed = {}, failedFeatures = {}, stacks = {} },
+    missing     = {},
+}
+
+----------------------------------------------------------------------
+-- Database defaults
+----------------------------------------------------------------------
+local DB_DEFAULTS = {
+    version = 1,
+    members = {},    -- [name-realm] = { gear, professions, attunements, ... }
+    settings = {
+        sortBy = "level",
+        sortAsc = false,
+        showOffline = true,
+        minimap = { hide = false },
+        hijackGuildButton = true,  -- guild micro button / "J" opens Amazing Hub (opt-out in General)
+        itemTooltip = "always",    -- guild lines on item tooltips: "always", "shift" or "off"
+        officerMaxRank = 1,  -- rank indexes 0..officerMaxRank are officers (GM + rank 1 by default)
+        -- Web companion. Off until someone turns it on: the export carries the
+        -- whole guild's gear, attunements and attendance, and a guild that does
+        -- not use the site should not have that one mistyped command away.
+        companion = false,
+        modules = {
+            raidTracker = true,
+            lootTracker = true,
+            lootMaster = false,        -- Amazing Hub: announces in raid chat; officers switch it on
+            consumableChecker = false, -- Amazing Hub: posts results in chat; officers switch it on
+            recruitment = false,       -- Amazing Hub: welcome lines / auto-invite; officers switch it on
+            trialTracker = true,
+            officerNotes = true,
+            commSystem = true,
+            guildManager = true,
+        },
+    },
+    myData = {},
+    lastSync = 0,
+    guildWishlists = {},  -- [lowerName] = { name, class, wishlist = {} }
+    lootPrios = {},       -- [itemId(num)] = { {name, class, order}, ... } officer-set priorities
+    raidTracker = {
+        sessions = {},
+        attendance = {},
+        currentGroupTag = "",
+        deletedSessions = {},  -- [sessionID] = true; permanent tombstone set
+        mergedSessions = {},   -- [sessionID] = id it was folded into here; never sent (issue #197)
+    },
+    lootHistory = {},
+    lootMaster = {
+        rollDuration = 30,
+        autoAnnounce = true,
+        wishlistOnlyMode = false,
+        awardHistory = {},
+        disenchanter = "",
+    },
+    officerNotes = {},
+    managementLog = {},  -- leadership action log (ring buffer; capped in GuildManager)
+    firstSeen = {},      -- [playerKey] = timestamp first observed by AmazingHub
+    trials = {},
+    altLinks = {},  -- [altKey] = mainKey  (officer-maintained, for account-wide attunement propagation)
+    consumableChecks = { lastResults = {} },
+    wishlists = {},   -- [charKey] = [{ itemId, itemLink, order, isOffspec }] — per-character wishlists
+    cores = {},       -- [coreName] = { lootMaster, attendance, points, members }
+}
+
+----------------------------------------------------------------------
+-- Event frame
+----------------------------------------------------------------------
+local eventFrame = CreateFrame("Frame")
+eventFrame:RegisterEvent("ADDON_LOADED")
+eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+eventFrame:RegisterEvent("GUILD_ROSTER_UPDATE")
+eventFrame:RegisterEvent("PLAYER_GUILD_UPDATE")
+
+eventFrame:SetScript("OnEvent", function(self, event, ...)
+    if event == "ADDON_LOADED" then
+        local addon = ...
+        if addon == ADDON_NAME then
+            AmazingHub:Initialize()
+        end
+    elseif event == "PLAYER_LOGIN" then
+        AmazingHub:OnLogin()
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        local isInitialLogin, isReloadingUi = ...
+        AmazingHub:OnEnterWorld(isInitialLogin, isReloadingUi)
+    elseif event == "GUILD_ROSTER_UPDATE" then
+        AmazingHub:OnGuildRosterUpdate()
+    elseif event == "PLAYER_GUILD_UPDATE" then
+        AmazingHub:OnGuildRosterUpdate()
+    end
+end)
+
+----------------------------------------------------------------------
+-- Initialization
+----------------------------------------------------------------------
+function AmazingHub:Initialize()
+    -- WoW leaves a SavedVariable nil until it is first written.
+    if not AmazingHubDB then AmazingHubDB = {} end
+
+    -- The interface style is the account's, and is settled before anything is drawn (#122).
+    if self.Style then self.Style:Resolve() end
+
+    self.Compat.RegisterAddonPrefix(self.PREFIX)
+
+    self:Print("v" .. self.VERSION .. " |cffFFD700by Maupa|r" .. L[" loaded. Type |cffFFD700/amazinghub|r to open."])
+end
+
+----------------------------------------------------------------------
+-- Per-guild DB resolution
+----------------------------------------------------------------------
+-- The realm a db key is made with, and a guild's db key, "<guild>-<realm>": the one place each is built.
+-- On retail a guild spans connected realms, so it is the guild's home realm (`AmazingHub:GuildRealm`):
+-- one guild, one database, whichever of its realms a character is on (ADR-0026).
+local function dbRealm()
+    return AmazingHub:GuildRealm() or "Unknown"
+end
+local function guildDBKey(guildName) return guildName .. "-" .. dbRealm() end
+
+function AmazingHub:ResolveGuildDB()
+    local realmName = dbRealm()
+    local dbKey, guilded
+    if IsInGuild() then
+        local guildName = GetGuildInfo("player")
+        if not guildName then return false end  -- in a guild but name not ready; caller retries
+        dbKey = guildDBKey(guildName)
+        guilded = true
+    else
+        -- Guildless: boot against a per-realm fallback DB so the mesh, recruitment
+        -- finder, minimap and commands still work. Guild-scoped data just stays
+        -- empty, and the player switches to the real guild DB once they join one.
+        dbKey = "_noguild-" .. realmName
+        guilded = false
+    end
+
+    -- Already resolved to this key
+    if self.guildKey == dbKey and self.db then
+        self.isGuilded = guilded
+        return true
+    end
+
+    -- Migration from the pre-guild-keyed flat structure. Only meaningful when
+    -- guilded, so legacy data lands under the real guild key (never _noguild);
+    -- a guildless boot leaves _dbVersion untouched so a later guilded boot migrates.
+    if guilded and not AmazingHubDB._dbVersion then
+        if AmazingHubDB.version or AmazingHubDB.members or AmazingHubDB.settings then
+            local oldData = {}
+            for k, v in pairs(AmazingHubDB) do
+                oldData[k] = v
+            end
+            wipe(AmazingHubDB)
+            AmazingHubDB[dbKey] = oldData
+        end
+        AmazingHubDB._dbVersion = 2
+    end
+
+    if not AmazingHubDB[dbKey] then
+        AmazingHubDB[dbKey] = {}
+    end
+
+    -- Apply defaults
+    local guildDB = AmazingHubDB[dbKey]
+    for k, v in pairs(DB_DEFAULTS) do
+        if guildDB[k] == nil then
+            if type(v) == "table" then
+                guildDB[k] = self:DeepCopy(v)
+            else
+                guildDB[k] = v
+            end
+        end
+    end
+
+    -- Every guildless character on the account and realm shares this db. A guild's recruitment ad
+    -- that reached it (a character who joined mid-session stays on it until the next login) made the
+    -- next character with no guild at all be asked to post it (#150): it never stays here.
+    if not guilded then guildDB.guildRecruitment = nil end
+
+    self.db = guildDB
+    self.guildKey = dbKey
+    self.isGuilded = guilded
+    return true
+end
+
+-- True while this character is in the guild whose db is loaded. The db is resolved at login only:
+-- a character who joins, leaves or changes guild mid-session keeps the old one until the next, and
+-- one guild's data must not be written into another's, nor into the guildless db (#150).
+function AmazingHub:IsOnGuildDB()
+    if not (IsInGuild() and self.isGuilded) then return false end
+    local name = GetGuildInfo("player")
+    return name ~= nil and guildDBKey(name) == self.guildKey
+end
+
+function AmazingHub:OnLogin()
+    -- Boots whether or not we're in a guild: ResolveGuildDB falls back to a
+    -- guildless DB so the mesh + recruitment finder + minimap still work.
+    -- A false return only means "in a guild but the name isn't ready yet".
+    if not self:ResolveGuildDB() then
+        local attempts = 0
+        local function tryResolve()
+            attempts = attempts + 1
+            if AmazingHub:ResolveGuildDB() then
+                AmazingHub:InitModules()
+                return
+            end
+            if attempts < 5 then
+                C_Timer.After(2, tryResolve)
+            else
+                AmazingHub:Print(L["|cffFF4444Could not load guild info. Try /reload.|r"])
+            end
+        end
+        C_Timer.After(2, tryResolve)
+        return
+    end
+
+    self:InitModules()
+end
+
+----------------------------------------------------------------------
+-- Module start-up list. Order matters (DataCollector before the sync that
+-- reads it), so this is a list, not a set. Per entry:
+--   [1]      module name under AmazingHub
+--   feature  Settings toggle that can switch the module off
+--   ui       window the module backs: if the module fails to start, the
+--            window refuses to open instead of erroring while it builds
+--   method   start function, when it is not Initialize
+--   after    second function, run only when the first one succeeded
+----------------------------------------------------------------------
+local MODULE_START = {
+    { "DataCollector" },
+    { "AttunementTracker" },
+    { "SyncService" },
+    { "Alliance", ui = "alliance" },
+    { "AllianceSync" },
+    { "AllianceChat" },
+    { "GuildChat" },
+    { "RosterLog" },
+    { "BanList" },
+    { "CommSystem", feature = "commSystem" },
+    { "Wishlist", ui = "wishlist" },
+    { "SoftRes" },
+    { "CoreManager" },
+    { "RaidTracker", feature = "raidTracker", ui = "raids" },
+    { "LootTracker", feature = "lootTracker" },
+    { "LootMaster", feature = "lootMaster", ui = "loot" },
+    -- The night's plan from the site, shown out of combat (issue #296).
+    { "RaidPlan" },
+    { "Points", feature = "points", ui = "dkp" },
+    -- Retail only (issue #185): the loot council by trade; the module does not exist elsewhere.
+    { "TradeCouncil" },
+    { "Digest" },
+    { "Bulletin" },
+    { "CallToArms" },
+    { "Polls" },
+    { "Calendar" },
+    { "Milestones" },
+    -- WoW: Forever only (issue #205): what happened to me, for the guild's feed on the guild website.
+    { "Journal", feature = "journal" },
+    -- WoW: Forever only (issue #208): the guild's founding and its founding members.
+    { "Founding", feature = "founding" },
+    -- WoW: Forever only (issue #217): the guild's setup, for its GM and officers.
+    { "Activation" },
+    -- WoW: Forever only (issue #210): a clear of a new dungeon, into my journal.
+    { "DungeonLog", feature = "journal" },
+    { "ConsumableChecker", feature = "consumableChecker" },
+    { "SpecChecker" },
+    -- Retail only (issue #187): my keystone, rating and vault, carried by the member broadcast.
+    { "MythicPlus" },
+    { "GuildAnalytics" },
+    { "Mentions" },
+    { "NoteCommand" },
+    { "LevelQuery" },
+    { "LFGBoard" },
+    { "GuildMap" },
+    { "PugInspector" },
+    { "RecipeTracker", ui = "recipes" },
+    { "CraftNet" },
+    -- WoW: Forever only (issue #31); on Anniversary the module does not exist and is skipped.
+    { "Professions" },
+    { "ProfSync" },
+    -- WoW: Forever only (issue #37): the look, read in the barber's chair.
+    { "Look" },
+    { "RecruitBeacon" },
+    -- WoW: Forever and retail: the whisper gossip. After RecruitBeacon, whose handler feeds it.
+    { "AmzHubGossip" },
+    -- WoW: Forever and retail: the request to join a guild, from both sides. After the gossip, whose prefix it rides.
+    { "JoinRequests" },
+    -- WoW: Forever and retail: lights the minimap button on the first guild a character with no guild hears.
+    { "GuildFinder" },
+    -- Leaves the channel of a /amazing probe channel that a /reload cut short, a moment after login.
+    { "Probe" },
+    { "RecruitScanner" },
+    -- Recruitment participation runs for EVERY player (the officer-only
+    -- Initialize in OFFICER_START handles just the auto-post/welcome flow).
+    { "Recruitment", feature = "recruitment", method = "InitParticipation" },
+    -- Recruitment engagement stats: every client tracks its own activity and
+    -- self-reports; officers aggregate for the Leadership dashboard.
+    { "RecruitEngagement" },
+    -- Raider roster (officer-curated, everyone stores/views it).
+    { "RaiderRoster" },
+    { "AltRoster" },
+    { "AltAutoDetect" },
+    { "ChatTweaks" },
+    { "GuildManager", feature = "guildManager", ui = "management" },
+    { "ModPresets" },
+    -- The roster is not compared for new members' trials until the guild's settings have arrived (#249).
+    { "TrialTracker", method = "Arm" },
+}
+
+-- Officer-only modules, started once guild info is available.
+local OFFICER_START = {
+    { "Recruitment", feature = "recruitment" },
+    { "OfficerNotes", feature = "officerNotes" },
+    { "TrialTracker", feature = "trialTracker", ui = "trials", after = "CheckReady" },
+    -- What the Discord's cores changed at login, to the other officers (#135).
+    { "CoreManager", method = "SendDiscordChanges" },
+    -- The requests from the site: read at the start with no rank known, they reached no officer's notice.
+    { "JoinRequests", method = "Refresh" },
+    -- Repeating events: the next weeks of every series, filled in by an officer's client (#267).
+    { "Calendar", method = "TopUpSeries" },
+}
+
+local OFFICER_START_DELAY = 5  -- seconds; the guild rank is not known at PLAYER_LOGIN
+local OFFICER_START_TRIES = 12 -- asks, OFFICER_START_DELAY apart, before giving up on the rank
+
+-- The rank IsOfficer reads, or no guild at all: either way there is an answer to act on.
+local function rankKnown()
+    if not IsInGuild() then return true end
+    local _, _, rankIndex = GetGuildInfo("player")
+    return rankIndex ~= nil
+end
+
+-- Asked once at five seconds, a rank the client had not loaded yet read as "not an officer",
+-- and the officer's welcome, notes and trials stayed off all session, silently (issue #79).
+-- It asks again until the rank is known; the start-up report waits for the answer.
+local function startOfficerModules(try)
+    if not rankKnown() and try < OFFICER_START_TRIES then
+        AmazingHub.Compat.After(OFFICER_START_DELAY, function() startOfficerModules(try + 1) end)
+        return
+    end
+    if not rankKnown() then
+        AmazingHub.State.startup.failed.OfficerModules = "not started, the guild rank was still unknown after "
+            .. (OFFICER_START_DELAY * OFFICER_START_TRIES) .. "s"
+    elseif AmazingHub:IsOfficer() then
+        for _, entry in ipairs(OFFICER_START) do
+            AmazingHub:StartModule(entry)
+        end
+    end
+    -- The site's raids wait for the same answer: an officer's client puts them on the calendar,
+    -- and read before the rank was known they were skipped for the session (#146).
+    if AmazingHub.CompanionImport and AmazingHub.CompanionImport.CalendarFromInbox then
+        AmazingHub.CompanionImport:CalendarFromInbox()
+    end
+    AmazingHub:ReportStartup()
+end
+
+function AmazingHub:InitModules()
+    -- Core helper tests (Utils loads before SelfTest, so it cannot self-register).
+    self:RunStartup("UtilTests", nil, self.RegisterUtilTests, self)
+
+    -- What the companion left, as soon as the guild's db is known: the raid tracker stamps tonight's
+    -- raid from it when the session starts. Its calendar half waits for the rank, below (#146).
+    if AmazingHub.CompanionImport and AmazingHub.CompanionImport.ReadInbox then
+        AmazingHub.CompanionImport:ReadInbox()
+    end
+
+    for _, entry in ipairs(MODULE_START) do
+        self:StartModule(entry)
+    end
+    if AmazingHub.CreateMinimapButton then
+        self:RunStartup("MinimapButton", nil, self.CreateMinimapButton, self)
+    end
+    -- First-run welcome (once); delayed so guild info + frames are ready.
+    if AmazingHub.MaybeShowOnboarding then
+        AmazingHub.Compat.After(6, function() AmazingHub:MaybeShowOnboarding() end)
+    end
+    -- WoW: Forever: the founding letter to a GM whose guild has none yet (issue #208).
+    if AmazingHub.MaybeShowFoundingLetter then
+        AmazingHub.Compat.After(12, function() AmazingHub:MaybeShowFoundingLetter() end)
+    end
+    -- Login digest: shown a bit later so guild/roster data is ready and it
+    -- doesn't collide with the first-run onboarding wizard.
+    if AmazingHub.Digest then
+        AmazingHub.Compat.After(9, function() AmazingHub.Digest:ShowOnLogin() end)
+    end
+
+    -- Officer-only modules: defer init until guild info is available. The
+    -- start-up report waits for them, so it counts every problem exactly once.
+    AmazingHub.Compat.After(OFFICER_START_DELAY, function() startOfficerModules(1) end)
+
+    -- Hook chat player links for guild invite
+    self:RunStartup("ChatInviteHook", nil, self.HookChatInvite, self)
+
+    -- Request guild roster
+    if IsInGuild() then
+        AmazingHub.Compat.GuildRoster()
+    end
+
+    -- Hook into default guild frame so Amazing Hub opens instead
+    self:RunStartup("GuildFrameHook", nil, self.HookGuildFrame, self)
+end
+
+----------------------------------------------------------------------
+-- Start-up isolation. One API missing on a new client (WoW: Forever) is
+-- enough to make a module raise while it starts, and every module after
+-- it in the list used to stay unstarted: the addon was dead.
+----------------------------------------------------------------------
+
+-- xpcall handler: keeps the stack a bare pcall would throw away, so a real
+-- bug in a module's start-up is still traceable.
+local function withStack(err)
+    return { msg = tostring(err), stack = debugstack and debugstack(2) or nil }
+end
+
+-- Run one start-up step. A failure is recorded against `name`, and against
+-- the features `entry` names (their windows then refuse to open); the
+-- caller carries on with the next step. Returns true when the step ran.
+function AmazingHub:RunStartup(name, entry, fn, ...)
+    local ok, res
+    if type(fn) == "function" then
+        local args, n = { ... }, select("#", ...)
+        ok, res = xpcall(function() return fn(unpack(args, 1, n)) end, withStack)
+        -- When the handler itself fails (out of memory, an error object whose
+        -- __tostring raises), xpcall returns a plain value, not our table.
+        if not ok and type(res) ~= "table" then
+            local printable, text = pcall(tostring, res)
+            res = { msg = printable and text or "start-up error" }
+        end
+    else
+        ok, res = false, { msg = "no start-up function" }
+    end
+    if not ok then
+        local startup = self.State.startup
+        startup.failed[name] = res.msg
+        startup.stacks[name] = res.stack
+        if entry and entry.feature then startup.failedFeatures[entry.feature] = name end
+        if entry and entry.ui then startup.failedFeatures[entry.ui] = name end
+        self:RecordError(name .. ": " .. res.msg)
+        -- Debug mode hands the whole error to the client's handler (BugSack,
+        -- scriptErrors), the way an unguarded start-up always did.
+        if self.Logger.debug and geterrorhandler then
+            geterrorhandler()(name .. ": " .. res.msg .. (res.stack and ("\n" .. res.stack) or ""))
+        end
+    end
+    return ok
+end
+
+-- Start one module from a start-list entry. A module that is not loaded or
+-- is switched off in Settings is skipped, which is not a failure.
+function AmazingHub:StartModule(entry)
+    local name = entry[1]
+    local mod = self[name]
+    if not mod then return false end
+    if entry.feature and not self:IsFeatureEnabled(entry.feature) then return false end
+    local method = entry.method or "Initialize"
+    -- "Module:Method" for anything but Initialize, so two stages of one
+    -- module (Recruitment, TrialTracker) never overwrite each other's record.
+    local label = method == "Initialize" and name or (name .. ":" .. method)
+    local ok = self:RunStartup(label, entry, mod[method], mod)
+    if ok and entry.after then
+        ok = self:RunStartup(name .. ":" .. entry.after, entry, mod[entry.after], mod)
+    end
+    return ok
+end
+
+-- Name of the module whose failed start-up took feature `id` down, or nil.
+function AmazingHub:FeatureStartFailed(id)
+    return self.State.startup.failedFeatures[id]
+end
+
+-- Record something this client does not have (an event, a tooltip script),
+-- once per session, so /amazing errors lists it without repeating it.
+--
+-- `expected` marks one only some clients ever had — the old craft window's
+-- event on a client that never had a craft window. It is still remembered, so
+-- the second caller is not recorded either, and left out of the start-up list:
+-- a client being itself is not a problem with the addon. What exists on this
+-- client is the probe's inventory to answer (Core/Probe.lua), not this one's.
+function AmazingHub:RecordMissing(what, expected)
+    local seen = self.State.missing[what]
+    if seen == true or (seen and expected) then return end  -- a real miss still wins over an expected one
+    self.State.missing[what] = expected and "expected" or true
+    if expected then return end
+    self:RecordError(what .. " is not available on this client")
+end
+
+-- Every start-up failure and every missing capability, one line each,
+-- sorted. /amazing errors prints these before the error ring, which is
+-- capped and shared with runtime errors and can already have lost them.
+function AmazingHub:ListStartupProblems()
+    local lines = {}
+    for name, err in pairs(self.State.startup.failed) do
+        lines[#lines + 1] = name .. ": " .. err
+    end
+    for what, how in pairs(self.State.missing) do
+        if how == true then lines[#lines + 1] = what .. " is not available on this client" end
+    end
+    table.sort(lines)
+    return lines
+end
+
+-- One chat line when start-up hit problems; silent when everything started.
+function AmazingHub:ReportStartup()
+    local n = #self:ListStartupProblems()
+    if n > 0 then
+        self:Print(string.format(L["%d start-up problem(s) on this client. Type /amazing errors for details."], n))
+    end
+end
+
+function AmazingHub:OnEnterWorld(isInitialLogin, isReloadingUi)
+    if not self.db or not self.guildKey then return end
+
+    -- Only run the full startup sequence on the initial login or UI reload.
+    -- PLAYER_ENTERING_WORLD also fires on every zone/instance transition —
+    -- we don't want to re-collect, re-broadcast, or re-check professions then.
+    if not isInitialLogin and not isReloadingUi then return end
+
+    -- Collect own data after a short delay. This feeds the profession-freshness
+    -- check and the officer wishlist broadcast. The member-data NETWORK broadcast
+    -- is owned by CommSystem:Initialize (which runs after the guild DB resolves,
+    -- so it fires reliably even on a cold login) — do NOT broadcast here too, or
+    -- a /reload would double-send.
+    C_Timer.After(3, function()
+        if AmazingHub.DataCollector then
+            AmazingHub.DataCollector:CollectMyData()
+        end
+        -- Broadcast our wishlist so guildies can see our priorities (officer-only while in testing)
+        if AmazingHub:IsOfficer() then
+            C_Timer.After(5, function()
+                if AmazingHub.Wishlist then
+                    AmazingHub.Wishlist:BroadcastMyWishlist()
+                end
+            end)
+        end
+        -- Check profession freshness after data is collected
+        C_Timer.After(4, function()
+            AmazingHub:CheckProfessionFreshness()
+        end)
+    end)
+end
+
+function AmazingHub:OnGuildRosterUpdate()
+    if AmazingHub.RecordFirstSeen then AmazingHub:RecordFirstSeen() end
+    if AmazingHub.DropDeparted then AmazingHub:DropDeparted() end
+    -- Who joined since this client last saw the whole roster: a trial each, with the guild's switch on (#249).
+    if AmazingHub.TrialTracker then AmazingHub:SafeCall(AmazingHub.TrialTracker.ScanRoster, AmazingHub.TrialTracker) end
+    AmazingHub:RefreshRosterUI()
+end
+
+----------------------------------------------------------------------
+-- Hook into the default Blizzard guild frame
+----------------------------------------------------------------------
+function AmazingHub:HookGuildFrame()
+    -- CRITICAL: never overwrite ToggleGuildFrame / ToggleFriendsFrame with our own
+    -- closures. Replacing those Blizzard globals TAINTS the shared social-frame
+    -- code, and the Raid window is a FriendsFrame tab, so a raid leader could not
+    -- open the raid frame or move a unit between subgroups DURING COMBAT (the
+    -- protected action fails with "Interface action failed because of an addon").
+    -- The taint is installed at load, which is why toggling the guild-button
+    -- option off never cleared it. hooksecurefunc keeps Blizzard's functions
+    -- secure; we only react AFTER they run, mirroring the native guild frame's
+    -- open/close onto Amazing Hub. We deliberately do NOT touch ToggleFriendsFrame at
+    -- all, so the Raid tab (and every other tab) stays completely untainted.
+    if ToggleGuildFrame and not self._guildHookInstalled then
+        self._guildHookInstalled = true
+        hooksecurefunc("ToggleGuildFrame", function()
+            if self._suppressGuildHijack then return end
+            -- In combat the game will not let an addon hide Blizzard's guild frame, which holds protected
+            -- pieces: hijacking then left both windows open side by side (#261). The key opens Blizzard's.
+            if InCombatLockdown() then return end
+            if not (IsInGuild() and self:IsGuildButtonHijacked()) then return end
+            local blizShown = (GuildFrame and GuildFrame:IsShown())
+                or (CommunitiesFrame and CommunitiesFrame:IsShown())
+            if blizShown then
+                -- Swap to Amazing Hub. The hide runs in the same frame as the native
+                -- Show (hooksecurefunc is synchronous), so nothing actually renders.
+                --
+                -- CRITICAL: use HideUIPanel, never frame:Hide(). Both of these are
+                -- UIPanels (registered in UIPanelWindows), and a bare :Hide() skips
+                -- the panel manager, so the slot they occupy is never released. The
+                -- panel stays "open" as far as GetUIPanel is concerned while being
+                -- invisible, and HideUIPanel later early-returns on a frame that is
+                -- already hidden, so the slot leaks for the rest of the session.
+                -- CloseAllWindows() then reports "I closed something" on every call,
+                -- and ToggleGameMenu never reaches ShowUIPanel(GameMenuFrame): ESC
+                -- still closes windows but stops opening the game menu, with no Lua
+                -- error, until /reload.
+                if GuildFrame then HideUIPanel(GuildFrame) end
+                if CommunitiesFrame then HideUIPanel(CommunitiesFrame) end
+                -- With Amazing Hub already up this press is a close: we hid Blizzard's frame on
+                -- the press that opened us, so its toggle shows it again instead of hiding
+                -- it, and the key never closed anything (issue #66).
+                if self:IsFrontDoorShown() then
+                    self:HideFrontDoor()
+                else
+                    self:ToggleRoster()
+                end
+            elseif self:IsFrontDoorShown() then
+                -- The toggle just closed the native frame: close ours to match.
+                self:HideFrontDoor()
+            end
+        end)
+    end
+
+    -- Add a "Amazing Hub" button to Blizzard's own guild frames so you can jump from
+    -- the native UI to Amazing Hub (and back via the "Blizzard" button in our header),
+    -- rather than the addon fully replacing the guild pane.
+    AmazingHub:SetupNativeGuildButtons()
+end
+
+----------------------------------------------------------------------
+-- Guild-button takeover (opt-out) + native <-> Amazing Hub toggle buttons
+----------------------------------------------------------------------
+
+-- Does the guild micro button / "J" open Amazing Hub? Default yes; opt-out in Settings
+-- (General) or via /amazing guildbutton, so players can keep the modern Blizzard
+-- guild UI (chat history, news) as the guild button's target and use both.
+function AmazingHub:IsGuildButtonHijacked()
+    return self:GetSetting("hijackGuildButton") ~= false
+end
+
+-- Open Blizzard's own guild UI (classic GuildFrame or the modern Communities frame,
+-- whichever the client is set to) — the "Blizzard" button in our header calls this so
+-- a Amazing Hub user can still reach guild chat history / the news feed.
+function AmazingHub:OpenBlizzardGuildUI()
+    -- Open the native guild UI without our hijack redirect swapping it back to
+    -- Amazing Hub. We call the real (unreplaced) ToggleGuildFrame with a guard flag
+    -- our hooksecurefunc handler checks.
+    if not ToggleGuildFrame then return end
+    self._suppressGuildHijack = true
+    ToggleGuildFrame()
+    self._suppressGuildHijack = false
+end
+
+-- Attach a "Amazing Hub" button to a Blizzard guild frame ONCE (guarded — a shape change
+-- in a future client never errors us). Attached state is tracked in a local table, NOT
+-- as a field on the Blizzard global frame (which would trip luacheck's undefined-field).
+local nativeAmazingHubButtons = {}
+local function AttachAmazingHubButton(parent, point, xOff, yOff)
+    if not parent or nativeAmazingHubButtons[parent] then
+        return
+    end
+    nativeAmazingHubButtons[parent] = true
+    local ok, btn = pcall(CreateFrame, "Button", nil, parent, "UIPanelButtonTemplate")
+    if not ok or not btn then
+        return
+    end
+    btn:SetSize(84, 22)
+    btn:SetText("Amazing Hub")
+    btn:SetFrameLevel((parent:GetFrameLevel() or 0) + 10)
+    -- Anchor is per-frame: the classic GuildFrame and the modern CommunitiesFrame have
+    -- different top-bar layouts (the classic "Show Offline Members" checkbox and the
+    -- Communities online counter each sit where a shared corner offset would overlap),
+    -- so each caller picks its own corner + offset.
+    point = point or "TOPRIGHT"
+    btn:SetPoint(point, parent, point, xOff or -56, yOff or -32)
+    btn:SetScript("OnClick", function() AmazingHub:ToggleRoster() end)
+    btn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:AddLine("|cffFFD700Guild|r |cffD4AC0DOS|r")
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+end
+
+-- Put the "Amazing Hub" button on BOTH the classic GuildFrame and the modern
+-- CommunitiesFrame. Both are load-on-demand, so attach now if already present and again
+-- when their addon loads. Runs once.
+function AmazingHub:SetupNativeGuildButtons()
+    if self._nativeButtonsSetup then
+        return
+    end
+    self._nativeButtonsSetup = true
+    local function tryAttach()
+        -- Classic GuildFrame: top-LEFT — the top-right there holds the "Show Offline
+        -- Members" checkbox, so we sit on the empty left side under the title.
+        if GuildFrame then AttachAmazingHubButton(GuildFrame, "TOPLEFT", 16, -28) end
+        -- Modern CommunitiesFrame: top-right, pushed in so it clears the "x/y Online"
+        -- member counter in the top bar.
+        if CommunitiesFrame then AttachAmazingHubButton(CommunitiesFrame, "TOPRIGHT", -12, -32) end
+    end
+    tryAttach()
+    local watcher = CreateFrame("Frame")
+    watcher:RegisterEvent("ADDON_LOADED")
+    watcher:SetScript("OnEvent", function(_, _, name)
+        if name == "Blizzard_GuildUI" or name == "Blizzard_Communities" then
+            tryAttach()
+        end
+    end)
+end
+
+----------------------------------------------------------------------
+-- Toggle the Amazing Hub window
+----------------------------------------------------------------------
+-- What a character with no guild looks at to find one: the guild finder on WoW: Forever and retail,
+-- the old inbox on Anniversary, and the inbox again if the finder cannot be built (specs/071).
+function AmazingHub:OpenGuildFinder()
+    if self.GuildFinder and self.GuildFinder:Available() and self.ShowGuildFinder then
+        local ok, err = pcall(self.ShowGuildFinder, self)
+        if ok then return end
+        self:RecordError("GuildFinder: " .. tostring(err))
+    end
+    if self.ShowRecruitInbox then self:ShowRecruitInbox() end
+end
+
+function AmazingHub:ToggleRoster()
+    if not self.db then
+        self:Print(L["|cff888888Not in a guild \226\128\148 addon inactive.|r"])
+        return
+    end
+    if not IsInGuild() then
+        -- Guildless: the roster is guild data — open the recruitment finder,
+        -- which is exactly what a guildless player is here for.
+        self:OpenGuildFinder()
+        return
+    end
+    self.Compat.GuildRoster()
+    if AmazingHub.UI and AmazingHub.UI.ToggleMain then
+        AmazingHub.UI:ToggleMain()
+    end
+end
+
+----------------------------------------------------------------------
+-- Is the Amazing Hub window on screen? The guild-frame hook mirrors
+-- Blizzard's open and close onto it.
+----------------------------------------------------------------------
+function AmazingHub:IsFrontDoorShown()
+    return (self.RosterFrame and self.RosterFrame:IsShown()) and true or false
+end
+
+function AmazingHub:HideFrontDoor()
+    if self.RosterFrame then self.RosterFrame:Hide() end
+end
+
+-- Refresh the roster when the window is up and the roster tab has been built.
+function AmazingHub:RefreshRosterUI()
+    local f = self.RosterFrame
+    if f and f:IsShown() and f.RefreshRoster then f:RefreshRoster() end
+end
+
+----------------------------------------------------------------------
+-- Utility — print
+----------------------------------------------------------------------
+function AmazingHub:Print(msg)
+    DEFAULT_CHAT_FRAME:AddMessage("|cffFFD700[Amazing Hub]|r " .. tostring(msg))
+end
+
+----------------------------------------------------------------------
+-- Structured logger + error resilience
+-- Logger.debug gates verbose output (toggle via /amazing debug).
+-- SafeCall pcall-wraps risky callbacks so a single failure never breaks
+-- the rest of the UI or spams the default error frame; failures land in a
+-- session ring buffer viewable via /amazing errors.
+----------------------------------------------------------------------
+AmazingHub.Logger = { debug = false }
+
+function AmazingHub.Logger.Debug(msg)
+    if AmazingHub.Logger.debug then
+        AmazingHub:Print("|cff888888[debug]|r " .. tostring(msg))
+    end
+end
+
+function AmazingHub.Logger.Info(msg)
+    AmazingHub:Print(tostring(msg))
+end
+
+function AmazingHub.Logger.Warn(msg)
+    AmazingHub:Print("|cffFF8800[warn]|r " .. tostring(msg))
+end
+
+local ERROR_RING_MAX = 50
+
+-- Push one message into the session error ring shown by /amazing errors.
+function AmazingHub:RecordError(msg)
+    local ring = AmazingHub.State.errors
+    ring[#ring + 1] = { msg = tostring(msg), when = (GetServerTime and GetServerTime()) or 0 }
+    while #ring > ERROR_RING_MAX do table.remove(ring, 1) end
+    if AmazingHub.Logger.debug then
+        AmazingHub:Print("|cffFF4444[error]|r " .. tostring(msg))
+    end
+end
+
+-- pcall a function, capturing any error into AmazingHub.State.errors.
+-- Returns (ok, errOrResult). Use for event handlers and panel refreshes.
+function AmazingHub:SafeCall(fn, ...)
+    if type(fn) ~= "function" then return false end
+    local ok, err = pcall(fn, ...)
+    if not ok then AmazingHub:RecordError(err) end
+    return ok, err
+end
+
+----------------------------------------------------------------------
+-- Permission checks
+----------------------------------------------------------------------
+function AmazingHub:IsOfficer()
+    if not IsInGuild() then return false end
+    local _, _, rankIndex = GetGuildInfo("player")
+    if not rankIndex then return false end
+    local maxRank = (self.db and self.db.settings and self.db.settings.officerMaxRank) or 1
+    return rankIndex <= maxRank
+end
+
+-- The officer threshold is the guild's, not each account's (issue #81). Stored per account, it
+-- let an officer tick an "Officer Alt" rank that no other client knew of, and since #78 every
+-- officer message from that alt was dropped everywhere else. An officer's change is stamped and
+-- published; every client keeps the newest stamp an officer sent over GUILD (SyncService's
+-- officer-domain check). Until somebody changes it, each client keeps the value it had.
+local RANK_FUTURE_SLACK = 300   -- seconds a stamp may run ahead of this client's clock, as RI's
+local MAX_RANK_INDEX = 9        -- guild ranks are 0..9
+
+-- The stamp only moves forward, past the one this client holds: a clock a second behind, or
+-- two clicks in one second, would otherwise stamp a change the rest of the guild rejects as
+-- old, and the guild would stay split. Only an officer changes it, and the change goes out
+-- even when it demotes that officer: the receivers judge the sender by their own threshold,
+-- which still counts them.
+function AmazingHub:SetOfficerMaxRank(maxRank)
+    if not self:IsOfficer() then return false end
+    local s = self.db.settings
+    s.officerMaxRank = maxRank
+    s.officerMaxRankAt = math.max(GetServerTime(), (s.officerMaxRankAt or 0) + 1)
+    self:PublishOfficerMaxRank(true)
+    return true
+end
+
+-- Officers re-send it on the 5-minute sync and when asked, so a client that missed the change
+-- still gets it. `justChanged` skips the officer check for the change SetOfficerMaxRank has
+-- just made, which may have demoted the sender.
+function AmazingHub:PublishOfficerMaxRank(justChanged)
+    local s = self.db and self.db.settings
+    if not (s and s.officerMaxRankAt and self.SyncService and (justChanged or self:IsOfficer())) then return end
+    self.SyncService:Publish("guildcfg", "officers", { max = s.officerMaxRank }, { rev = s.officerMaxRankAt })
+end
+
+function AmazingHub:OnOfficerMaxRankSync(env)
+    local data = env and env.data
+    local at = env and tonumber(env.rev)
+    local max = type(data) == "table" and type(data.max) == "number" and data.max
+    -- `at > 0` also turns away NaN, which compares false to everything and would switch
+    -- newest-wins off for good on the client that stored it.
+    if not (at and at > 0 and at < math.huge and max) then return end
+    if max < 0 or max > MAX_RANK_INDEX or max ~= math.floor(max) then return end
+    at = math.min(at, GetServerTime() + RANK_FUTURE_SLACK)
+    local s = self.db.settings
+    -- Newest wins; two changes stamped in the same second settle on the lower threshold, the
+    -- same answer on every client whatever order they arrive in.
+    local held = s.officerMaxRankAt
+    if held and (at < held or (at == held and max >= (s.officerMaxRank or 1))) then return end
+    s.officerMaxRank, s.officerMaxRankAt = max, at
+end
+
+-- Who creates calendar events (issue #283): ranks 0 to this. The guild's, stamped and published as the
+-- officer threshold is, and never fewer ranks than the officers: unset, the officers alone.
+function AmazingHub:EventMaxRank()
+    local s = self.db and self.db.settings
+    local officers = (s and s.officerMaxRank) or 1
+    return math.max(officers, (s and s.eventMaxRank) or officers)
+end
+
+function AmazingHub:MayCreateEvents()
+    if not IsInGuild() then return false end
+    local _, _, rankIndex = GetGuildInfo("player")
+    return rankIndex ~= nil and rankIndex <= self:EventMaxRank()
+end
+
+-- A named player whose rank lets them create events, read off the roster as IsOfficerByName reads it.
+function AmazingHub:MayCreateEventsByName(fullName)
+    return self:HasRankUpToByName(fullName, self:EventMaxRank())
+end
+
+-- Only an officer changes it, as the officer threshold; the stamp only moves forward.
+function AmazingHub:SetEventMaxRank(maxRank)
+    if not self:IsOfficer() then return false end
+    if type(maxRank) ~= "number" or maxRank < 0 or maxRank > MAX_RANK_INDEX or maxRank ~= math.floor(maxRank) then return false end
+    local s = self.db.settings
+    s.eventMaxRank = maxRank
+    s.eventMaxRankAt = math.max(GetServerTime(), (s.eventMaxRankAt or 0) + 1)
+    self:PublishEventMaxRank(true)
+    return true
+end
+
+function AmazingHub:PublishEventMaxRank(justChanged)
+    local s = self.db and self.db.settings
+    if not (s and s.eventMaxRankAt and self.SyncService and (justChanged or self:IsOfficer())) then return end
+    self.SyncService:Publish("guildcfg", "events", { max = s.eventMaxRank }, { rev = s.eventMaxRankAt })
+end
+
+-- Newest wins, as OnOfficerMaxRankSync; two changes in the same second settle on the fewer ranks.
+function AmazingHub:OnEventMaxRankSync(env)
+    local data = env and env.data
+    local at = env and tonumber(env.rev)
+    local max = type(data) == "table" and type(data.max) == "number" and data.max
+    if not (at and at > 0 and at < math.huge and max) then return end
+    if max < 0 or max > MAX_RANK_INDEX or max ~= math.floor(max) then return end
+    at = math.min(at, GetServerTime() + RANK_FUTURE_SLACK)
+    local s = self.db.settings
+    local held = s.eventMaxRankAt
+    if held and (at < held or (at == held and max >= (s.eventMaxRank or 0))) then return end
+    s.eventMaxRank, s.eventMaxRankAt = max, at
+end
+
+-- Check whether a named player (may include realm, e.g. "Name-Realm") is an officer
+-- by scanning the guild roster. Used to validate incoming officer-only messages.
+function AmazingHub:IsOfficerByName(fullName)
+    local maxRank = (self.db and self.db.settings and self.db.settings.officerMaxRank) or 1
+    return self:HasRankUpToByName(fullName, maxRank)
+end
+
+-- Whether a named player's guild rank is 0 to `maxRank`, by the roster: the officer check, with its
+-- threshold as a parameter (issue #283).
+function AmazingHub:HasRankUpToByName(fullName, maxRank)
+    if not IsInGuild() or not fullName then return false end
+    -- Retail: connected realms put namesakes in one guild, so only the whole key is trusted: an
+    -- officer's name on another realm carries no rank (ADR-0026). No realm means this client's.
+    if AmazingHub.Client and AmazingHub.Client.isRetail then
+        local key = self:KeyOfRosterName(fullName)
+        for i = 1, GetNumGuildMembers() or 0 do
+            local name, _, rankIndex = GetGuildRosterInfo(i)
+            if name and self:KeyOfRosterName(name) == key then
+                return rankIndex ~= nil and rankIndex <= maxRank
+            end
+        end
+        return false
+    end
+    -- Normalise: strip realm if present
+    local shortName = fullName:match("^([^-]+)") or fullName
+    local numMembers = GetNumGuildMembers() or 0
+    for i = 1, numMembers do
+        local name, _, rankIndex = GetGuildRosterInfo(i)
+        if name then
+            local memberShort = name:match("^([^-]+)") or name
+            if memberShort == shortName and rankIndex and rankIndex <= maxRank then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+----------------------------------------------------------------------
+-- Config accessors (Rule 8 — never read db.settings.* directly from UI)
+----------------------------------------------------------------------
+function AmazingHub:GetSetting(key)
+    return self.db and self.db.settings and self.db.settings[key]
+end
+
+function AmazingHub:SetSetting(key, value)
+    if self.db and self.db.settings then
+        self.db.settings[key] = value
+    end
+end
+
+-- Do the guild's lines (crafters, wishlist, soft reserves) go on this item tooltip?
+-- "always", "shift" or "off" (issue #39). A link clicked in chat counts as asked for:
+-- shift-clicking it pastes it into the chat box instead.
+-- ponytail: pressing Shift mid-hover only shows up where the owner refreshes its
+-- tooltip (bags, character, action bars, every 0.2s); elsewhere hover again.
+function AmazingHub:ShowsItemTooltipInfo(tooltip)
+    local mode = self:GetSetting("itemTooltip")
+    if mode == "off" then return false end
+    return mode ~= "shift" or tooltip == ItemRefTooltip or IsShiftKeyDown()
+end
+
+----------------------------------------------------------------------
+-- Feature toggles (Rule 8 — never read db.settings.modules directly).
+-- Keys are the feature ids from UI/FeatureRegistry.lua. Default is ON:
+-- an absent key means "never touched", not "off". `core` features can
+-- never be turned off — that is how a user would lock themselves out of
+-- the Settings window that would turn them back on.
+----------------------------------------------------------------------
+-- Off for whoever has not chosen, until a release takes the name off this list (issue #232): these
+-- publish on the guild's channel or open a window, and they shipped with no client to try them on.
+-- A list and not a default in db.settings.modules: a default is saved into every player's file, and a
+-- later release could not turn it on for them. Somebody who chose keeps their choice either way.
+-- Empty since the journal and the founding were tried on the live game (issue #289): left off, no
+-- founding reached the guild website and the site's founding achievements were never earned.
+-- Amazing Hub: off until an officer switches them on (docs/HUB_AUDIT.md sections 2-3).
+local OFF_UNTIL_TESTED = { alliance = true, recruitment = true, web = true, founding = true }
+
+function AmazingHub:IsFeatureEnabled(id)
+    if type(id) ~= "string" then return false end
+    -- UI loads after Core, so the registry is resolved per call, not per load.
+    local def = self.UI and self.UI.GetFeature and self.UI:GetFeature(id)
+    if def and def.core then return true end
+    local mods = self.db and self.db.settings and self.db.settings.modules
+    if OFF_UNTIL_TESTED[id] and (not mods or mods[id] == nil) then return false end
+    if not mods then return true end
+    return mods[id] ~= false
+end
+
+function AmazingHub:SetFeatureEnabled(id, enabled)
+    if type(id) ~= "string" then return end
+    local def = self.UI and self.UI.GetFeature and self.UI:GetFeature(id)
+    if def and def.core then return end
+    if not (self.db and self.db.settings) then return end
+    self.db.settings.modules = self.db.settings.modules or {}
+    -- GetChecked() returns true or nil (never false) in TBC, so store an
+    -- explicit boolean — IsFeatureEnabled compares against false.
+    enabled = enabled and true or false
+    self.db.settings.modules[id] = enabled
+    if self.UI and self.UI.OnFeatureToggled then self.UI:OnFeatureToggled(id, enabled) end
+end
+
+----------------------------------------------------------------------
+-- Loot distribution system chosen by the guild (Settings, officer).
+-- Drives the default Loot Master flow; read by features that present
+-- loot UI. "rolls" = /roll MS/OS (default), "tmb"/"wishlist" = interest
+-- lists, "dkp" = the Points economy.
+----------------------------------------------------------------------
+-- `retail = false`: not offered on retail. That's My BiS is Classic only (issue #185).
+AmazingHub.LOOT_SYSTEMS = {
+    { key = "rolls",    label = "/roll (MS/OS)" },
+    { key = "tmb",      label = "TMB", retail = false },
+    { key = "wishlist", label = "Wishlist" },
+    { key = "dkp",      label = "DKP / Points" },
+    { key = "external", label = "External / Off" },
+}
+
+function AmazingHub:GetLootSystem()
+    return self:GetSetting("lootSystem") or "rolls"
+end
+
+-- The loot systems this client offers, in order.
+function AmazingHub:LootSystemsHere()
+    local out = {}
+    for _, sys in ipairs(self.LOOT_SYSTEMS) do
+        if not (sys.retail == false and self.Client.isRetail) then out[#out + 1] = sys end
+    end
+    return out
+end
+
+-- A loot system's name on its button. On retail nobody /rolls: "rolls" is the free roll, where whoever
+-- received a tradeable item awards it to the raid's best answer (TradeCouncil, issue #185).
+function AmazingHub:LootSystemLabel(sys)
+    if sys.key == "rolls" and self.Client.isRetail then return L["Free roll"] end
+    return sys.label
+end
+
+-- Whether `key` is a loot system this client offers.
+local function lootSystemHere(key)
+    for _, sys in ipairs(AmazingHub:LootSystemsHere()) do
+        if sys.key == key then return true end
+    end
+    return false
+end
+
+-- True unless the guild has opted out of AmazingHub loot handling entirely
+-- ("external": loot is run by Gargul/RCLootCouncil/etc.).
+function AmazingHub:LootSystemActive()
+    return self:GetLootSystem() ~= "external"
+end
+
+function AmazingHub:SetLootSystem(sys)
+    self:SetSetting("lootSystem", sys)
+    -- On retail the system decides who may award an offered item, on every member's client: an
+    -- officer's choice is stamped and published, as the officer threshold is (issue #185).
+    if self.Client.isRetail and self:IsOfficer() then
+        local s = self.db.settings
+        s.lootSystemAt = math.max(GetServerTime(), (s.lootSystemAt or 0) + 1)
+        self:PublishLootSystem()
+    end
+    -- Loot Master follows the system: "external" silences it entirely (no
+    -- roll popups, ML window, council, or /roll capture — and with no awards
+    -- the loot history stops growing too). SetEnabled hides any open frames
+    -- immediately; the runtime gate keeps new ones from opening.
+    if self.LootMaster and self.LootMaster.SetEnabled then
+        self.LootMaster:SetEnabled(self.LootMaster:IsModuleEnabled())
+    end
+    -- Re-surface only the access points the new system needs (no reload).
+    if self.UpdateLootSystemUI then self:UpdateLootSystemUI() end
+end
+
+-- An officer's loot system to the guild, on retail (issue #185): when it changes, and again on the
+-- officers' regular sync, for a client that missed it. Forever keeps it each client's own, as before.
+function AmazingHub:PublishLootSystem()
+    if not self.Client.isRetail then return end
+    local s = self.db and self.db.settings
+    if not (s and s.lootSystemAt and self.SyncService and self:IsOfficer()) then return end
+    self.SyncService:Publish("guildcfg", "lootsys", { sys = self:GetLootSystem() }, { rev = s.lootSystemAt })
+end
+
+-- The guild's loot system from an officer (SyncService has checked the officer and GUILD): the newest
+-- stamp wins, and two in the same second settle on the same one on every client. Retail only.
+function AmazingHub:OnLootSystemSync(env)
+    if not self.Client.isRetail then return end
+    local data = env and env.data
+    local at = env and tonumber(env.rev)
+    local sys = type(data) == "table" and data.sys
+    if self.Compat.IsSecret(sys) or type(sys) ~= "string" or not lootSystemHere(sys) then return end
+    if not (at and at > 0 and at < math.huge) then return end
+    at = math.min(at, GetServerTime() + RANK_FUTURE_SLACK)
+    local s = self.db.settings
+    local held = s.lootSystemAt
+    if held and (at < held or (at == held and sys >= self:GetLootSystem())) then return end
+    s.lootSystem, s.lootSystemAt = sys, at
+    if self.UpdateLootSystemUI then self:UpdateLootSystemUI() end
+end
+
+-- Each loot system exposes only its own UI so players never see screens
+-- that don't apply: wishlist/TMB -> wishlist access; DKP -> DKP access;
+-- plain /roll -> neither. A system whose module is absent (retail, ADR-0026) shows nothing.
+function AmazingHub:LootSystemShowsWishlist()
+    if not self.Wishlist then return false end
+    local s = self:GetLootSystem()
+    return s == "wishlist" or s == "tmb"
+end
+
+function AmazingHub:LootSystemShowsDKP()
+    if not self.Points then return false end
+    return self:GetLootSystem() == "dkp"
+end
+
+----------------------------------------------------------------------
+-- Player self-service profile: the roles this character is willing to
+-- play. Stored locally, mirrored into our own member row, and broadcast
+-- so the Raider Roster + guildmates pick it up with no officer input.
+----------------------------------------------------------------------
+function AmazingHub:GetMyRoles()
+    return (self.db and self.db.profile and self.db.profile.prefRoles) or {}
+end
+
+function AmazingHub:SetMyRoles(roles)
+    self.db.profile = self.db.profile or {}
+    self.db.profile.prefRoles = roles or {}
+    local key = self:GetPlayerKey(AmazingHub.Compat.PlayerName(), GetRealmName())
+    self.db.members = self.db.members or {}
+    self.db.members[key] = self.db.members[key] or {}
+    self.db.members[key].prefRoles = self.db.profile.prefRoles
+    if self.CommSystem and self.CommSystem.BroadcastMyData then
+        self.CommSystem:BroadcastMyData(true)
+    end
+    if self.RaiderRoster then self.RaiderRoster:Refresh() end
+end
+

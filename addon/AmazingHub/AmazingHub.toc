@@ -1,0 +1,180 @@
+## Interface: 16001
+## Title: |cffFFD700Amazing Hub|r |cff888888(Amazing Forever Guild Pack)|r
+## Notes: Guild window for the Amazing guild: roster, professions and recipes, raids, trials.
+## Author: Maupa
+## Version: 0.5.0
+## SavedVariables: AmazingHubDB
+## DefaultState: enabled
+## IconTexture: Interface\AddOns\AmazingHub\Media\minimap-logo
+## OptionalDeps: GuildLedger
+## X-License: MIT
+## X-Category: Guild
+## X-Upstream: GuildOS 1.20.1 (80883a0) https://github.com/danielcosta42/GuildOS
+
+
+# Libraries
+Libs\LibStub.lua
+Libs\CallbackHandler-1.0.lua
+Libs\LibSerialize.lua
+Libs\LibDeflate.lua
+Libs\ChatThrottleLib.lua
+Libs\AceComm-3.0.lua
+Libs\LibAmzHubMesh.lua
+
+# The companion's drop box. Loaded before anything reads it; the companion
+# overwrites this file in place and a /reload picks it up.
+Inbox.lua
+
+# Core
+Core\Config.lua
+
+# Localization (Locale.lua first; enUS is the master list)
+Locales\Locale.lua
+Locales\enUS.lua
+Locales\ptBR.lua
+Locales\esES.lua
+Locales\deDE.lua
+Locales\frFR.lua
+Locales\ruRU.lua
+Locales\koKR.lua
+Locales\zhCN.lua
+Locales\zhTW.lua
+Locales\itIT.lua
+
+Core\Core.lua
+Core\Compat.lua
+Core\Data.lua
+Core\Style.lua
+Core\Utils.lua
+Core\Commands.lua
+Core\Probe.lua
+
+# Cross-addon presence mesh (shared singleton; identical file in each Maupa addon)
+Modules\AmzHubNet.lua
+Modules\AmzHubNetWire.lua
+# AmazingHub-side mesh facade (NOT shared — AmazingHub-specific logic)
+Modules\Mesh.lua
+
+# Data Modules
+Modules\SelfTest.lua
+Modules\DataCollector.lua
+Modules\AttunementTracker.lua
+Modules\CommSystem.lua
+Modules\SyncService.lua
+# Cross-guild federation (rides the shared mesh; fans out via SyncService)
+Modules\Alliance.lua
+Modules\AllianceSync.lua
+Modules\AllianceChat.lua
+Modules\GuildChat.lua
+Modules\RosterLog.lua
+Modules\BanList.lua
+Modules\RecruitmentSystem.lua
+Modules\RecruitEngagement.lua
+Modules\WishlistSystem.lua
+Modules\SoftResSystem.lua
+Modules\CoreManager.lua
+Modules\RaidTracker.lua
+Modules\LootTracker.lua
+Modules\LootMaster.lua
+Modules\RecipeTracker.lua
+Modules\CraftNet.lua
+Data\ProfCatalogForever.lua
+Data\ProfCatalogRetail.lua
+Modules\Professions.lua
+Modules\ProfSync.lua
+Modules\Look.lua
+Modules\ProfDirectory.lua
+Modules\AmzHubGossip.lua
+Modules\GuildFinder.lua
+Modules\RecruitBeacon.lua
+Modules\JoinRequests.lua
+Modules\RecruitScanner.lua
+Modules\OfficerNotes.lua
+Modules\RaiderRoster.lua
+Modules\AltRoster.lua
+Modules\AltAutoDetect.lua
+Modules\ChatTweaks.lua
+Modules\TrialTracker.lua
+Modules\GuildManager.lua
+Modules\RosterColumns.lua
+Modules\ModPresets.lua
+Modules\GearAudit.lua
+Modules\Readiness.lua
+Modules\Resistances.lua
+Modules\ExportImport.lua
+Modules\CompanionExport.lua
+Modules\CompanionImport.lua
+Modules\RaidPlan.lua
+Modules\Points.lua
+Modules\TradeCouncil.lua
+Modules\LootEquity.lua
+Modules\Digest.lua
+Modules\Backup.lua
+Modules\Bulletin.lua
+Modules\CallToArms.lua
+Modules\Polls.lua
+Modules\Calendar.lua
+Modules\GameCalendar.lua
+Modules\Milestones.lua
+Modules\Journal.lua
+Modules\Founding.lua
+Modules\Activation.lua
+Modules\Achievements.lua
+Data\ForeverDungeons.lua
+Modules\DungeonLog.lua
+Modules\Search.lua
+Modules\RaidTools.lua
+Data\ConsumablesRetail.lua
+Modules\ConsumableChecker.lua
+Modules\SpecChecker.lua
+Modules\MythicPlus.lua
+Modules\GuildAnalytics.lua
+Modules\Mentions.lua
+Modules\NoteCommand.lua
+Modules\LevelQuery.lua
+Modules\LFGBoard.lua
+Modules\GuildMap.lua
+Modules\PugInspector.lua
+
+# UI
+UI\Helpers.lua
+UI\StylePreview.lua
+UI\Layout.lua
+UI\WebPanel.lua
+UI\RaidPlanPanel.lua
+UI\FeatureRegistry.lua
+UI\Window.lua
+UI\Agora.lua
+UI\Dashboard.lua
+UI\RaiderPanel.lua
+UI\RecipesPanel.lua
+UI\ProfessionsPanel.lua
+UI\CraftFinder.lua
+UI\RecruitBeacon.lua
+UI\GuildFinder.lua
+UI\JoinRequests.lua
+UI\CalendarPanel.lua
+UI\FeaturePanels.lua
+UI\RosterFrame.lua
+UI\MemberDetail.lua
+UI\CorePanel.lua
+UI\ManagementPanel.lua
+UI\AuditPanel.lua
+UI\PointsPanel.lua
+UI\TradeCouncil.lua
+UI\CommunityPanel.lua
+UI\AlliancePanel.lua
+UI\RaidToolsPanel.lua
+UI\GuildMap.lua
+UI\Minimap.lua
+UI\PugInspector.lua
+UI\Onboarding.lua
+UI\Founding.lua
+UI\JournalPanel.lua
+UI\AchievementsPanel.lua
+UI\RaidHUD.lua
+UI\Features.lua
+
+# Amazing Forever Guild Pack (tools/hub-extra)
+UI\PackTweaks.lua
+UI\LedgerPanel.lua

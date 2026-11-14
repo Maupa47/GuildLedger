@@ -1,0 +1,295 @@
+-- Start-up isolation (issue #6), run against the real Core/Core.lua,
+-- Core/Compat.lua and UI/FeatureRegistry.lua under stubbed WoW APIs.
+--
+-- A new client can lack an API a module touches while it starts, or an event
+-- or tooltip script a module registers. Any of those used to raise inside
+-- AmazingHub:InitModules and leave every later module unstarted. This proves the
+-- failure now stays with the module that raised, that unknown events and
+-- tooltip scripts do not raise, that /amazing errors can always name what
+-- failed, and that the login line appears only when something went wrong.
+--
+--   luajit -e 'ADDON="."' tools/startup-isolation.lua
+--
+-- Exits 1 on the first failed check.
+ADDON = ADDON or "."
+
+local checks = 0
+local function check(cond, what)
+  checks = checks + 1
+  if not cond then
+    io.stderr:write("FAIL: " .. what .. "\n")
+    os.exit(1)
+  end
+end
+
+-- ── WoW API surface ───────────────────────────────────────────────────
+-- Only these events exist on the stub client; anything else raises the way
+-- the real RegisterEvent does.
+local KNOWN_EVENTS = {
+  ADDON_LOADED = true, PLAYER_LOGIN = true, PLAYER_ENTERING_WORLD = true,
+  GUILD_ROSTER_UPDATE = true, PLAYER_GUILD_UPDATE = true,
+}
+function CreateFrame()
+  local f = { events = {} }
+  function f:RegisterEvent(e)
+    if not KNOWN_EVENTS[e] then error('Attempt to register unknown event "' .. e .. '"') end
+    self.events[e] = true
+  end
+  function f:SetScript() end
+  return f
+end
+
+local printed, timers = {}, {}
+DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) printed[#printed + 1] = msg end }
+function GetServerTime() return 1757800000 end
+function IsInGuild() return false end
+function hooksecurefunc() end
+function debugstack() return "stack!" end
+function GetBuildInfo() return "2.5.6", "1", "", 20506 end  -- Compat.lua reads it at load
+
+-- Timers run when the test says so, not after a delay.
+C_Timer = { After = function(_, fn) timers[#timers + 1] = fn end }
+local function runTimers()
+  local due = timers
+  timers = {}
+  for _, fn in ipairs(due) do fn() end
+end
+
+AmazingHub = { L = setmetatable({}, { __index = function(_, k) return k end }), VERSION = "test" }
+
+dofile(ADDON .. "/Core/Core.lua")
+dofile(ADDON .. "/Core/Compat.lua")
+AmazingHub.UI = {}
+dofile(ADDON .. "/UI/FeatureRegistry.lua")
+
+-- Defined in files this harness does not load.
+function AmazingHub:RegisterUtilTests() end
+function AmazingHub:HookChatInvite() end
+local officer = true
+function AmazingHub:IsOfficer() return officer end
+AmazingHub.db = { settings = { modules = {} } }
+
+-- A fake module records every start function it runs; `raises` names the
+-- functions that raise instead.
+local started, defined = {}, {}
+local function module(name, raises)
+  raises = raises or {}
+  local mod = {}
+  for _, method in ipairs({ "Initialize", "InitParticipation", "CheckReady", "Arm" }) do
+    mod[method] = function()
+      if raises[method] then error(name .. ":" .. method .. " exploded") end
+      started[name .. ":" .. method] = true
+    end
+  end
+  AmazingHub[name] = mod
+  defined[#defined + 1] = name
+end
+local RAISE = { Initialize = true }
+
+local function reset()
+  for _, name in ipairs(defined) do AmazingHub[name] = nil end
+  started, defined, printed, timers = {}, {}, {}, {}
+  officer = true
+  AmazingHub.db.settings.modules = {}
+  AmazingHub.State.errors = {}
+  AmazingHub.State.startup = { failed = {}, failedFeatures = {}, stacks = {} }
+  AmazingHub.State.missing = {}
+end
+
+local function boot()
+  AmazingHub:InitModules()
+  runTimers()
+end
+
+local function countPrinted(text)
+  local n = 0
+  for _, m in ipairs(printed) do
+    if m:find(text, 1, true) then n = n + 1 end
+  end
+  return n
+end
+
+-- ── 1. Modules in the middle raise; everything after them still starts ──
+reset()
+module("DataCollector")         -- first in the list
+module("Wishlist", RAISE)       -- backs the wishlist window
+module("Points", RAISE)         -- has a Settings toggle and backs the DKP window
+module("RecipeTracker")         -- after both failures
+module("ModPresets")            -- late in the list
+module("TrialTracker")          -- the last step of the list (Arm), and officer-only with a follow-up step
+boot()
+
+check(started["DataCollector:Initialize"], "the first module started")
+check(started["RecipeTracker:Initialize"], "a module after the failures started")
+check(started["ModPresets:Initialize"] and started["TrialTracker:Arm"], "the last modules started")
+check(started["TrialTracker:Initialize"] and started["TrialTracker:CheckReady"],
+  "officer modules, follow-up step included, started after the failures")
+local startup = AmazingHub.State.startup
+check(startup.failed.Wishlist and startup.failed.Wishlist:find("exploded", 1, true),
+  "the failure is recorded against the module")
+check(startup.stacks.Wishlist == "stack!", "the stack of the failure is kept")
+check(AmazingHub:FeatureStartFailed("wishlist") == "Wishlist", "the wishlist window knows its module failed")
+check(AmazingHub:FeatureStartFailed("points") == "Points" and AmazingHub:FeatureStartFailed("dkp") == "Points",
+  "both the toggle and the window of a failed module are marked")
+check(AmazingHub:FeatureStartFailed("recipes") == nil, "a module that started does not mark its window")
+check(AmazingHub.UI:IsFeatureAllowed({ id = "wishlist" }) == false, "the window of a failed module refuses to open")
+check(AmazingHub.UI:IsFeatureAllowed({ id = "recipes" }) == true, "the window of a module that started still opens")
+local listed = table.concat(AmazingHub:ListStartupProblems(), "\n")
+check(listed:find("Wishlist: ", 1, true) and listed:find("Points: ", 1, true),
+  "/amazing errors can name every start-up failure")
+check(countPrinted("2 start-up problem(s)") == 1, "one login line counts both failures")
+
+-- ── 2. Unknown events and tooltip scripts do not raise ──────────────────
+reset()
+local f = CreateFrame()
+check(AmazingHub.Compat.RegisterEvent(f, "PLAYER_LOGIN") == true and f.events.PLAYER_LOGIN, "a known event registers")
+check(AmazingHub.Compat.RegisterEvent(f, "CRAFT_SHOW") == false, "an unknown event returns false instead of raising")
+AmazingHub.Compat.RegisterEvent(f, "CRAFT_SHOW")
+check(AmazingHub.State.missing["event CRAFT_SHOW"], "the unknown event is recorded")
+check(#AmazingHub.State.errors == 1, "the same unknown event is recorded once")
+check(table.concat(AmazingHub:ListStartupProblems(), "\n"):find("event CRAFT_SHOW", 1, true),
+  "/amazing errors can name the missing event")
+
+local tt = {
+  HasScript = function(_, script) return script == "OnTooltipCleared" end,
+  HookScript = function(self, script) self.hooked = script end,
+}
+check(AmazingHub.Compat.HookTooltip(tt, "OnTooltipSetItem", function() end) == false and tt.hooked == nil,
+  "a tooltip script the frame lacks is skipped")
+check(AmazingHub.State.missing["tooltip script OnTooltipSetItem"], "the missing tooltip script is recorded")
+check(AmazingHub.Compat.HookTooltip(tt, "OnTooltipCleared", function() end) == true and tt.hooked == "OnTooltipCleared",
+  "a supported tooltip script is hooked")
+local before = #AmazingHub.State.errors
+check(AmazingHub.Compat.HookTooltip(nil, "OnTooltipSetItem", function() end) == false, "a tooltip not built yet is skipped")
+check(#AmazingHub.State.errors == before, "a tooltip not built yet is not reported as missing")
+
+-- ── 3. A clean start prints nothing ─────────────────────────────────────
+reset()
+module("Wishlist")
+module("Points")
+boot()
+check(started["Wishlist:Initialize"] and started["Points:Initialize"], "the modules start when nothing raises")
+check(countPrinted("start-up problem") == 0, "a clean start prints no login line")
+
+-- ── 4. Toggles and rank still decide what starts ────────────────────────
+reset()
+AmazingHub.db.settings.modules.raidTracker = false
+module("RaidTracker")
+module("TrialTracker")
+officer = false
+boot()
+check(not started["RaidTracker:Initialize"], "a module switched off in Settings does not start")
+check(not started["TrialTracker:Initialize"], "officer modules do not start for a member")
+check(countPrinted("start-up problem") == 0, "skipped modules are not failures")
+
+-- ── 5. A missing event alone still gets the login line ──────────────────
+reset()
+AmazingHub.Compat.RegisterEvent(CreateFrame(), "CRAFT_SHOW")   -- as a file-scope registration would
+boot()
+check(countPrinted("1 start-up problem(s)") == 1, "a missing event alone gets the login line")
+
+-- ── 6. A member, not only an officer, gets the login line ───────────────
+reset()
+officer = false
+module("Wishlist", RAISE)
+boot()
+check(countPrinted("1 start-up problem(s)") == 1, "a member with a failed module gets the login line")
+
+-- ── 7. Officer modules are isolated too; `after` needs a clean start ────
+reset()
+module("OfficerNotes", RAISE)
+module("TrialTracker")
+boot()
+check(started["TrialTracker:Initialize"], "an officer module after a failing one still starts")
+
+reset()
+module("TrialTracker", RAISE)
+boot()
+check(not started["TrialTracker:CheckReady"], "the follow-up step does not run when Initialize failed")
+
+reset()
+module("TrialTracker", { CheckReady = true })
+boot()
+check(AmazingHub.State.startup.failed["TrialTracker:CheckReady"] and not AmazingHub.State.startup.failed.TrialTracker,
+  "a failed follow-up step is recorded under its own label")
+
+-- ── 7b. A start-up step whose error handler cannot run still does not abort ──
+reset()
+module("Wishlist")
+AmazingHub.Wishlist.Initialize = function()
+  error(setmetatable({}, { __tostring = function() error("unprintable") end }))
+end
+module("ModPresets")
+boot()
+check(started["ModPresets:Initialize"], "an unprintable error in one module does not stop the modules after it")
+check(AmazingHub.State.startup.failed.Wishlist, "the unprintable error is still recorded")
+
+-- ── 8. Two stages of one module are recorded separately ─────────────────
+reset()
+module("Recruitment", { InitParticipation = true, Initialize = true })
+boot()
+local failed = AmazingHub.State.startup.failed
+check(failed["Recruitment:InitParticipation"] and failed.Recruitment,
+  "the member stage and the officer stage each keep their own record")
+check(countPrinted("2 start-up problem(s)") == 1, "both stages are counted")
+
+-- ── 9. The guild rank arrives late: the officer modules wait for it (issue #79) ──
+reset()
+module("Wishlist", RAISE)             -- one start-up problem, so the login line has something to say
+module("TrialTracker")
+local asks = 0
+function IsInGuild() return true end
+function GetGuildInfo()
+  asks = asks + 1
+  if asks < 3 then return "Guild" end      -- no rank yet
+  return "Guild", "Officer", 0
+end
+-- The companion's inbox is read as soon as the db is known; the site's raids go on the calendar once
+-- the rank is (#146): read before it, an officer was not one and the raids stayed off all session.
+local inboxReads, calendarReads = 0, {}
+AmazingHub.CompanionImport = {
+  ReadInbox = function() inboxReads = inboxReads + 1 end,
+  CalendarFromInbox = function() calendarReads[#calendarReads + 1] = asks end,
+}
+AmazingHub:InitModules()
+check(inboxReads == 1, "the inbox's roster is read at once, before the raid tracker needs it")
+runTimers()
+check(not started["TrialTracker:Initialize"], "rank unknown at five seconds: the officer modules wait instead of giving up")
+check(#calendarReads == 0, "the site's raids wait for the rank too")
+check(countPrinted("start-up problem(s)") == 0, "and the login line waits with them")
+runTimers()
+check(not started["TrialTracker:Initialize"], "and keep waiting while it is unknown")
+runTimers()
+check(started["TrialTracker:Initialize"] and started["TrialTracker:CheckReady"], "they start once the rank is known")
+check(#calendarReads == 1 and calendarReads[1] >= 3, "and go on the calendar once, with the rank known")
+check(inboxReads == 1, "the inbox itself is read once")
+check(#timers == 0, "and nothing is left asking")
+check(countPrinted("1 start-up problem(s)") == 1, "the login line comes once, after the decision")
+
+-- ── 10. A rank that never arrives: given up on, and said ───────────────
+reset()
+module("Wishlist", RAISE)
+module("TrialTracker")
+function GetGuildInfo() return "Guild" end
+calendarReads = {}
+AmazingHub:InitModules()
+local ticks = 0
+repeat
+  runTimers()
+  ticks = ticks + 1
+until #timers == 0 or ticks > 50
+check(ticks == 12 and not started["TrialTracker:Initialize"], "after twelve asks, a minute, the officer modules give up")
+local saidSo = false
+for _, line in ipairs(AmazingHub:ListStartupProblems()) do
+  if line:find("OfficerModules: not started, the guild rank was still unknown", 1, true) then saidSo = true end
+end
+check(saidSo, "and the start-up problems say why")
+check(#calendarReads == 1, "a rank that never comes still gets its answer: not an officer, nothing published")
+AmazingHub.CompanionImport = nil
+check(countPrinted("2 start-up problem(s)") == 1, "the login line counts it, once")
+check(AmazingHub:FeatureStartFailed("recruitment") == nil and AmazingHub:FeatureStartFailed("trials") == nil,
+  "giving up blocks no window: a member whose rank never loads keeps them all")
+function IsInGuild() return false end
+GetGuildInfo = nil
+
+io.write(string.format("startup-isolation: %d checks passed\n", checks))

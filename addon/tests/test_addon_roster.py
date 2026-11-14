@@ -182,7 +182,7 @@ def test_player_links_in_system_messages():
 def test_status_shows_roster():
     g = ready_game()
     out = g.slash("status")
-    assert "roster: 40 members stored" in out and "event log" in out
+    assert "Members saved: 40." in out and "Guild log last read: " in out and "first check, 40 members saved" in out
 
 
 def test_missing_roster_api_without_errors():
@@ -195,7 +195,7 @@ def test_missing_roster_api_without_errors():
     W.advance(120)
     out = W.slash("status")
     assert W.ns.errors == 0, W.ns.lastError
-    assert "eventlog" in out and "roster" in out and "API missing" in out
+    assert "Not available in this game version: guild log, member list" in out
 
 
 def test_companion_import_supersedes_and_shows_window(tmp_path):
@@ -235,7 +235,7 @@ def test_event_log_arriving_in_pieces_stores_each_entry_once_and_prints_one_line
     log = [e for e in g.events() if e["src"] == "log"]
     assert sorted(e["n"] for e in log) == [f"Gone{i:03d} Person" for i in range(150)]
     printed = [m for m in g.W.printed.values() if "event log" in m]
-    assert len(printed) == 1 and "51 read(s), +150 new" in printed[0]
+    assert len(printed) == 1 and "150 new entries" in printed[0]
     g.W.fire("GUILD_EVENT_LOG_UPDATE")
     g.run(10)
     assert len([e for e in g.events() if e["src"] == "log"]) == 150

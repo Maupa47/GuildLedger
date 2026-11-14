@@ -21,7 +21,7 @@ From the guild admin you get: this zip, and a **webhook URL** (a long link start
 3. Start WoW. At character select, *AddOns* → make sure **GuildLedger** is ticked.
 4. In game type **`/gl collector on`**, then **`/reload`**. This makes your addon a collector (it also reads
    the guild history and the roster, and asks members' addons for lines it missed).
-   `/gl status` shows `collector on` and what it collected.
+   `/gl status` then starts with `Role: Collector` and shows, section by section, what it collected.
 
 ## 3. Set up the companion (the small program that sends the log to Discord)
 
@@ -46,6 +46,10 @@ From the guild admin you get: this zip, and a **webhook URL** (a long link start
 3. Close the window when you're done for the day.
 
 If the window was closed while you played, nothing is lost: next time it sends everything it missed.
+
+**Start it automatically:** double-click **`autostart-on.cmd`** once. From then on the companion starts
+minimised whenever you log in to Windows (`autostart-off.cmd` undoes it). Starting it twice is harmless:
+the second window says "already running" and closes.
 
 ## Questions
 

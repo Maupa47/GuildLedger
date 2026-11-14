@@ -1,0 +1,291 @@
+----------------------------------------------------------------------
+-- Amazing Hub - Sync Service (protocol v2)
+--
+-- A thin, versioned publish/subscribe layer that sits ON TOP of
+-- CommSystem's transport (serialize -> compress -> chunk). New
+-- shared-state features (points/DKP, calendar events, guild bank,
+-- polls, ...) publish through here instead of inventing ad-hoc message
+-- strings, so they automatically get:
+--   * a versioned envelope (protocol version + addon version)
+--   * messageId dedup (drops echoes and re-deliveries)
+--   * per-entity revision checks (highest revision wins)
+--   * officer-domain write-permission enforcement
+--   * optional ACK for critical messages (award/delete) with one retry
+--
+-- Backward compatible: this is carried as a single new CommSystem wire
+-- type ("SV"). Every legacy message type keeps working untouched.
+--
+-- Addresses ADR-0010 (central type inventory) and ADR-0012 (protocol
+-- versioning) for all *new* domains.
+----------------------------------------------------------------------
+local SyncService = {}
+AmazingHub.SyncService = SyncService
+
+local LibSerialize = LibStub("AmazingHub-LibSerialize")
+
+SyncService.PROTOCOL_VERSION = 2
+SyncService.ENVELOPE_MSGTYPE = "SV"   -- CommSystem wire tag carrying a v2 envelope
+
+-- Domains whose WRITES require the sender to be a verified guild officer.
+-- Reads (snapshots applied locally) are still gated by these because the
+-- sender is the writer. Member-level actions inside an officer domain are
+-- whitelisted per domain in MEMBER_ACTIONS below.
+SyncService.OFFICER_DOMAINS = {
+    points   = true,   -- DKP / EPGP / loot council economy
+    event    = true,   -- calendar event create/update/delete (rsvp is member-level)
+    poll     = true,   -- poll create/close (vote is member-level)
+    bulletin = true,   -- officer announcements
+    cta      = true,   -- an officer's call to arms (answering it is a member action, issue #108)
+    ban      = true,   -- blacklist add/remove (officer-authoritative)
+    audit    = true,   -- guild audit trail (officer-authoritative, id-deduped)
+    allyboard = true,  -- alliance bulletin posts this guild authored (ambassadors)
+    allyhide  = true,  -- chat lines an ambassador pulled from the alliance feed
+    guildcfg  = true,  -- the guild's officer threshold (issue #81), on retail its loot system (#185), its trials (#249)
+    founding  = true,  -- WoW: Forever's founding and an officer's suggested date (issue #208)
+}
+
+-- Domains outside OFFICER_DOMAINS whose handlers trust IsOfficerByName(sender) themselves.
+-- Handlers never see the channel, so the GUILD rule is held here (issue #81).
+SyncService.GUILD_ONLY_DOMAINS = {
+    alliance       = true,   -- AllianceSync's trusted fan-out
+    ["core.roster"] = true,  -- CoreManager's officer roster updates
+    journal        = true,   -- each member's own journal (#205): from the guild, never a whisper
+    foundingSelf   = true,   -- each member's own join date (#208), filed under its sender
+}
+
+-- Actions any guild member may perform inside an officer domain, over GUILD. Keyed by domain:
+-- an action word that opened every domain let a member send the guild's officer threshold
+-- dressed as an RSVP, and so become an officer everywhere (issue #108).
+SyncService.MEMBER_ACTIONS = {
+    event = { rsvp = true },    -- event signup
+    poll  = { vote = true },    -- poll vote
+    cta   = { going = true },   -- "On my way" to an officer's call to arms (issue #108)
+}
+
+-- Actions inside an officer domain that whoever the guild lets do them may send over GUILD (issue #283).
+-- The domain's handler holds the rest of the rule: a creator who is not an officer writes only their own events.
+SyncService.RANKED_ACTIONS = {
+    event = { create = true, update = true, cancel = true, delete = true },
+}
+
+SyncService.handlers    = {}   -- [domain] = function(env, sender)
+SyncService.seenIds     = {}   -- messageId dedup set
+SyncService.seenCount   = 0
+SyncService.pendingAcks = {}   -- [id] = { tries, payload, target, priority, dom, act }
+
+----------------------------------------------------------------------
+-- Lifecycle
+----------------------------------------------------------------------
+function SyncService:Initialize()
+    -- Persistent revision store: db.sync.rev[domain][entityKey] = number
+    AmazingHub.db.sync = AmazingHub.db.sync or {}
+    AmazingHub.db.sync.rev = AmazingHub.db.sync.rev or {}
+    self.seenIds = {}
+    self.seenCount = 0
+    self.pendingAcks = {}
+    -- The guild's settings an officer decides: the officer threshold (issue #81) and, on retail, the
+    -- loot system (issue #185). A client before #185 reads a loot system as a threshold with no `max`.
+    self:On("guildcfg", function(env)
+        if env.act == "lootsys" then return AmazingHub:OnLootSystemSync(env) end
+        -- WoW: Forever's minimum item level for a 60 (issue #206); a client before it reads a
+        -- threshold with no `max`, which it ignores.
+        if env.act == "readymin" then
+            if AmazingHub.Readiness then AmazingHub.Readiness:OnMinIlvlSync(env) end
+            return
+        end
+        -- The guild's trial length and its switch for new members (issue #249); neither carries `max`.
+        if env.act == "trialdays" or env.act == "trialauto" then
+            if AmazingHub.TrialTracker then AmazingHub.TrialTracker:OnConfigSync(env) end
+            return
+        end
+        -- Who creates calendar events (issue #283).
+        if env.act == "events" then
+            AmazingHub:OnEventMaxRankSync(env)
+            return
+        end
+        AmazingHub:OnOfficerMaxRankSync(env)
+    end)
+end
+
+local function newId()
+    return string.format("%04X%04X", math.random(0, 0xFFFF), math.random(0, 0xFFFF))
+end
+
+----------------------------------------------------------------------
+-- Register a domain handler. fn(env, sender) is called for each valid,
+-- non-duplicate envelope addressed to `domain`.
+----------------------------------------------------------------------
+function SyncService:On(domain, fn)
+    self.handlers[domain] = fn
+end
+
+----------------------------------------------------------------------
+-- Publish an envelope to the guild (or a single target).
+-- opts (all optional):
+--   target     send to a single player (WHISPER) instead of GUILD
+--   priority   ChatThrottleLib priority ("BULK"|"NORMAL"|"ALERT")
+--   rev        entity revision (receiver applies only if newer)
+--   pv         payload schema version (default 1)
+--   src        origin tag ("local"|"sync"|"migration"|"import")
+--   requireAck request an ACK from `target` (target required); 1 retry
+-- Returns the messageId, or nil if it could not be sent.
+----------------------------------------------------------------------
+function SyncService:Publish(domain, action, data, opts)
+    if not IsInGuild() then return nil end
+    opts = opts or {}
+
+    local env = {
+        v   = self.PROTOCOL_VERSION,
+        id  = newId(),
+        av  = AmazingHub.VERSION,
+        dom = domain,
+        act = action,
+        ts  = (GetTime and GetTime()) or 0,
+        rev = opts.rev,
+        pv  = opts.pv or 1,
+        src = opts.src or "local",
+        data = data,
+    }
+    if opts.requireAck and opts.target then
+        env.ack = true
+    end
+
+    local ok, serialized = pcall(function() return LibSerialize:Serialize(env) end)
+    if not ok or type(serialized) ~= "string" then return nil end
+    if not AmazingHub.CommSystem then return nil end
+
+    AmazingHub.CommSystem:SendMessage(self.ENVELOPE_MSGTYPE, serialized, opts.target, opts.priority)
+
+    if env.ack then
+        self.pendingAcks[env.id] = {
+            tries = 1, payload = serialized, target = opts.target,
+            priority = opts.priority, dom = domain, act = action,
+        }
+        local id = env.id
+        AmazingHub.Compat.After(10, function() self:RetryAck(id) end)
+    end
+    return env.id
+end
+
+----------------------------------------------------------------------
+-- ACK retry: resend the IDENTICAL envelope (same id) so a receiver that
+-- already applied it dedups it (no double-apply) but one that missed it
+-- gets a second chance. Gives up after one retry.
+----------------------------------------------------------------------
+function SyncService:RetryAck(id)
+    local p = self.pendingAcks[id]
+    if not p then return end   -- already acked
+    if p.tries >= 2 then
+        self.pendingAcks[id] = nil
+        AmazingHub.Logger.Warn(string.format("Sync: no ACK for %s/%s", tostring(p.dom), tostring(p.act)))
+        return
+    end
+    p.tries = p.tries + 1
+    AmazingHub.CommSystem:SendMessage(self.ENVELOPE_MSGTYPE, p.payload, p.target, p.priority)
+    AmazingHub.Compat.After(10, function() self:RetryAck(id) end)
+end
+
+local function sendAck(refId, target)
+    SyncService:Publish("ack", "ok", { ref = refId }, { target = target })
+end
+
+----------------------------------------------------------------------
+-- Entry point called by CommSystem when an "SV" wire message arrives.
+-- `raw` is the serialized v2 envelope (already de-chunked/decompressed).
+----------------------------------------------------------------------
+function SyncService:OnEnvelope(sender, raw, channel)
+    local ok, env = LibSerialize:Deserialize(raw)
+    if not ok or type(env) ~= "table" then return end
+
+    -- ACK frames clear a pending entry and never dispatch.
+    if env.dom == "ack" then
+        local ref = env.data and env.data.ref
+        if ref then self.pendingAcks[ref] = nil end
+        return
+    end
+
+    if not self:Validate(env, sender, channel) then return end
+
+    -- Duplicate: drop, but honour a re-ack request so a lost ACK recovers.
+    if env.id and self:IsDuplicate(env.id) then
+        if env.ack then sendAck(env.id, sender) end
+        return
+    end
+
+    local handler = self.handlers[env.dom]
+    if handler then
+        AmazingHub:SafeCall(handler, env, sender)
+    end
+
+    if env.ack then sendAck(env.id, sender) end
+end
+
+----------------------------------------------------------------------
+-- Validation: structure, protocol ceiling, and officer-domain writes.
+----------------------------------------------------------------------
+-- An officer write counts only over GUILD: IsOfficerByName drops the realm, so a namesake on
+-- another realm could otherwise whisper as the officer (issue #81, as #78 for the rest).
+function SyncService:Validate(env, sender, channel)
+    if type(env) ~= "table" then return false end
+    if not env.v or not env.id or not env.dom or not env.act then return false end
+    if env.v > self.PROTOCOL_VERSION then return false end   -- newer protocol than we speak
+    if self.GUILD_ONLY_DOMAINS[env.dom] and channel ~= "GUILD" then return false end
+    if self.OFFICER_DOMAINS[env.dom] then
+        if channel ~= "GUILD" then return false end
+        local member = self.MEMBER_ACTIONS[env.dom]
+        local ranked = self.RANKED_ACTIONS[env.dom]
+        if not (member and member[env.act]) and not AmazingHub:IsOfficerByName(sender)
+            and not (ranked and ranked[env.act] and AmazingHub:MayCreateEventsByName(sender)) then
+            return false
+        end
+    end
+    return true
+end
+
+----------------------------------------------------------------------
+-- Dedup: circular set of the last ~500 messageIds.
+----------------------------------------------------------------------
+function SyncService:IsDuplicate(id)
+    if self.seenIds[id] then return true end
+    self.seenIds[id] = true
+    self.seenCount = self.seenCount + 1
+    if self.seenCount > 500 then
+        wipe(self.seenIds)
+        self.seenCount = 0
+    end
+    return false
+end
+
+----------------------------------------------------------------------
+-- Revision helpers (highest revision wins per entity, per domain).
+----------------------------------------------------------------------
+function SyncService:GetRevision(domain, key)
+    local rev = AmazingHub.db.sync and AmazingHub.db.sync.rev and AmazingHub.db.sync.rev[domain]
+    return (rev and rev[key]) or 0
+end
+
+-- True if an incoming revision should be applied. Unversioned (nil) always applies.
+function SyncService:ShouldApply(domain, key, rev)
+    if not rev then return true end
+    return rev > self:GetRevision(domain, key)
+end
+
+-- Record a revision we have applied (only ever increases).
+function SyncService:SetRevision(domain, key, rev)
+    if not rev then return end
+    AmazingHub.db.sync = AmazingHub.db.sync or {}
+    AmazingHub.db.sync.rev = AmazingHub.db.sync.rev or {}
+    AmazingHub.db.sync.rev[domain] = AmazingHub.db.sync.rev[domain] or {}
+    local cur = AmazingHub.db.sync.rev[domain][key] or 0
+    if rev > cur then AmazingHub.db.sync.rev[domain][key] = rev end
+end
+
+-- Allocate the next revision for an entity we are about to write+publish.
+function SyncService:NextRevision(domain, key)
+    AmazingHub.db.sync = AmazingHub.db.sync or {}
+    AmazingHub.db.sync.rev = AmazingHub.db.sync.rev or {}
+    AmazingHub.db.sync.rev[domain] = AmazingHub.db.sync.rev[domain] or {}
+    local nxt = (AmazingHub.db.sync.rev[domain][key] or 0) + 1
+    AmazingHub.db.sync.rev[domain][key] = nxt
+    return nxt
+end

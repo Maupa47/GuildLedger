@@ -21,6 +21,7 @@ from . import config as config_mod
 from . import discord
 from .direct import Poster
 from .export import export
+from .lock import InstanceLock
 from .upload import Uploader
 from .store import SchemaError, Spool
 from .svparse import SVParseError, parse_file
@@ -191,12 +192,16 @@ def cmd_watch(args, cfg) -> int:
         log.error("sv_path is not set in the config")
         return 2
     path = cfg.sv_path
+    lock = InstanceLock(cfg.data_dir / "watch.lock")
+    if not lock.acquire():
+        log.error("another GuildLedger companion is already running for this folder; close it first")
+        return 1
     log.info("watching %s (collector %s, mode %s)", path, cfg.collector, cfg.mode)
     seen = None
     direct = not args.no_post  # post (mode "direct") or upload (mode "upload")
     transport = getattr(args, "transport", None)
     next_post = 0.0
-    with _open(cfg, args.db) as spool:
+    with lock, _open(cfg, args.db) as spool:
         while True:
             if direct and time.monotonic() >= next_post:
                 send_now(spool, cfg, args.post_backlog, transport)

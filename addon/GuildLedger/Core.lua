@@ -7,9 +7,42 @@ local PREFIX = "|cff33ff99GuildLedger|r: "
 ns.errors = 0
 local lastErrorPrint = -100
 
+-- While ns.Capture runs, output goes into a list instead of the chat frame (GuildLedgerAPI.GetStatus).
+local capture
+
+function ns.Capture(fn)
+    local out = {}
+    capture = out
+    local ok, err = pcall(fn)
+    capture = nil
+    if not ok then out[#out + 1] = { kind = "line", text = "(could not read: " .. tostring(err) .. ")" } end
+    return out
+end
+
 function ns.Print(msg)
+    if capture then capture[#capture + 1] = { kind = "print", text = msg } return end
     if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. msg) end
 end
+
+-- /gl status layout: a gold heading per section, then indented lines, one fact per line.
+function ns.Head(text)
+    if capture then capture[#capture + 1] = { kind = "head", text = text } return end
+    if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cffffd100" .. text .. "|r") end
+end
+
+function ns.Line(text)
+    if capture then capture[#capture + 1] = { kind = "line", text = text } return end
+    if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("   " .. text) end
+end
+
+-- 12345 -> "12,345"
+function ns.Num(n)
+    local s = tostring(math.floor(tonumber(n) or 0))
+    local out = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+    return (out:gsub("^,", ""))
+end
+
+function ns.Clock(ts) return ts and date("%H:%M", ts) or "never" end
 
 -- With /gl debug on: print, and keep the last 400 lines in GuildLedgerDB.diag for later reading.
 -- quiet = true: only into diag (for things that happen too often to print).
@@ -26,8 +59,9 @@ end
 local function reportError(where, err)
     ns.errors = ns.errors + 1
     ns.lastError = where .. ": " .. tostring(err)
+    -- Silent by default (players see nothing in chat); /gl status shows the count, debug prints it.
     local now = C.Clock()
-    if now - lastErrorPrint > 10 then
+    if ns.Store.Opts().debug and now - lastErrorPrint > 10 then
         lastErrorPrint = now
         ns.Print("|cffff5555error|r in " .. ns.lastError .. " (/gl status shows the count)")
     end
@@ -92,9 +126,8 @@ end
 ns.On("ADDON_LOADED", function(name)
     if name ~= ADDON then return end
     if not ns.Store.Init() then
-        ns.disabled = "SavedVariables schema " .. tostring(GuildLedgerDB.schema) .. " is newer than this addon"
-        ns.Print("|cffff5555disabled|r: " .. ns.disabled)
-        return
+        ns.disabled = "its saved data comes from a newer GuildLedger version; please update the addon"
+        return -- silent; /gl status explains it
     end
     for _, m in ipairs(ns.modules) do
         if m.OnInit then ns.Safe(m.name .. ".OnInit", m.OnInit) end
@@ -111,43 +144,86 @@ end)
 
 local function onOff(v) return v and "|cff33ff33on|r" or "|cff888888off|r" end
 
+local MISSING_NAMES = { club = "guild chat", roster = "member list", eventlog = "guild log",
+    comm = "sharing with other players", sysformats = "join/leave messages", timer = "timers",
+    servertime = "server time", secrets = "secret-value checks" }
+
 local function status()
-    if ns.disabled then ns.Print("disabled: " .. ns.disabled) return end
+    if ns.disabled then ns.Print("switched off: " .. ns.disabled) return end
+    local o = ns.Store.Opts()
+    ns.Print("status, version " .. ns.Store.VERSION)
+    if o.collector then
+        ns.Line("Role: |cff33ff33Collector|r - saves guild chat and roster changes for the Discord log"
+            .. " (the companion program on this PC sends them).")
+    else
+        ns.Line("Role: Member - keeps recent guild chat and gives it to the officers' collectors.")
+    end
     local missing = {}
-    for k in pairs(C.missing) do missing[#missing + 1] = k end
+    for k in pairs(C.missing) do missing[#missing + 1] = MISSING_NAMES[k] or k end
     table.sort(missing)
-    ns.Print(string.format("v%s, lockdown %s, missing API: %s, errors: %d", ns.Store.VERSION,
-        onOff(C.InLockdown()), #missing > 0 and table.concat(missing, ", ") or "none", ns.errors))
+    if ns.errors == 0 and #missing == 0 then
+        ns.Line("Problems: none.")
+    else
+        if ns.errors > 0 then
+            ns.Line(string.format("|cffff5555Problems: %d error(s).|r Last one: %s", ns.errors, tostring(ns.lastError)))
+        end
+        if #missing > 0 then
+            ns.Line("Not available in this game version: " .. table.concat(missing, ", ") .. ".")
+        end
+    end
+    if C.InLockdown() then
+        ns.Line("Boss-fight chat lock: |cffffaa00ON|r - the game hides chat from addons right now;"
+            .. " GuildLedger catches up afterwards.")
+    else
+        ns.Line("Boss-fight chat lock: off.")
+    end
     for _, m in ipairs(ns.modules) do
         if m.Status then ns.Safe(m.name .. ".Status", m.Status) end
     end
-    if #ns.perfOrder > 0 then
-        local parts = {}
+    ns.Head("Saving")
+    if ns.Store.unsaved > 0 then
+        ns.Line(string.format("%s change(s) not saved to disk yet. They are saved on /reload or logout"
+            .. " (/gl flush saves now).", ns.Num(ns.Store.unsaved)))
+    else
+        ns.Line("Nothing new to save.")
+    end
+    if o.debug and #ns.perfOrder > 0 then
+        ns.Head("Timing (debug)")
         for _, name in ipairs(ns.perfOrder) do
             local p = ns.perf[name]
-            parts[#parts + 1] = string.format("%s %.1f/%.1f (%dx)", name, p.last, p.max, p.n)
+            ns.Line(string.format("%s: %.1f ms last time, %.1f ms at most (%d times)", name, p.last, p.max, p.n))
         end
-        ns.Print("timing ms last/max: " .. table.concat(parts, ", "))
     end
-    ns.Print(string.format("unsaved rows this session: %d (saved on /reload or logout; /gl flush)", ns.Store.unsaved))
-    local o = ns.Store.Opts()
-    ns.Print(string.format("collector %s, officer %s, debug %s", onOff(o.collector), onOff(o.officer),
-        onOff(o.debug)))
-    if ns.lastError then ns.Print("last error: " .. ns.lastError) end
+    ns.Head("Settings")
+    ns.Line(string.format("Collector: %s - Officer chat: %s - Debug messages: %s", onOff(o.collector),
+        onOff(o.officer), onOff(o.debug)))
 end
 
+ns.StatusReport = status -- GuildLedgerAPI.GetStatus captures exactly these lines
+
 local function usage()
-    ns.Print("/gl status | sync | flush | collector on|off | officer on|off | debug on|off")
+    ns.Print("commands: /gl status, /gl who, /gl link CODE, /gl map share|pins on|off, /gl sync, /gl flush,"
+        .. " /gl collector on|off, /gl officer on|off, /gl debug on|off")
 end
 
 SLASH_GUILDLEDGER1 = "/gl"
 SLASH_GUILDLEDGER2 = "/guildledger"
 SlashCmdList.GUILDLEDGER = function(msg)
+    local msg0 = msg
     msg = (msg or ""):lower()
-    local cmd, arg = msg:match("^%s*(%S*)%s*(%S*)")
+    local cmd, arg, arg2 = msg:match("^%s*(%S*)%s*(%S*)%s*(%S*)")
     local o = ns.Store.Opts()
     if cmd == "" or cmd == "status" then
         status()
+    elseif cmd == "link" then
+        if ns.Link and ns.Link.Request then
+            local raw = (msg0 or ""):match("^%s*%S+%s+(%S+)")
+            ns.Safe("Link.request", ns.Link.Request, raw)
+        end
+    elseif cmd == "map" then
+        if ns.Map and ns.Map.Command then ns.Safe("Map.command", ns.Map.Command, arg, arg2) end
+    elseif cmd == "who" then
+        if ns.Relay and ns.Relay.Who then ns.Safe("Relay.who", ns.Relay.Who) end
     elseif cmd == "sync" then
         for _, m in ipairs(ns.modules) do
             if m.Sync then ns.Safe(m.name .. ".Sync", m.Sync, true) end

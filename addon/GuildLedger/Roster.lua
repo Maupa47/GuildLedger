@@ -29,7 +29,7 @@ local snapshotScheduled = false
 local wantLog = false
 local refused = { count = 0, n = nil, since = nil }
 local stats = { sys = 0, diff = 0, log = 0, snapshots = 0, untrusted = 0, refused = 0 }
-local lastSnapshotNote = "none yet"
+local lastSnapshotNote = "not done yet"
 local lastLogRead
 local patterns = {} -- { { kind, pattern, order } }
 
@@ -171,7 +171,7 @@ local function snapshot()
     local rows, n = readRoster()
     if not rows then
         stats.untrusted = stats.untrusted + 1
-        lastSnapshotNote = "not loaded (" .. n .. ")"
+        lastSnapshotNote = "member list not loaded by the game yet (" .. n .. ")"
         ns.Debug("roster snapshot skipped: " .. n)
         return
     end
@@ -190,7 +190,8 @@ local function snapshot()
             refused.count = refused.count + 1
             if refused.count < CONFIRM_READS or now - refused.since < CONFIRM_SPAN then
                 stats.refused = stats.refused + 1
-                lastSnapshotNote = string.format("refused: %d of %d gone (read %d)", gone, storedN, refused.count)
+                lastSnapshotNote = string.format("%d of %d members would be missing - refused for now,"
+                    .. " waiting for confirmation (check %d of %d)", gone, storedN, refused.count, CONFIRM_READS)
                 ns.Debug("roster snapshot " .. lastSnapshotNote)
                 requestRoster(false)
                 return
@@ -235,7 +236,13 @@ local function snapshot()
     S.unsaved = S.unsaved + ((joins + leaves > 0 or first) and 1 or 0)
     stats.snapshots = stats.snapshots + 1
     stats.diff = stats.diff + joins + leaves
-    lastSnapshotNote = string.format("%s%d members, +%d joined, -%d left", first and "first, " or "", n, joins, leaves)
+    if first then
+        lastSnapshotNote = string.format("first check, %d members saved", n)
+    elseif joins + leaves == 0 then
+        lastSnapshotNote = string.format("%d members, no changes", n)
+    else
+        lastSnapshotNote = string.format("%d members, %d joined, %d left", n, joins, leaves)
+    end
     ns.Debug("roster snapshot: " .. lastSnapshotNote, joins + leaves == 0 and not first)
     if joins + leaves > 0 or wantLog then
         wantLog = false
@@ -270,7 +277,8 @@ local logBurst = { reads = 0, added = 0, scheduled = false }
 
 local function logSummary()
     logBurst.scheduled = false
-    lastLogRead = string.format("%s: %d read(s), +%d new", date("%H:%M"), logBurst.reads, logBurst.added)
+    lastLogRead = string.format("%s - %d new entr%s", date("%H:%M"), logBurst.added,
+        logBurst.added == 1 and "y" or "ies")
     ns.Debug("roster event log " .. lastLogRead)
     logBurst.reads, logBurst.added = 0, 0
 end
@@ -379,17 +387,25 @@ function M.Sync()
 end
 
 function M.Status()
+    ns.Head("Member list (joins, leaves, kicks, rank changes)")
     if not ready then
-        ns.Print("roster: |cffffaa00idle|r" .. (not S.IsCollector() and " (member role: collectors track it)"
-            or C.HasRoster and " (no guild yet)" or " (API missing)"))
+        if not S.IsCollector() then
+            ns.Line("Not tracked by members - the collectors do this.")
+        elseif not C.HasRoster then
+            ns.Line("Not available in this game version.")
+        else
+            ns.Line("Waiting for the guild.")
+        end
         return
     end
     local g = S.Guild(clubId)
     local members = 0
     for _ in pairs(g.roster) do members = members + 1 end
-    ns.Print(string.format("roster: %d members stored, last snapshot %s (%s); events spooled %d",
-        members, g.rosterAt and date("%H:%M:%S", g.rosterAt) or "never", lastSnapshotNote, #g.ev))
-    ns.Print(string.format("roster this session: +%d sys, +%d diff, +%d log; snapshots %d, not loaded %d, refused %d;"
-        .. " event log %s", stats.sys, stats.diff, stats.log, stats.snapshots, stats.untrusted, stats.refused,
-        lastLogRead or (C.HasEventLog and "not read yet" or "API missing")))
+    ns.Line(string.format("Members saved: %s.", ns.Num(members)))
+    ns.Line(string.format("Last check: %s - %s.", g.rosterAt and date("%H:%M", g.rosterAt) or "never",
+        lastSnapshotNote))
+    ns.Line(string.format("Changes seen since login: %d live, %d by comparing the member list, %d from the guild log.",
+        stats.sys, stats.diff, stats.log))
+    ns.Line("Guild log last read: " .. (lastLogRead or (C.HasEventLog and "not yet" or "not available")) .. ".")
+    ns.Line(string.format("Changes saved in total: %s.", ns.Num(#g.ev)))
 end

@@ -30,6 +30,8 @@ class GuildRows:
     name: str | None = None
     chat: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
+    roster: tuple[int, list[dict[str, Any]]] | None = None
+    links: list[dict[str, Any]] = field(default_factory=list)
 
 
 def parse_content(content: str) -> Header:
@@ -81,6 +83,14 @@ def decode(data: bytes, header: Header) -> dict[str, GuildRows]:
             g.chat.append(obj)
         elif kind == "event":
             g.events.append(obj)
+        elif kind == "link":
+            g.links.append(obj)
+        elif kind == "roster":
+            at, members = obj.get("at"), obj.get("members")
+            if not isinstance(at, int) or not isinstance(members, list):
+                raise Rejected(f"line {n}: bad roster record")
+            if g.roster is None or at > g.roster[0]:
+                g.roster = (at, members)
         else:
             raise Rejected(f"line {n}: unknown type {kind!r}")
         count += 1

@@ -16,8 +16,8 @@ from .svparse import as_dict, as_list
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
-SCHEMAS_READ = (1, 2)  # 2 (2026-11-13): chat key rb -> relayed_by; nothing else changed
+SCHEMA_VERSION = 3
+SCHEMAS_READ = (1, 2, 3)  # 2: chat key rb -> relayed_by; 3: guilds[..].links (Discord link requests)
 STREAMS = {"g", "o", "d", "x"}
 CHAT_SRC = {"live", "meta", "event"}
 EVENT_KINDS = {"join", "leave", "kick", "promote", "demote"}
@@ -52,8 +52,14 @@ CREATE INDEX IF NOT EXISTS events_ts ON events(guild, ts_utc);
 CREATE TABLE IF NOT EXISTS members(
   guild TEXT NOT NULL, guid TEXT NOT NULL, name TEXT NOT NULL, first_seen INTEGER,
   last_seen INTEGER, in_guild INTEGER NOT NULL DEFAULT 1,
+  rank_name TEXT, rank_index INTEGER, level INTEGER, class TEXT,
   PRIMARY KEY (guild, guid));
 CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS link_rows(
+  guild TEXT NOT NULL, id TEXT NOT NULL, ts_utc INTEGER NOT NULL, kind TEXT NOT NULL, code TEXT, tag TEXT NOT NULL,
+  name TEXT NOT NULL, guid TEXT, first_collector TEXT, uploaded INTEGER NOT NULL DEFAULT 0,
+  processed INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (guild, id));
 """
 
 
@@ -71,6 +77,7 @@ class ImportResult:
     events_dup: int = 0
     events_updated: int = 0  # actor filled in on a log row
     members_new: int = 0
+    links_new: int = 0
     skipped: int = 0  # malformed rows
     min_ts: int | None = None  # oldest timestamp among changed chat/event rows
     guilds: list[str] = field(default_factory=list)
@@ -81,7 +88,7 @@ class ImportResult:
     @property
     def changed(self) -> int:
         return (self.chat_new + self.chat_updated + self.chat_merged + self.events_new + self.events_updated
-                + self.members_new)
+                + self.members_new + self.links_new)
 
     def summary(self) -> str:
         return (f"chat +{self.chat_new} (updated {self.chat_updated}, merged {self.chat_merged}), "
@@ -109,6 +116,12 @@ class Spool:
         if "relayed_by" not in cols:  # schema 2
             with self.db:
                 self.db.execute("ALTER TABLE chat ADD COLUMN relayed_by TEXT")
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(members)")}
+        with self.db:  # pack step R: roster details for the bot
+            for col, typ in (("rank_name", "TEXT"), ("rank_index", "INTEGER"), ("level", "INTEGER"),
+                             ("class", "TEXT")):
+                if col not in cols:
+                    self.db.execute(f"ALTER TABLE members ADD COLUMN {col} {typ}")
 
     def close(self) -> None:
         self.db.close()
@@ -141,7 +154,11 @@ class Spool:
                     self._chat(guild, row, collector, res)
                 for row in as_list(g.get("ev")):
                     self._event(guild, row, collector, res)
-                self._members(guild, as_dict(g.get("roster")), res)
+                self.import_links(guild, as_list(g.get("links")), collector, res)
+                roster = as_dict(g.get("roster"))
+                if roster:
+                    members = [dict(m, g=guid) for guid, m in roster.items() if isinstance(m, dict)]
+                    self.import_roster(guild, _int(g.get("rosterAt")), members, res)
                 self._supersede(guild)
         return res
 
@@ -370,33 +387,106 @@ class Spool:
 
     # members ------------------------------------------------------------------
 
-    def _members(self, guild: str, roster: dict[Any, Any], res: ImportResult) -> None:
-        if not roster:
-            return
+    def import_roster(self, guild: str, at: int | None, members: list[Any], res: ImportResult | None = None) -> None:
+        """A trusted roster snapshot (addon `roster`, keys g n r rn l c fs ls) taken at `at`.
+
+        Every listed member is updated (name, rank, level, class; first_seen only goes down, last_seen only
+        up). Only the newest snapshot decides who is *in* the guild: an older one, e.g. from a collector
+        who uploads late, never marks a member as gone.
+        """
+        res = res or ImportResult()
         db = self.db
+        key = f"roster_at:{guild}"
+        newest = int(self.get_state(key, "0") or 0)
+        is_newest = at is not None and at >= newest
         present = []
-        for guid, m in roster.items():
-            if not isinstance(guid, str) or not isinstance(m, dict) or not isinstance(m.get("n"), str):
+        for m in members:
+            guid, name = _str(m.get("g")), _str(m.get("n"))
+            if guid is None or name is None:
                 res.skipped += 1
                 continue
             present.append(guid)
             fs, ls = _int(m.get("fs")), _int(m.get("ls"))
+            r, lvl = _int(m.get("r")), _int(m.get("l"))
+            rn, cls = _str(m.get("rn")), _str(m.get("c"))
             cur = db.execute("SELECT 1 FROM members WHERE guild=? AND guid=?", (guild, guid)).fetchone()
             if cur is None:
-                db.execute("INSERT INTO members(guild, guid, name, first_seen, last_seen, in_guild)"
-                           " VALUES(?,?,?,?,?,1)", (guild, guid, m["n"], fs, ls))
+                db.execute("INSERT INTO members(guild, guid, name, first_seen, last_seen, in_guild, rank_name,"
+                           " rank_index, level, class) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                           (guild, guid, name, fs, ls, 1 if is_newest else 0, rn, r, lvl, cls))
                 res.members_new += 1
             else:
                 db.execute(
-                    "UPDATE members SET name=?, in_guild=1,"
+                    "UPDATE members SET name=?,"
                     " first_seen=MIN(COALESCE(first_seen, ?), COALESCE(?, first_seen)),"
                     " last_seen=MAX(COALESCE(last_seen, ?), COALESCE(?, last_seen))"
-                    " WHERE guild=? AND guid=?",
-                    (m["n"], fs, fs, ls, ls, guild, guid),
+                    + (", in_guild=1, rank_name=COALESCE(?, rank_name), rank_index=COALESCE(?, rank_index),"
+                       " level=COALESCE(?, level), class=COALESCE(?, class)" if is_newest else "")
+                    + " WHERE guild=? AND guid=?",
+                    (name, fs, fs, ls, ls, *((rn, r, lvl, cls) if is_newest else ()), guild, guid),
                 )
-        if present:
+        if is_newest and present:
             marks = ",".join("?" * len(present))
             db.execute(f"UPDATE members SET in_guild=0 WHERE guild=? AND guid NOT IN ({marks})", (guild, *present))
+            db.execute("INSERT INTO state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (key, str(at)))
+
+    # ------------------------------------------------------------------ Discord link requests (schema 3)
+
+    def import_links(self, guild: str, rows: list[Any], collector: str, res: ImportResult | None = None) -> None:
+        """Link requests a collector heard in game (addon `links`, keys id t k code tag n g). Insert if absent."""
+        res = res or ImportResult()
+        for r in rows:
+            if not isinstance(r, dict):
+                res.skipped += 1
+                continue
+            rid, t, kind = _str(r.get("id")), _int(r.get("t")), r.get("k")
+            tag, name = _str(r.get("tag")), _str(r.get("n"))
+            if rid is None or t is None or kind not in ("link", "alt") or tag is None or name is None:
+                res.skipped += 1
+                continue
+            cur = self.db.execute(
+                "INSERT OR IGNORE INTO link_rows(guild, id, ts_utc, kind, code, tag, name, guid, first_collector)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (guild, rid, t, kind, _str(r.get("code")), tag, name, _str(r.get("g")), collector))
+            if cur.rowcount:
+                res.links_new += 1
+
+    def pending_links(self, guild: str) -> list[dict[str, Any]]:
+        out = []
+        for r in self.db.execute("SELECT * FROM link_rows WHERE guild=? AND uploaded=0 ORDER BY ts_utc", (guild,)):
+            row = {"id": r["id"], "t": r["ts_utc"], "k": r["kind"], "tag": r["tag"], "n": r["name"]}
+            if r["code"]:
+                row["code"] = r["code"]
+            if r["guid"]:
+                row["g"] = r["guid"]
+            out.append(row)
+        return out
+
+    def mark_links_uploaded(self, guild: str, ids: list[str]) -> None:
+        with self.db:
+            self.db.executemany("UPDATE link_rows SET uploaded=1 WHERE guild=? AND id=?", [(guild, i) for i in ids])
+
+    # ------------------------------------------------------------------ roster upload (companion)
+
+    def pending_roster(self, guild: str) -> tuple[int, list[dict[str, Any]]] | None:
+        """The current roster for upload, if a newer snapshot arrived since the last upload."""
+        at = int(self.get_state(f"roster_at:{guild}", "0") or 0)
+        if not at or at <= int(self.get_state(f"roster_uploaded:{guild}", "0") or 0):
+            return None
+        rows = self.db.execute("SELECT * FROM members WHERE guild=? AND in_guild=1 ORDER BY guid", (guild,)).fetchall()
+        members = []
+        for r in rows:
+            m: dict[str, Any] = {"g": r["guid"], "n": r["name"]}
+            for key, col in (("r", "rank_index"), ("rn", "rank_name"), ("l", "level"), ("c", "class"),
+                             ("fs", "first_seen"), ("ls", "last_seen")):
+                if r[col] is not None:
+                    m[key] = r[col]
+            members.append(m)
+        return at, members
+
+    def mark_roster_uploaded(self, guild: str, at: int) -> None:
+        self.set_state(f"roster_uploaded:{guild}", str(at))
 
     # ------------------------------------------------------------------ queries
 

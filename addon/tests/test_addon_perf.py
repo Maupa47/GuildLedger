@@ -17,6 +17,8 @@ def test_big_roster_and_long_history_stay_cheap_per_frame(capsys):
         print(f"\n  Lua 5.1 on this PC: roster snapshot of 1000 members {snap.max:.1f} ms,"
               f" history step (<=500 messages) max {step.max:.1f} ms over {step.n} steps")
     assert snap.max < 250 and step.max < 250  # generous: a frame at 60 fps is 16 ms, a hitch is > 100 ms
+    assert "Timing" not in g.slash("status")  # only with debug on
+    g.slash("debug on")
     out = g.slash("status")
-    assert "timing ms last/max: " in out and "roster snapshot" in out
+    assert "Timing (debug)" in out and "roster snapshot: " in out
     assert g.errors == 0, g.last_error()

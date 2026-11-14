@@ -152,3 +152,13 @@ def test_live_message_during_backfill_waits_for_it(tmp_path):
         return last
     assert asyncio.run(go()) == 3
     assert all(m.reactions == [OK] for m in msgs)
+
+
+def test_slash_commands_are_registered(tmp_path):
+    async def go():
+        bot = await make_bot(tmp_path)
+        names = sorted(c.name for c in bot.tree.get_commands())
+        await shutdown(bot)
+        return names
+    assert asyncio.run(go()) == ["activity", "chars", "inactive", "joined", "link", "linkstatus", "roles", "seen",
+                                 "unlink", "whois"]

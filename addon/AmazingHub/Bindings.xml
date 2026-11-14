@@ -1,0 +1,9 @@
+<Bindings>
+    <!--
+        One binding, unbound by default: open or close the Amazing Hub window.
+        Assign a key under Key Bindings, AddOns, in the Amazing Hub section.
+    -->
+    <Binding name="AMAZINGHUB_TOGGLE" header="AMAZINGHUB" category="ADDONS">
+        AmazingHub:ToggleRoster()
+    </Binding>
+</Bindings>

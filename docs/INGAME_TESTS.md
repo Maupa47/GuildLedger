@@ -263,3 +263,94 @@ companion refuses a schema-2 file), then members.
    again as a late entry).
 5. With `/gl debug on`: grey `relay: asking for text gaps …` (you) and `relay: … needs … ranges; I have …`
    (member).
+
+## Test round 2 (v0.3.0 relay, monitoring, CurseForge), 2026-11
+
+Setup (once):
+1. Discord: private channel `#gl-ops` + webhook; paste the URL into `bot/config.toml` under `[ops]` → `webhook`.
+2. `powershell -ExecutionPolicy Bypass -File .\tools\deploy.ps1 -UpdateConfig` (new bot code + config).
+   Expected: `active (running)`. Within a minute nothing is posted to #gl-ops (the report comes at 06:00).
+   Check the report by hand: README "Monitoring" command → a report for yesterday.
+3. Push to GitHub → repository *Actions* tab → the "tests" run is green.
+4. Your PC: `/reload` (addon 0.3.0); restart the companion; optional `companion\autostart-on.cmd`.
+   Double-clicking `start-companion.cmd` a second time → "already running".
+5. Members: the CurseForge release (or `dist\GuildLedger-0.3.0.zip`); other collectors: `dist\GuildLedger-collector-0.3.0.zip`
+   (addon + companion together).
+
+Tests:
+| # | What | Expected |
+|---|---|---|
+| A | both online 1 min, `/gl status` on both | section *Sharing with other players*: `Last send: OK.`, `Received from others:` above 0, `GuildLedger versions seen` lists the other |
+| B | gap test: you offline 10 min, member chats in /g, you back, wait 2 min | `Lines filled in by members since login:` above 0; member: `Lines given to collectors` above 0; after `/reload` those lines in Discord with text |
+| C | two members online during B | each line arrives once (no doubles in Discord) |
+| D | boss fight: `/g` during an encounter | during: `Boss-fight chat lock: ON`; no Lua error; after: `Last history check: … up to date` |
+| E | no companion running for > 6 h | warning in #gl-ops; "arriving again" after the next upload |
+| F | next morning | report in #gl-ops with the share of lines with text |
+| H | `/gl who` with a few members online | after ~35 s: you, the collectors and members with version and counts |
+| I | a member logs in, plays 10 min, no command typed | nothing from GuildLedger in their chat |
+| G | `/gl debug on`, one login | `diag` gets "history message without author name: author {…}" lines (open question: the "?" lines) |
+
+## Pack test round (v0.4.0: relay, map, Discord link, activity) — run when ready
+
+Setup: server first (`deploy.ps1 -UpdateConfig` after the README "Discord link" steps), then collectors (collector zip,
+addon + companion together), then testers (`dist\Amazing-Forever-Guild-Pack-0.4.0.zip` or CurseForge Beta).
+Old addons (0.2/0.3) keep working next to 0.4.0; old companions refuse schema 3 until updated.
+
+| # | What | Expected |
+|---|---|---|
+| R1–R3 | relay tests A–C of test round 2 | as there |
+| M1 | A does nothing (sharing is on by default); B opens the world map on A's zone | within 15 s a dot in A's class colour, tooltip with name/level/zone |
+| M2 | B zooms out to the continent | the dot moves to the right place on the continent map |
+| M3 | B closes the map | `/gl status` on A: "Position messages sent" stops growing within 45 s |
+| M4 | A enters a dungeon | A's dot disappears after ~2 min; nothing sent inside |
+| M5 | B uses the map in combat, clicks quest and flight-point pins | no Lua/taint error (BugSack) |
+| L1 | Discord `/link` → code → in game `/gl link CODE` (a collector online) | in game: "a collector received your link code"; after the collector's next `/reload`: a DM "Is this you?" |
+| L2 | press Confirm | `/chars` lists the character; `/whois <name>` shows you |
+| L3 | log in on an alt, collector `/reload` | DM offering the alt; Confirm → `/chars` lists both |
+| L4 | someone else types your code on their character | you get a DM for *their* character; "Not me" → nothing linked, later tries blocked |
+| L5 | `/unlink` | `/chars` empty |
+| D1 | officer: `/roles verified role:@guild-member`, `/roles rank` for two ranks, `/roles show` | the mapping is listed; after L2 the linked member has guild-member + the rank role |
+| A1 | `/seen <name>`, `/joined <name>`, `/activity`, officer `/inactive days:30` | sensible times (online = approximate) |
+| S1 | everyone: no GuildLedger text in chat without a command | silent |
+
+## Hub test round (v0.5.0: Amazing Hub, GuildLedger unchanged) — run with the pack test round
+
+Install: the repo-linked admin runs `powershell -ExecutionPolicy Bypass -File .\tools\install.ps1` once (it links
+`AmazingHub` next to `GuildLedger`); testers unzip `dist\Amazing-Forever-Guild-Pack-0.5.0.zip` into `AddOns` (two
+folders). Character screen → AddOns: both listed, none "out of date". BugSack on for everyone.
+
+| # | What | Expected |
+|---|---|---|
+| H1 | log in, wait 30 s | no Lua error; at most one chat line "v0.5.0 by Chehul loaded. Type /amazing to open." |
+| H2 | `/amazing` | the hub window opens; write down which tabs it shows (Alliance, Web, Recruitment should be hidden or say they are off) |
+| H3 | `/amazinghub` | same window (second alias) |
+| H4 | tester with a profession: open the Recipes / Professions tab on **another** tester's PC, both online ≥ 2 min | the first tester's profession, skill and recipes are listed |
+| H5 | `/amazing craft <an item one tester can make>` | names that tester |
+| H6 | a member without the pack | appears with profession names only (no skill, no recipes) |
+| H7 | everyone, 15 min of play | no hub line in /say, /yell, trade or any public channel; no channel joined (chat settings → channels list unchanged) |
+| H8 | `/gl status` and `/gl who` | GuildLedger works as before (relay, map dots) |
+| H9 | a second account with the real GuildOS installed | its `/guildos` shows **not** our guild data; ours does not show its data |
+| H10 | `/amazing errors` | empty (or paste what it lists) |
+
+Result 2026-11-14: the admin ran the hub round and reported "it works, tested all features".
+
+## Bridge test round (v0.5.0 Phase 10: Ledger tab) — run when ready
+
+Setup: the admin PC is repo-linked, so just `/reload` (no new folders this time). Testers: the new
+`dist\Amazing-Forever-Guild-Pack-0.5.0.zip` (both folders replaced).
+
+| # | What | Expected |
+|---|---|---|
+| B1 | `/amazing`, click the **Ledger** tab | "GUILDLEDGER 0.5.0", the WORLD MAP switches, and a STATUS block with the same lines as `/gl status` |
+| B2 | stay on the tab for 15 s while guild chat happens | the status numbers update by themselves (every 5 s) |
+| B3 | untick "Show my position…", then type `/gl status` | no chat line when clicking; `/gl status` says "Your position: not shared"; tick again → "shared" |
+| B4 | untick "Show guild members on my world map", open the world map near a sharing member | no dots; tick again → dots return |
+| B5 | button "Open world map" and `/amazing map` | both open the normal world map (with GuildLedger's guild dots), no hub overlay |
+| B6 | hub Settings tab | no "Show guildmates in your zone on the minimap" switch any more |
+| B7 | disable GuildLedger in the AddOns list, log in, open the Ledger tab | "GuildLedger is not running" with instructions; no Lua error; hub otherwise works |
+| B8 | re-enable GuildLedger, disable Amazing Hub | GuildLedger works as before (`/gl status`, relay, map) |
+| B9 | update notice: only testable once a newer version (0.5.1+) exists; until then the Ledger tab must show **no** "Update available" line | no notice |
+| B10 | Ledger tab → DISCORD LINK: type `nope`, press Enter | red "that is not a link code…"; no chat line |
+| B11 | Discord `/link` → type the code in the box → Link | green "link code sent…"; box empties; after a collector's `/reload` the confirm DM arrives (as L1) |
+| B12 | look at the tab bar, the minimap menu and Settings | no Achievements, Alliance, Recruitment or Web; Journal still there |
+| B13 | Settings → About → Links; the login line | "made by Maupa"; nowhere in game GuildOS, Guild OS or Chehul |

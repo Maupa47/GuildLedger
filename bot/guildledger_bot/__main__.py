@@ -6,6 +6,7 @@
     python -m guildledger_bot [--config ...] export <dir>                       # plain-text logs of the archive
     python -m guildledger_bot [--config ...] backup [--dir D] [--keep-days N]   # daily backup (systemd timer)
     python -m guildledger_bot [--config ...] verify-backup [file]               # restore check of a backup
+    python -m guildledger_bot [--config ...] report [--day YYYY-MM-DD]          # coverage report (stdout)
 """
 
 from __future__ import annotations
@@ -78,6 +79,21 @@ def cmd_verify(cfg, path: str | None) -> int:
     return 0
 
 
+def cmd_report(cfg, day: str | None) -> int:
+    from datetime import datetime, timedelta
+
+    from guildledger.config import resolve_tz
+
+    from .ops import build_report, day_bounds
+    from .store import Archive
+    tz = resolve_tz(cfg.timezone)
+    when = datetime.strptime(day, "%Y-%m-%d") if day else datetime.now(tz) - timedelta(days=1)
+    start, end = day_bounds(when, tz)
+    with Archive(cfg.db_path) as a:
+        print(build_report(a, start, end, tz))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m guildledger_bot", description="GuildLedger bot")
     p.add_argument("--config", default=DEFAULT_CONFIG)
@@ -91,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
     b = sub.add_parser("backup", help="back up the archive (gzip), keep N days, optionally send to #gl-backup")
     b.add_argument("--dir", help="backup folder (default: backups/ next to the database)")
     b.add_argument("--keep-days", type=int, default=14)
+    r = sub.add_parser("report", help="print the coverage report of a day (default: yesterday)")
+    r.add_argument("--day", help="YYYY-MM-DD (local)")
     v = sub.add_parser("verify-backup", help="check that a backup restores into a working database")
     v.add_argument("file", nargs="?", help="default: the newest backup")
     args = p.parse_args(argv)
@@ -112,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_backup(cfg, args.dir, args.keep_days)
     if args.cmd == "verify-backup":
         return cmd_verify(cfg, args.file)
+    if args.cmd == "report":
+        return cmd_report(cfg, args.day)
 
     from .client import LedgerBot
     bot = LedgerBot(cfg, once=args.cmd == "backfill")

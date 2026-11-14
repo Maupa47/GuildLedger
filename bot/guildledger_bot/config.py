@@ -26,6 +26,14 @@ class BotConfig:
     post_every: int = 30
     post_since: int | None = None  # unix s; default: the bot's first start (state in the database)
     backup_webhook: str = field(default="", repr=False)  # optional: private #gl-backup channel
+    ops_webhook: str = field(default="", repr=False)  # optional: private #gl-ops (report + warnings)
+    report_hour: int = 6
+    alert_after_hours: float = 6
+    server_id: int = 0  # Discord server for slash commands (0: commands everywhere, slow to appear)
+    verified_role_id: int = 0  # [link] decision 5: role given to linked guild members (0 = off)
+    rank_roles: dict[str, int] = field(default_factory=dict)  # guild rank name -> Discord role ID
+    set_nickname: bool = False  # nickname = highest-level linked character in the guild
+    grace_days: int = 7  # roles stay this long after the last linked character left the guild
 
 
 def load(path: str | Path) -> BotConfig:
@@ -41,6 +49,7 @@ def load(path: str | Path) -> BotConfig:
     cfg = BotConfig()
     discord_ = raw.get("discord", {}) or {}
     cfg.token = str(discord_.get("token", ""))
+    cfg.server_id = int(discord_.get("server_id", 0) or 0)
     try:
         cfg.ingest_channel_id = int(discord_.get("ingest_channel_id", 0))
     except (TypeError, ValueError) as e:
@@ -55,6 +64,15 @@ def load(path: str | Path) -> BotConfig:
     if "since" in post:
         cfg.post_since = int(post["since"])
     cfg.backup_webhook = str((raw.get("backup", {}) or {}).get("webhook", ""))
+    ops = raw.get("ops", {}) or {}
+    cfg.ops_webhook = str(ops.get("webhook", ""))
+    cfg.report_hour = int(ops.get("report_hour", cfg.report_hour))
+    cfg.alert_after_hours = float(ops.get("alert_after_hours", cfg.alert_after_hours))
+    link = raw.get("link", {}) or {}
+    cfg.verified_role_id = int(link.get("verified_role_id", 0) or 0)
+    cfg.rank_roles = {str(k): int(v) for k, v in (link.get("rank_roles", {}) or {}).items() if int(v or 0)}
+    cfg.set_nickname = bool(link.get("set_nickname", False))
+    cfg.grace_days = int(link.get("grace_days", cfg.grace_days))
     storage = raw.get("storage", {}) or {}
     if "db_path" in storage:
         cfg.db_path = Path(storage["db_path"])

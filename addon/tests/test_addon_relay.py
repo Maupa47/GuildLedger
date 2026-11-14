@@ -147,7 +147,7 @@ def test_member_role_skips_history_and_roster_and_keeps_only_text():
     g.run(10)
     assert [r["m"] for r in g.chat()] == ["kept"]
     out = g.slash("status")
-    assert "role member" in out and "member role" in out
+    assert "Role: Member" in out and "Not tracked by members" in out and "Lines kept for collectors: 1" in out
     assert g.errors == 0, g.last_error()
 
 
@@ -168,14 +168,14 @@ def test_member_buffer_limits():
 def test_new_install_is_member_and_old_install_becomes_collector():
     fresh = Game(role=None)
     fresh.run(30)
-    assert fresh.sv()["opts"]["collector"] is False and fresh.sv()["schema"] == 2
+    assert fresh.sv()["opts"]["collector"] is False and fresh.sv()["schema"] == 3
 
     old = Game(role=None)
     old.W.unload()
     old.L.execute('GuildLedgerDB = { schema = 1, opts = { debug = false }, guilds = { ["42"] = { chat = {} } } }')
     old.load()
     old.run(30)
-    assert old.sv()["schema"] == 2 and old.sv()["opts"]["collector"] is True
+    assert old.sv()["schema"] == 3 and old.sv()["opts"]["collector"] is True
 
 
 def test_relayed_text_reaches_the_companion(tmp_path):
@@ -195,3 +195,97 @@ def test_split_is_utf8_safe():
     s = "ä" * 150  # 300 bytes
     parts = list(split(s, 7).values())
     assert "".join(parts) == s and all(len(p.encode("latin-1", "surrogateescape")) <= 7 for p in parts)
+
+
+def test_versions_seen_and_outdated_listed():
+    guild = Guild([(COLL, "collector"), (MEM, "member")])
+    guild.g(MEM).L.execute('W.ns.Store.VERSION = "0.2.0"')  # an old install
+    guild.run(45)
+    out = guild.g(COLL).slash("status")
+    assert "GuildLedger versions seen" in out and "Outdated, should update" in out and f"{MEM}-Forever (0.2.0)" in out
+    older = guild.g(COLL).W.ns.Relay.older
+    assert older("0.2.9", "0.2.10") and not older("0.3.0", "0.2.10") and not older("0.2.2", "0.2.2")
+
+
+def test_need_spam_is_rate_limited():
+    guild = gap_scenario(lines=3)
+    mem = guild.g(MEM)
+    for _ in range(10):  # someone floods needs
+        mem.W.fire("CHAT_MSG_ADDON", "GuildLedger", "N\tg\t1-9999999999", "GUILD", "Spammer-Forever",
+                   "", 0, 0, "Spammer", 0)
+    guild.run(60)
+    sends = [m for s, m in guild.addon_log if s == MEM and m.startswith("T\t")]
+    assert len(sends) <= 3 * 2  # answered once (plus the real collector's need), not ten times
+
+
+def test_half_lines_from_one_sender_are_bounded():
+    g = Game()
+    g.run(30)
+    for i in range(500):
+        g.W.fire("CHAT_MSG_ADDON", "GuildLedger", f"T\t{i}:{i}\t1/3\tx", "GUILD", "Flood-Forever", "", 0, 0, "F", 0)
+    g.run(1)
+    assert g.errors == 0, g.last_error()
+    n = g.L.eval("(function() local n = 0 for _ in pairs(W.ns.Relay) do n = n + 1 end return n end)()")
+    assert n > 0  # still alive; the buffer cap itself is internal (40 per sender)
+
+
+def test_many_separate_gaps_need_several_messages_and_all_get_filled():
+    guild = Guild([(COLL, "collector"), (MEM, "member")])
+    guild.run(40)
+    guild.logout(COLL)
+    for i in range(14):  # 14 gaps far apart -> 14 ranges -> more than one need message
+        guild.say(ALIA, f"gap line {i}")
+        guild.run(400)
+    guild.login(COLL)
+    guild.run(240)
+    assert len(guild.sent("N")) >= 2
+    got = sorted(r["m"] for r in guild.texts(COLL) if r.get("rb"))
+    assert got == sorted(f"gap line {i}" for i in range(14))
+
+
+def test_gl_who_lists_everyone_online_with_role_version_and_counts():
+    guild = gap_scenario(members=(MEM, MEM2), lines=4)
+    guild.run(150)
+    coll = guild.g(COLL)
+    coll.W.printed = coll.L.table()
+    coll.slash("who")
+    guild.run(40)
+    out = "\n".join(coll.W.printed.values())
+    assert "asking everyone online" in out
+    assert "players online with GuildLedger: 3 (you included)" in out
+    v = coll.W.ns.Store.VERSION
+    assert f"Collector - version {v} - filled 4 line(s) from members" in out
+    assert f"{MEM}-Forever - version {v}" in out and f"{MEM2}-Forever - version {v}" in out
+    assert "gave" in out and "keeps" in out
+    assert any(m == "W" for _, m in guild.addon_log)
+
+
+def test_addon_is_silent_in_chat_without_commands():
+    g = Game(role="member", history=20)
+    g.W.printed = g.L.table()
+    g.run(120)
+    g.say(ALIA, "hello")
+    g.L.execute("W.ns.Safe('test', function() error('boom') end)")  # an internal error
+    g.run(30)
+    assert list(g.W.printed.values()) == []  # nothing in chat
+    assert g.errors == 1 and "Problems: 1 error(s)" in g.slash("status")
+
+
+def test_periodic_hello_does_not_make_collectors_ask_again_and_again():
+    guild = gap_scenario(lines=2)
+    guild.run(120)
+    asked = len(guild.sent("N"))
+    guild.run(3 * 900)  # three rounds of periodic hellos, no new gaps
+    assert len(guild.sent("H")) >= 6
+    assert len(guild.sent("N")) - asked <= 3  # only the 15-minute timer, not every hello
+
+
+def test_hello_from_old_version_is_understood():
+    g = Game()
+    g.run(30)
+    g.W.fire("CHAT_MSG_ADDON", "GuildLedger", "H\t0.2.1\tm\t42", "GUILD", "Old Timer-Forever", "", 0, 0, "O", 0)
+    g.W.printed = g.L.table()
+    g.slash("who")
+    g.run(40)
+    out = "\n".join(g.W.printed.values())
+    assert "Old Timer-Forever - version 0.2.1" in out and "(outdated)" in out and "keeps 42 line(s)" in out

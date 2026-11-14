@@ -286,7 +286,7 @@ function C.RegisterPrefix(prefix)
 end
 
 -- True when sending now would be refused anyway (chat lockdown). Phase 7: the realm flag
--- AreOutgoingAddonChatMessagesRestricted is NOT a reason to hold: the send result decides (as in GuildOS).
+-- AreOutgoingAddonChatMessagesRestricted is NOT a reason to hold: the send result decides.
 function C.CommBlocked()
     return not hasComm or C.InLockdown()
 end
@@ -298,4 +298,82 @@ function C.SendGuild(prefix, message)
     if IsSecret(r) then return nil end
     if r == nil or r == true then return C.SEND_OK end -- older clients returned a bool
     return r
+end
+
+---------------------------------------------------------------------------------------------------
+-- World map (Map.lua; MapDocumentation.lua, Blizzard_MapCanvas, InstanceDocumentation.lua, forever branch)
+---------------------------------------------------------------------------------------------------
+
+local Map = C_Map
+local hasMap = Map and Map.GetBestMapForUnit and Map.GetPlayerMapPosition and Map.GetMapInfo
+if not hasMap then C.missing.map = true end
+C.HasMap = hasMap and true or false
+
+function C.PlayerMap()
+    if not hasMap then return nil end
+    local id = Map.GetBestMapForUnit("player")
+    if IsSecret(id) or type(id) ~= "number" then return nil end
+    return id
+end
+
+-- The player's position on that map as 0..1, or nil (instances, secret, unknown).
+function C.PlayerMapPos(mapID)
+    if not hasMap or not mapID then return nil end
+    local pos = Map.GetPlayerMapPosition(mapID, "player")
+    if pos == nil or IsSecret(pos) or type(pos) ~= "table" or not pos.GetXY then return nil end
+    local x, y = pos:GetXY()
+    if IsSecret(x, y) or type(x) ~= "number" or type(y) ~= "number" then return nil end
+    if x <= 0 and y <= 0 then return nil end -- the game's "no position"
+    if x < 0 or x > 1 or y < 0 or y > 1 then return nil end
+    return x, y
+end
+
+-- Parent map ID and name of a map, or nil.
+function C.MapInfo(mapID)
+    if not hasMap or not mapID then return nil end
+    local info = Map.GetMapInfo(mapID)
+    if type(info) ~= "table" or IsSecret(info) then return nil end
+    local parent = not IsSecret(info.parentMapID) and info.parentMapID or nil
+    local name = not IsSecret(info.name) and type(info.name) == "string" and info.name or nil
+    return parent, name
+end
+
+-- Where mapID lies on topMapID: minX, maxX, minY, maxY (0..1 of the top map), or nil.
+function C.MapRectOn(mapID, topMapID)
+    if not (Map and Map.GetMapRectOnMap) or not mapID or not topMapID then return nil end
+    local ok, a, b, c, d = pcall(Map.GetMapRectOnMap, mapID, topMapID)
+    if not ok or IsSecret(a, b, c, d) or type(a) ~= "number" or type(d) ~= "number" then return nil end
+    if b <= a or d <= c then return nil end
+    return a, b, c, d
+end
+
+function C.InInstance()
+    if not IsInInstance then return false end
+    local inside = IsInInstance()
+    if IsSecret(inside) then return true end
+    return inside and true or false
+end
+
+-- The world map's frame and displayed map, if it is open.
+function C.OpenWorldMap()
+    local f = WorldMapFrame
+    if type(f) ~= "table" or not f.IsShown or not f:IsShown() or not f.GetMapID or not f.GetCanvas then return nil end
+    local id = f:GetMapID()
+    if IsSecret(id) or type(id) ~= "number" then return nil end
+    return f, id
+end
+
+-- In the player's party or raid (the game draws those itself).
+function C.InGroupWith(name)
+    if type(name) ~= "string" then return false end
+    local p = UnitInParty and UnitInParty(name)
+    local r = UnitInRaid and UnitInRaid(name)
+    if IsSecret(p, r) then return false end
+    return (p or r) and true or false
+end
+
+function C.ClassColor(classFile)
+    local c = type(classFile) == "string" and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
+    if type(c) ~= "table" then return 1, 1, 1 end
+    return c.r or 1, c.g or 1, c.b or 1
 end

@@ -62,7 +62,26 @@ function W.advance(dt)
     for i = #W.timers, 1, -1 do if W.timers[i].cancelled then table.remove(W.timers, i) end end
 end
 
-function CreateFrame()
+-- Frames: events for the addon's event frame; everything else (map dots) is a recording no-op object.
+local function widget(parent)
+    local o = { parent = parent, shown = true, points = {}, scripts = {} }
+    return setmetatable(o, { __index = function(_, k)
+        if k == "GetParent" then return function(self) return self.parent end end
+        if k == "Show" then return function(self) self.shown = true end end
+        if k == "Hide" then return function(self) self.shown = false end end
+        if k == "IsShown" then return function(self) return self.shown end end
+        if k == "CreateTexture" then return function(self) return widget(self) end end
+        if k == "SetPoint" then return function(self, ...) self.points = { ... } end end
+        if k == "SetScript" then return function(self, what, fn) self.scripts[what] = fn end end
+        if k == "SetColorTexture" then return function(self, r, g, b) self.color = { r, g, b } end end
+        if k == "SetAlpha" then return function(self, a) self.alpha = a end end
+        return function() end
+    end })
+end
+W.widget = widget
+
+function CreateFrame(_, _, parent)
+    if parent then return widget(parent) end
     local f = { events = {} }
     function f:RegisterEvent(e) self.events[e] = true end
     function f:UnregisterEvent(e) self.events[e] = nil end
@@ -70,6 +89,35 @@ function CreateFrame()
     W.frames[#W.frames + 1] = f
     return f
 end
+
+-- World map: zone 1429 inside continent 1415; W.where = { map, x, y } is the player's position.
+W.mapParents = { [1429] = 1415, [1411] = 1414, [1415] = 947, [1414] = 947 }
+W.mapRects = { ["1429>1415"] = { 0.4, 0.6, 0.6, 0.8 } }
+W.where = { map = 1429, x = 0.5, y = 0.25 }
+W.instance = false
+C_Map = {}
+function C_Map.GetBestMapForUnit() return W.where and W.where.map end
+function C_Map.GetPlayerMapPosition(map)
+    if not W.where or W.where.map ~= map then return nil end
+    return { GetXY = function() return W.where.x, W.where.y end }
+end
+function C_Map.GetMapInfo(id) return { mapID = id, name = "Map " .. id, parentMapID = W.mapParents[id] or 0 } end
+function C_Map.GetMapRectOnMap(id, top)
+    local r = W.mapRects[id .. ">" .. top]
+    if r then return r[1], r[2], r[3], r[4] end
+end
+function IsInInstance() return W.instance, W.instance and "party" or "none" end
+function UnitInParty() return false end
+function UnitInRaid() return nil end
+RAID_CLASS_COLORS = { MAGE = { r = 0.25, g = 0.78, b = 0.92 } }
+W.canvas = widget(nil)
+function W.canvas:GetWidth() return 1000 end
+function W.canvas:GetHeight() return 700 end
+WorldMapFrame = { open = false, map = 1429 }
+function WorldMapFrame:IsShown() return self.open end
+function WorldMapFrame:GetMapID() return self.map end
+function WorldMapFrame:GetCanvas() return W.canvas end
+function WorldMapFrame:GetCanvasScale() return 1 end
 
 function W.fire(event, ...)
     for _, f in ipairs(W.frames) do

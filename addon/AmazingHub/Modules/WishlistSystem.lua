@@ -1,0 +1,519 @@
+----------------------------------------------------------------------
+-- Amazing Hub - Wishlist System
+-- Native per-character wishlist with guild-wide sync and item search.
+-- Replaces the That's My BiS (TMB) CSV integration.
+--
+-- On retail too since issue #185: its items come from the Encounter Journal at run time, for
+-- Midnight's raids, and every list is kept by the whole Name-Realm of who sent it.
+----------------------------------------------------------------------
+
+local Wishlist = {}
+AmazingHub.Wishlist = Wishlist
+local L = AmazingHub.L
+
+-- Color palette for wishlist entries
+Wishlist.TypeColors = {
+    wishlist = { r = 0.3,  g = 0.7,  b = 1.0 },  -- blue
+}
+
+-- Midnight's raids in the Encounter Journal, by JournalInstance id (retail, issue #185): The Voidspire,
+-- The Dreamrift, March on Quel'Danas, The Venomous Abyss. RaidTracker.RAID_KEYS has them by map id.
+Wishlist.JOURNAL_RAIDS = { 1307, 1314, 1308, 1320 }
+local JOURNAL_RETRY = 2          -- seconds after the journal's data arrives before it is read again
+local UNKNOWN_QUALITY = 4        -- a raid boss's item neither cached nor coloured in its link: epic
+
+local isRetail = AmazingHub.Client.isRetail
+
+-- Where a guildmate's list is kept: on retail by their whole key, which tells namesakes on connected
+-- realms apart (ADR-0026); elsewhere by the name, as always.
+local function storeKey(key, name)
+    return strlower((isRetail and key or name) or "")
+end
+
+function Wishlist:Initialize()
+    if not AmazingHub.db.wishlists then
+        AmazingHub.db.wishlists = {}
+    end
+    -- An emptied list reached a client older than 1.3.1 as an entry with 0 items, and its owner says it once.
+    for key, entry in pairs(AmazingHub.db.guildWishlists or {}) do
+        if #(entry.wishlist or {}) == 0 then AmazingHub.db.guildWishlists[key] = nil end
+    end
+    -- One-time migration: move flat myWishlist to per-char slot
+    if AmazingHub.db.myWishlist and #AmazingHub.db.myWishlist > 0 then
+        local charKey = AmazingHub:GetPlayerKey(AmazingHub.Compat.PlayerName() or "Unknown")
+        if not AmazingHub.db.wishlists[charKey] or #AmazingHub.db.wishlists[charKey] == 0 then
+            AmazingHub.db.wishlists[charKey] = AmazingHub.db.myWishlist
+        end
+        AmazingHub.db.myWishlist = nil
+    end
+    if not AmazingHub.db.guildWishlists then
+        AmazingHub.db.guildWishlists = {}
+    end
+    if isRetail then
+        -- The journal fills a list in as its data arrives: read it again then, until it is whole.
+        local frame = CreateFrame("Frame")
+        AmazingHub.Compat.RegisterEvent(frame, "EJ_LOOT_DATA_RECIEVED")
+        frame:SetScript("OnEvent", function() Wishlist:OnJournalData() end)
+        self.journalFrame = frame
+        self:LoadJournal()
+    end
+    self:RebuildItemIndex()
+    self:HookTooltips()
+end
+
+----------------------------------------------------------------------
+-- Retail's raid items, from the Encounter Journal (issue #185)
+-- self.catalog[itemId] = { name, link, raid, boss }, read at run time for JOURNAL_RAIDS.
+----------------------------------------------------------------------
+
+-- Read the journal's loot for Midnight's raids into the catalog. Once every raid has given its whole
+-- list it is not read again unless `force`. Returns true when the catalog is complete.
+function Wishlist:LoadJournal(force)
+    if not isRetail then return false end
+    if self.journalComplete and not force then return true end
+    self.catalog = self.catalog or {}
+    local complete = true
+    for _, journalID in ipairs(self.JOURNAL_RAIDS) do
+        local items, whole, raid = AmazingHub.Compat.JournalLoot(journalID)
+        if not items then
+            complete = false
+        else
+            if not whole then complete = false end
+            for _, it in ipairs(items) do
+                local held = self.catalog[it.itemID] or {}
+                held.name = it.name or held.name
+                held.link = it.link or held.link
+                held.raid = raid or held.raid
+                held.boss = it.boss or held.boss
+                self.catalog[it.itemID] = held
+            end
+        end
+    end
+    self.journalComplete = complete
+    if complete and self.journalFrame then self.journalFrame:UnregisterEvent("EJ_LOOT_DATA_RECIEVED") end
+    return complete
+end
+
+-- EJ_LOOT_DATA_RECIEVED: the journal has more of a list; read it again shortly, once for a burst.
+function Wishlist:OnJournalData()
+    if self.journalComplete or self.journalPending then return end
+    self.journalPending = true
+    AmazingHub.Compat.After(JOURNAL_RETRY, function()
+        Wishlist.journalPending = nil
+        Wishlist:LoadJournal()
+        Wishlist:RebuildItemIndex()
+    end)
+end
+
+-- What the journal says about an item: { name, link, raid, boss }, or nil.
+function Wishlist:CatalogEntry(itemId)
+    return self.catalog and self.catalog[itemId]
+end
+
+-- An item's name, link and quality: the client's when it has the item cached, else what the journal
+-- gave (retail colours a link by quality, "|cnIQ4:"). Nil when neither knows the name yet.
+function Wishlist:ItemFacts(itemId)
+    local name, link, quality = AmazingHub.Compat.GetItemInfo(itemId)
+    if name then return name, link, quality end
+    local c = self:CatalogEntry(itemId)
+    if not (c and c.name) then return nil end
+    return c.name, c.link, tonumber(c.link and c.link:match("|cnIQ(%d+):")) or UNKNOWN_QUALITY
+end
+
+-- A guildmate's synced list, by their member key and name (the right one for this client).
+function Wishlist:ListFor(key, name)
+    local guild = AmazingHub.db and AmazingHub.db.guildWishlists
+    return guild and guild[storeKey(key, name)]
+end
+
+----------------------------------------------------------------------
+-- Static catalog of all P1/P2 raid boss drops (sourced from AtlasLootClassic).
+-- Seeded into itemIndex so items appear in search even without wishers.
+-- Raids: Karazhan, Gruul's Lair, Magtheridon, Serpentshrine Cavern, Tempest Keep
+----------------------------------------------------------------------
+local RAID_CATALOG = {
+    -- Karazhan
+    21882, 21903, 21904, 22545, 22559, 22560, 22561, 23809, 23857, 23862,
+    23864, 23865, 23933, 24139, 28453, 28454, 28477, 28502, 28503, 28504,
+    28505, 28506, 28507, 28508, 28509, 28510, 28511, 28512, 28514, 28515,
+    28516, 28517, 28518, 28519, 28520, 28521, 28522, 28523, 28524, 28525,
+    28528, 28529, 28530, 28545, 28565, 28566, 28567, 28568, 28569, 28570,
+    28572, 28573, 28578, 28579, 28581, 28582, 28583, 28584, 28585, 28586,
+    28587, 28588, 28589, 28590, 28591, 28592, 28593, 28594, 28597, 28599,
+    28600, 28601, 28602, 28603, 28604, 28606, 28608, 28609, 28610, 28611,
+    28612, 28621, 28631, 28633, 28647, 28649, 28652, 28653, 28654, 28655,
+    28656, 28657, 28658, 28659, 28660, 28661, 28662, 28663, 28666, 28669,
+    28670, 28671, 28672, 28673, 28674, 28675, 28726, 28727, 28728, 28729,
+    28730, 28731, 28732, 28733, 28734, 28735, 28740, 28741, 28742, 28743,
+    28744, 28745, 28746, 28747, 28748, 28749, 28750, 28751, 28752, 28753,
+    28754, 28755, 28756, 28757, 28762, 28763, 28764, 28765, 28766, 28767,
+    28768, 28770, 28771, 28772, 28773, 28774, 28775, 28776, 28777, 28778,
+    28779, 28780, 28781, 28782, 28783, 28785, 28789, 28794, 28795, 28796,
+    28797, 28799, 28800, 28801, 28802, 28803, 28804, 28810,
+    -- Gruul's Lair
+    28822, 28823, 28824, 28825, 28826, 28827, 28828, 28830,
+    -- Magtheridon's Lair
+    29434, 29458,
+    -- Serpentshrine Cavern
+    29753, 29754, 29755, 29756, 29757, 29758, 29759, 29760, 29761, 29762,
+    29763, 29764, 29765, 29766, 29767, 29905, 29906, 29918, 29920, 29921,
+    29922, 29923, 29924, 29925, 29947, 29948, 29949, 29950, 29951, 29962,
+    29965, 29966, 29972, 29976, 29977, 29981, 29982, 29983, 29984, 29985,
+    29986, 29987, 29988, 29989, 29990, 29991, 29992, 29993, 29994, 29995,
+    29996, 29997, 29998, 30008, 30020, 30021, 30022, 30023, 30024, 30025,
+    30026, 30027, 30028, 30029, 30030, 30047, 30048, 30049, 30050, 30051,
+    30052, 30053, 30054, 30055, 30056, 30057, 30058, 30059, 30060, 30061,
+    30062, 30063, 30064, 30065, 30066, 30067, 30068, 30075, 30079, 30080,
+    30081, 30082, 30083, 30084, 30085, 30090, 30091, 30092, 30095, 30096,
+    30097, 30098, 30099, 30100, 30101, 30102, 30103, 30104, 30105, 30106,
+    30107, 30108, 30109, 30110, 30111, 30112, 30183, 30236, 30237, 30238,
+    30239, 30240, 30241, 30242, 30243, 30244, 30245, 30246, 30247, 30248,
+    30249, 30250,
+    -- Tempest Keep (The Eye)
+    30280, 30281, 30282, 30283, 30301, 30302, 30303, 30304, 30305, 30306,
+    30307, 30308, 30311, 30312, 30313, 30314, 30316, 30317, 30318, 30319,
+    30321, 30322, 30323, 30324, 30446, 30447, 30448, 30449, 30450, 30480,
+    30619, 30620, 30621, 30626, 30627, 30629, 30641, 30642, 30643, 30644,
+    30663, 30664, 30665, 30666, 30667, 30668, 30673, 30674, 30675, 30676,
+    30677, 30678, 30680, 30681, 30682, 30683, 30684, 30685, 30686, 30687,
+    30720, 31750, 31751, 32267, 32385, 32405, 32458, 32515, 32516, 32897,
+    32944, 33054, 33055, 33058, 34845, 34846,
+}
+
+----------------------------------------------------------------------
+-- Reverse index: itemId -> list of { name, class, type, order, isOffspec }
+-- Built from guild wishlist broadcasts + seeded with RAID_CATALOG.
+----------------------------------------------------------------------
+function Wishlist:RebuildItemIndex()
+    local index = {}
+    local guild = AmazingHub.db and AmazingHub.db.guildWishlists
+    if guild then
+        for _, charData in pairs(guild) do
+            local cc   = charData.class or ""
+            local name = charData.name  or ""
+            for _, item in ipairs(charData.wishlist or {}) do
+                -- Skip malformed entries (e.g. old TMB-era data lacking itemId)
+                if item.itemId then
+                if not index[item.itemId] then index[item.itemId] = {} end
+                table.insert(index[item.itemId], {
+                    name      = name,
+                    class     = cc,
+                    type      = "wishlist",
+                    order     = item.order,
+                    isOffspec = item.isOffspec,
+                })
+                end  -- end itemId guard
+            end
+        end
+    end
+
+    -- Sort entries within each item by order
+    for _, entries in pairs(index) do
+        table.sort(entries, function(a, b)
+            return (a.order or 999) < (b.order or 999)
+        end)
+    end
+
+    -- Seed static catalog so all raid items appear in search. They are TBC raid
+    -- drops, so only on TBC Anniversary (ADR-0014).
+    if AmazingHub.Client.isAnniversary then
+        for _, itemId in ipairs(RAID_CATALOG) do
+            if not index[itemId] then
+                index[itemId] = {}
+            end
+        end
+    end
+    -- Retail's from the Encounter Journal (issue #185).
+    for itemId in pairs(self.catalog or {}) do
+        if not index[itemId] then index[itemId] = {} end
+    end
+
+    self.itemIndex = index
+end
+
+----------------------------------------------------------------------
+-- Query: who wants a specific item
+----------------------------------------------------------------------
+function Wishlist:GetItemInterest(itemId)
+    if not self.itemIndex then return nil end
+    return self.itemIndex[itemId]
+end
+
+----------------------------------------------------------------------
+-- Item metadata helpers
+----------------------------------------------------------------------
+function Wishlist:GetItemName(itemId)
+    if not itemId then return L["Item #?"] end
+    local name = self:ItemFacts(itemId)
+    return name or (L["Item #"] .. itemId)
+end
+
+function Wishlist:GetItemQuality(itemId)
+    if not itemId then return 1 end
+    local _, _, quality = AmazingHub.Compat.GetItemInfo(itemId)
+    return quality or 1
+end
+
+----------------------------------------------------------------------
+-- Native Wishlist CRUD — operates on per-character wishlists[charKey]
+----------------------------------------------------------------------
+local WISHLIST_MAX = 50
+
+-- Returns (and lazily creates) the wishlist table for the current character.
+function Wishlist:GetMyList()
+    if not AmazingHub.db then return {} end
+    if not AmazingHub.db.wishlists then AmazingHub.db.wishlists = {} end
+    local charKey = AmazingHub:GetPlayerKey(AmazingHub.Compat.PlayerName() or "Unknown")
+    if not AmazingHub.db.wishlists[charKey] then
+        AmazingHub.db.wishlists[charKey] = {}
+    end
+    return AmazingHub.db.wishlists[charKey]
+end
+
+-- Add or update an item in the player's own wishlist.
+function Wishlist:AddToWishlist(itemId, itemLink, isOffspec)
+    if not AmazingHub.db then return end
+    local list = self:GetMyList()
+
+    -- If already present, update in place
+    for _, entry in ipairs(list) do
+        if entry.itemId == itemId then
+            entry.itemLink  = itemLink or entry.itemLink
+            entry.isOffspec = isOffspec or false
+            self:BroadcastMyWishlist()
+            AmazingHub:Print(format(L["[Wishlist] Updated: %s"], itemLink or (L["Item #"] .. itemId)))
+            return
+        end
+    end
+
+    if #list >= WISHLIST_MAX then
+        AmazingHub:Print(format(L["|cffFF4444[Wishlist]|r Item limit of %d reached."], WISHLIST_MAX))
+        return
+    end
+
+    local name = self:ItemFacts(itemId)
+    if not name then
+        AmazingHub:Print(L["|cffFF4444[Wishlist]|r Unknown item. Try again in a few seconds."])
+        return
+    end
+
+    table.insert(list, {
+        itemId    = itemId,
+        itemLink  = itemLink or "",
+        order     = #list + 1,
+        isOffspec = isOffspec or false,
+    })
+    self:BroadcastMyWishlist()
+    AmazingHub:Print(format(L["[Wishlist] Added #%d: %s"], #list, itemLink or name))
+    if AmazingHub.WishlistFrame and AmazingHub.WishlistFrame:IsShown() then
+        AmazingHub:RefreshWishlistFrame()
+    end
+end
+
+-- Remove an item from the player's own wishlist by itemId.
+-- Returns true if the local player has received this item via master-loot. On retail every row of
+-- the history is an item its player ended up with: personal loot, or an award recorded by trade
+-- (issue #185).
+function Wishlist:IsItemDelivered(itemId)
+    local history = AmazingHub.db and AmazingHub.db.lootHistory
+    if not history then return false end
+    local myName = AmazingHub.Compat.PlayerName()
+    local myKey  = AmazingHub:GetPlayerKey(myName)
+    for _, entry in ipairs(history) do
+        if (entry.fromML or isRetail) and entry.playerKey == myKey then
+            -- Match by itemId stored in entry, or extract from itemLink
+            local entryId = entry.itemId
+            if not entryId and entry.itemLink then
+                entryId = tonumber(entry.itemLink:match("item:(%d+)"))
+            end
+            if entryId == itemId then return true end
+        end
+    end
+    return false
+end
+
+function Wishlist:RemoveFromWishlist(itemId)
+    if not AmazingHub.db then return end
+    if self:IsItemDelivered(itemId) then
+        AmazingHub:Print(L["|cffFF4444[Wishlist]|r This item has already been delivered and cannot be removed."])
+        return
+    end
+    local list = self:GetMyList()
+    for i = #list, 1, -1 do
+        if list[i].itemId == itemId then
+            local link = list[i].itemLink
+            table.remove(list, i)
+            for j, e in ipairs(list) do e.order = j end
+            self:BroadcastMyWishlist()
+            AmazingHub:Print(format(L["[Wishlist] Removed: %s"], link ~= "" and link or (L["Item #"] .. itemId)))
+            if AmazingHub.WishlistFrame and AmazingHub.WishlistFrame:IsShown() then
+                AmazingHub:RefreshWishlistFrame()
+            end
+            return
+        end
+    end
+    AmazingHub:Print(L["[Wishlist] Item not found in your wishlist."])
+end
+
+-- Move an item up (-1) or down (+1) in the wishlist order.
+function Wishlist:ReorderWishlist(itemId, direction)
+    if not AmazingHub.db then return end
+    if self:IsItemDelivered(itemId) then return end
+    local list = self:GetMyList()
+    local idx
+    for i, e in ipairs(list) do
+        if e.itemId == itemId then idx = i break end
+    end
+    if not idx then return end
+    local newIdx = idx + direction
+    if newIdx < 1 or newIdx > #list then return end
+    list[idx], list[newIdx] = list[newIdx], list[idx]
+    for i, e in ipairs(list) do e.order = i end
+    self:BroadcastMyWishlist()
+    if AmazingHub.WishlistFrame and AmazingHub.WishlistFrame:IsShown() then
+        AmazingHub:RefreshWishlistFrame()
+    end
+end
+
+----------------------------------------------------------------------
+-- Guild broadcast — serialize and send this character's wishlist
+----------------------------------------------------------------------
+function Wishlist:BroadcastMyWishlist(force)
+    if not AmazingHub.db then return end
+    local list = self:GetMyList()
+
+    local myName  = AmazingHub.Compat.PlayerName()
+    local myClass = select(2, UnitClass("player")) or ""
+    -- On retail a guildmate is named with their realm (issue #185).
+    if isRetail then myName = AmazingHub:GetPlayerKey(myName) end
+
+    -- Store own data locally immediately (WoW does not echo addon messages back to sender)
+    if not AmazingHub.db.guildWishlists then
+        AmazingHub.db.guildWishlists = {}
+    end
+    local myKey = strlower(myName or "")
+    -- An empty list is stored as no entry, which would be a ghost with 0 items in every guildmate's
+    -- panel. It is said when the last item goes, or that item stays with them (issue #170), and
+    -- again by the Sync button (`force`), for whoever was offline then. A login stays quiet.
+    if #list == 0 and not force and not AmazingHub.db.guildWishlists[myKey] then return end
+    AmazingHub.db.guildWishlists[myKey] = #list > 0 and {
+        name     = myName,
+        class    = myClass,
+        wishlist = list,
+    } or nil
+    self:RebuildItemIndex()
+
+    -- Broadcast to guild
+    if AmazingHub.CommSystem then
+        local payload = {
+            name     = myName,
+            class    = myClass,
+            wishlist = list,
+        }
+        local LibSerialize = LibStub("AmazingHub-LibSerialize")
+        local serialized  = LibSerialize:Serialize(payload)
+        AmazingHub.CommSystem:SendMessage("WL", serialized)
+    end
+end
+
+-- Handle an incoming wishlist broadcast from another guild member. `channel`: how it arrived (retail
+-- takes it only over GUILD, issue #185; Forever and Anniversary as before, from anywhere).
+function Wishlist:HandleWishlistBroadcast(sender, data, channel)
+    local LibSerialize = LibStub("AmazingHub-LibSerialize")
+    local ok, payload = LibSerialize:Deserialize(data)
+    if not ok or type(payload) ~= "table" then return end
+
+    local name     = payload.name or sender
+    local class    = payload.class or ""
+    local wishlist = payload.wishlist
+    if not wishlist or type(wishlist) ~= "table" then return end
+    -- On retail the list is its sender's, by their whole key: never the name it carries, so nobody
+    -- files a list under a guildmate's name, and namesakes on connected realms stay apart; and only a
+    -- guildmate's, over GUILD, so nobody outside the guild shows up as one (issue #185).
+    local me = AmazingHub.Compat.PlayerName() or ""
+    if isRetail then
+        if type(sender) ~= "string" or sender == "" or channel ~= "GUILD" then return end
+        name, me = AmazingHub:KeyOfRosterName(sender), AmazingHub:GetPlayerKey(me)
+        if not AmazingHub:IsGuildmate(name) then return end
+    end
+    if type(name) ~= "string" then return end
+
+    -- Don't overwrite our own data with a stale broadcast of ourselves
+    if strlower(name) == strlower(me) then return end
+
+    if not AmazingHub.db.guildWishlists then
+        AmazingHub.db.guildWishlists = {}
+    end
+    local key = strlower(name)
+    AmazingHub.db.guildWishlists[key] = #wishlist > 0 and {
+        name     = name,
+        class    = class,
+        wishlist = wishlist,
+    } or nil
+    self:RebuildItemIndex()
+end
+
+----------------------------------------------------------------------
+-- Tooltip hook — shows who has the hovered item on their wishlist
+----------------------------------------------------------------------
+function Wishlist:HookTooltips()
+    local function OnTooltipSetItem(tooltip)
+        if not self.itemIndex then return end
+        if not AmazingHub:ShowsItemTooltipInfo(tooltip) then return end
+
+        local _, link = AmazingHub.Compat.TooltipItem(tooltip)
+        if not link then return end
+
+        local itemId = tonumber(link:match("item:(%d+)"))
+        if not itemId then return end
+
+        local entries = self.itemIndex[itemId]
+        if not entries or #entries == 0 then return end
+
+        tooltip:AddLine(" ")
+        tooltip:AddLine(L["On the wishlist of:"],
+            self.TypeColors.wishlist.r,
+            self.TypeColors.wishlist.g,
+            self.TypeColors.wishlist.b)
+        for _, e in ipairs(entries) do
+            local cc    = AmazingHub.ClassColors[e.class:upper()] or AmazingHub.Colors.white
+            local label = "#" .. e.order .. (e.isOffspec and L[" (OS)"] or "")
+            tooltip:AddDoubleLine("  " .. e.name, label,
+                cc.r, cc.g, cc.b, 0.7, 0.7, 0.7)
+        end
+
+        tooltip:Show()
+    end
+
+    -- A tooltip that is not built yet, or lacks the script, is skipped.
+    AmazingHub.Compat.HookTooltip(GameTooltip, "OnTooltipSetItem", OnTooltipSetItem)
+    AmazingHub.Compat.HookTooltip(ItemRefTooltip, "OnTooltipSetItem", OnTooltipSetItem)
+    AmazingHub.Compat.HookTooltip(ShoppingTooltip1, "OnTooltipSetItem", OnTooltipSetItem)
+    AmazingHub.Compat.HookTooltip(ShoppingTooltip2, "OnTooltipSetItem", OnTooltipSetItem)
+end
+
+----------------------------------------------------------------------
+-- Loot Prios broadcast / receive
+-- Structure: db.lootPrios[itemId] = { {name, class, order}, ... }
+-- Officers set and sync prios; all members receive and store them.
+----------------------------------------------------------------------
+function Wishlist:BroadcastLootPrios()
+    if not AmazingHub.CommSystem then return end
+    if not AmazingHub.db or not AmazingHub.db.lootPrios then return end
+    local LibSerialize = LibStub("AmazingHub-LibSerialize")
+    local serialized = LibSerialize:Serialize(AmazingHub.db.lootPrios)
+    AmazingHub.CommSystem:SendMessage("LP", serialized)
+end
+
+-- Reached only through CommSystem:OnMessageReceived, which has checked the sender is an officer
+-- and the channel GUILD (issue #78). Any other caller must check the same.
+function Wishlist:HandleLootPriosBroadcast(sender, data)
+    local LibSerialize = LibStub("AmazingHub-LibSerialize")
+    local ok, payload = LibSerialize:Deserialize(data)
+    if not ok or type(payload) ~= "table" then return end
+
+    if not AmazingHub.db then return end
+    AmazingHub.db.lootPrios = payload
+    self:RebuildItemIndex()
+    AmazingHub:Print(L["[Wishlist] Priorities updated by "] .. (sender or "?"))
+end

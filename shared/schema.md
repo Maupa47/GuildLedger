@@ -1,7 +1,8 @@
 # GuildLedger row formats and ID rules
 
 Shared contract between the addon (SavedVariables), the companion (spool.db, uploads) and the bot (archive).
-Schema version **2** (since 2026-11-13; 1 → 2 adds the chat key `rb`, the archive column `relayed_by` and
+Schema version **3** (since 2026-11-13; 2 → 3 adds `guilds[..].links` and the account key `link`;
+before that: 1 → 2 adds the chat key `rb`, the archive column `relayed_by` and
 `opts.collector`; schema-1 files and uploads stay readable). Any change needs a `schema` bump and a migration
 in all three (CLAUDE.md 10.6).
 
@@ -98,6 +99,47 @@ gzip-compressed JSON Lines, ≤ 500 KB per file. First line per guild: `{"type":
 (events also carry `w` when known). Upload-only key `pd: true`: this collector already posted the row
 itself in direct mode; the bot archives it as posted and never posts it again (switching a collector
 from direct to upload mode causes no duplicates). Message `content`: `gl1 <collector> <rowcount> <sha256 of the gz file>`;
-`rowcount` counts chat and event rows, not the guild line. The bot takes the collector name from its own
+`rowcount` counts chat and event rows (and a roster record as one row), not the guild line.
+Roster record (pack step R, 2026-11-13): `{"type": "roster", "guild": …, "at": <rosterAt>, "members": [{g, n, r, rn,
+l, c, fs, ls}, …]}` — the collector's whole trusted roster, sent once per new snapshot. The receiver updates every
+listed member (first_seen only down, last_seen only up); only the newest snapshot (by `at`) sets `in_guild`, so a
+late upload of an older list never marks anyone as gone. Members table gains `rank_name, rank_index, level, class`
+(additive migration in companion and bot). **Deploy the bot before collectors get a companion that sends roster
+records:** older bots reject the unknown record type. The bot takes the collector name from its own
 webhook-ID list, never from the file. A row the companion changes after uploading it (text filled, flags,
 actor) is uploaded again; the bot merges it by the rules above.
+
+## 5. Addon messages and budgets (guild channel, prefix `GuildLedger`)
+
+All kinds go through `Comms.lua`: one queue per client, **at most 1 message per second per client** (all
+kinds together), priorities HIGH > NORMAL > BULK, at most 300 waiting (the oldest of the lowest priority is
+dropped), held during a boss-fight lock or a throttle. Every message ≤ 255 bytes. Budgets below assume
+**1 000 members, all online** (worst case); a typical evening has 100–200 online.
+
+| Kind | Sender | When | Priority | Worst case, whole guild |
+|---|---|---|---|---|
+| `H` hello | everyone | 20 s after login, then every 15 min; once per answered `W` | NORMAL | 1 000 / 900 s ≈ 1.1 msg/s (67/min) |
+| `W` who | whoever types `/gl who` | at most once per 60 s per asker | NORMAL | 1 per asker; answers: each player at most one `H` per 5 min, spread over 30 s → ≤ 1 000 `H` in 30 s (≈ 33/s) once per 5 min |
+| `N` need | collectors | ~30 s after their history sync, on a member's first hello (≥ 2 min apart), every 15 min while gaps remain; ≤ 3 messages per round | NORMAL | with 5 collectors: ≤ 15 per 2 min |
+| `T` line | members (and collectors) holding asked lines | after a `N`, 2–8 s delay, ≤ 150 lines per round, 1–3 messages per line; others back off while one answers | BULK | ≤ 450 per round, paced 1/s by the answering client |
+| `G` got | collectors | every 5 s while lines arrived, ≤ 6 ids per message | NORMAL | ≤ 1 per 6 relayed lines |
+| `V` map watch | players with the world map open (pins on) | on opening/changing the map, then every 30 s while open | HIGH | 1 per 30 s per viewer; 200 viewers ≈ 7/s |
+| `L` link request | a member who typed `/gl link CODE` | at once, then every 3 min until a collector answers `Y`, at most 30 min | HIGH | ≤ 10 per linking member |
+| `Y` link received | collectors | answer to `L`, ≤ 1 per code per minute | HIGH | ≤ 1 per `L` |
+| `A` alt | characters of an account that requested a link | once per session, 45 s after login | HIGH | ≤ 1 per login of a linked account |
+| `P` map position | players with sharing on (off by default) | only while a `V` for their zone or a parent map was heard in the last 45 s; ≤ 1 per 10 s, only after moving or every 30 s | HIGH | 50 sharers in one watched zone, all moving: 5/s; nobody looking: 0 |
+
+Receivers: every online GuildLedger client receives every message; handling one is a table lookup (no
+disk, no chat output). New kinds (map, link) must add their row here before code (docs/PACK_PLAN.md rule 9).
+
+## 6. Discord link (schema 3, docs/PACK_PLAN.md section 10)
+
+SavedVariables: collectors keep `guilds["<clubId>"].links` (ring buffer, 500): `{ id, t, k = "link"|"alt", code?, tag,
+n = sender as the game gives it, g = GUID from the collector's roster if known }`; every account keeps `link =
+{ tag, pending = { code, at, acked }, requested }`. Upload type `link` (same keys). Companion and bot table
+`link_rows(guild, id, ts_utc, kind, code, tag, name, guid, first_collector, uploaded, processed)`.
+Bot tables: `link_codes(code, discord_user_id, created_at, used_at)`, `links(guild, guid, name, discord_user_id, tag,
+linked_at, via_collector)`, `link_blocks(discord_user_id, guild, guid)`, `link_confirms(id, discord_user_id, guild,
+guid, name, tag, code, via_collector, created_at, status open|confirmed|rejected|expired, notified 0|1|2)`,
+`link_user_state(discord_user_id, out_since)`. Only a confirmation by the Discord user creates a `links` row; "Not me"
+adds a block.

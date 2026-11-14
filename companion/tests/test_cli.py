@@ -85,3 +85,24 @@ def test_resolve_tz_fallbacks():
     assert resolve_tz("UTC") is timezone.utc
     assert resolve_tz("local") is None
     assert resolve_tz("Not/AZone") is None
+
+
+def test_single_instance_lock(tmp_path):
+    from guildledger.lock import InstanceLock
+    first, second = InstanceLock(tmp_path / "watch.lock"), InstanceLock(tmp_path / "watch.lock")
+    assert first.acquire()
+    assert not second.acquire()  # a second companion on the same folder is refused
+    first.release()
+    assert second.acquire()
+    second.release()
+
+
+def test_watch_refuses_to_run_twice(tmp_path, fixtures, caplog):
+    from guildledger.lock import InstanceLock
+    sv = tmp_path / "GuildLedger.lua"
+    shutil.copy(fixtures / "basic.lua", sv)
+    cfg = write_config(tmp_path, sv, "[watch]\nstable_seconds = 0.01\npoll_seconds = 0.01\n")
+    with InstanceLock(tmp_path / "watch.lock") as held:
+        assert held.acquire()
+        assert main(["--config", str(cfg), "watch", "--once", "--no-post"]) == 1
+    assert "already running" in caplog.text

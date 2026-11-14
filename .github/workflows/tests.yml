@@ -1,0 +1,19 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: pip install pytest lupa "discord.py>=2.4,<3"
+      - name: Run all tests (addon under Lua 5.1, companion, bot)
+        run: python -m pytest addon/tests companion/tests bot/tests -q

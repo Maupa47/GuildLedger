@@ -1,23 +1,27 @@
--- Relay (CLAUDE.md 5.7): a collector asks "who has text for these times?" over hidden guild addon
--- messages; members (and other collectors) answer with the lines they captured live; the collector
--- fills its text-less rows after checking stream, time and author, and confirms so everyone drops them.
---   H version role held      hello
---   N stream t1-t2,t3-t4     need (collector)
---   T id k/n chunk           one line, chunk 1 = "s TAB t TAB author TAB guid TAB fd TAB text..."
---   G id,id,...              got it (collector)
+-- Relay (CLAUDE.md 5.7): a collector asks "who has text for these times?"; members (and other collectors)
+-- answer with the lines they captured live; the collector fills its text-less rows after checking
+-- stream, time and author, and confirms so everyone drops them. Sends and receives through Comms.lua.
+--   H version role held given filled   hello (20 s after login, then every 15 min)
+--   W                                  who is online? (everyone answers with H, spread over WHO_SPREAD s)
+--   N stream t1-t2,t3-t4               need (collector)
+--   T id k/n chunk                     one line, chunk 1 = "s TAB t TAB author TAB guid TAB fd TAB text..."
+--   G id,id,...                        got it (collector)
+-- Older versions (0.2.x) send H with only "held" after the role.
 
 local _, ns = ...
 local C, S = ns.Compat, ns.Store
+local Comms = ns.Comms
 local M = ns.Module("Relay")
 ns.Relay = M
 
-local PREFIX = "GuildLedger"
-local SEP = "\t"
-local SEND_GAP = 1.0 -- s between two outgoing messages
-local THROTTLE_WAIT = 4 -- s after the game said "too fast"
-local QUEUE_MAX = 300
+local SEP = Comms.SEP
 local CHUNK = 200 -- bytes of line data per T message (whole message stays under 255)
 local HELLO_DELAY = 20
+local HELLO_EVERY = 900 -- s: everybody repeats hello, so /gl who knows who is online
+local WHO_SPREAD = 30 -- s: answers to a who request are spread over this
+local WHO_ANSWER_GAP = 300 -- s: answer a who request at most this often
+local WHO_ASK_GAP = 60 -- s: /gl who asks again at most this often
+local WHO_FRESH = 1800 -- s: /gl who lists players heard within this
 local ANSWER_MIN, ANSWER_MAX = 2, 8 -- s random wait before answering a need
 local ANSWER_CAP = 150 -- lines per need
 local NEED_WINDOW = 27 * 3600 -- how far back the server history (and so the gaps) reach
@@ -29,20 +33,24 @@ local ACK_EVERY = 5
 local ACK_IDS = 6
 local PRUNE_EVERY = 300
 local PARTS_TTL = 120
+local PARTS_MAX, PARTS_PER_SENDER = 200, 40 -- unfinished multi-part lines a collector keeps
+local NEED_ROUND = 10 -- s: needs from one asker this close together are one round (a long list comes in pieces)
+local NEED_ANSWER_GAP = 60 -- s: a new round from the same asker is answered at most this often
 local HEARD_TTL = 3600
+local FOREIGN_QUIET = 5 -- s: someone else is answering while their lines keep coming
 
-local queue = {} -- { msgs = { text, ... }, idx = 1, id = line id or nil }
-local nextSendAt = 0
 local heard = {} -- [id] = GetTime(): somebody already sent or confirmed this line
-local partsBuf = {} -- [sender .. "|" .. id] = { n, chunks = {}, got, at }
+local queued = {} -- [id] = GetTime(): one of our own answers is waiting in the queue
+local partsBuf = {} -- [sender .. "|" .. id] = { n, chunks = {}, got, at, sender }
 local pendingAck = {}
 local lastNeed, needScheduled = -1e9, false
 local collectors = {} -- [sender] = GetTime() of their last hello
-local stats = { sent = 0, received = 0, answered = 0, relayed = 0, rejected = 0, dropped = 0, lastNeed = nil,
-    lastResult = nil }
-local registered, helloSent = false, false
+local seen = {} -- [sender] = { ver, role, at, held, given, filled }: everyone who said hello
+local roundAt = {} -- [asker] = GetTime() when their current need round started
+local whoAnsweredAt, whoAskedAt = -1e9, -1e9
 local lastForeignText = -1e9 -- GetTime() of the last line another player sent
-local FOREIGN_QUIET = 5 -- s: someone else is answering while their lines keep coming
+local helloSent = false
+local stats = { answered = 0, relayed = 0, rejected = 0, lastNeed = nil }
 
 ---------------------------------------------------------------------------------------------------
 -- Helpers
@@ -52,86 +60,12 @@ local function club()
     if ns.Chat and ns.Chat.Club then return ns.Chat.Club() end
 end
 
-local function isSelf(sender)
-    local me = C.PlayerName()
-    if not me or type(sender) ~= "string" then return false end
-    return sender == me or sender:sub(1, #me + 1) == me .. "-"
-end
-
--- Split s into pieces of at most max bytes without cutting a UTF-8 character.
-local function splitUtf8(s, max)
-    local out, i, n = {}, 1, #s
-    if n == 0 then return { "" } end
-    while i <= n do
-        local j = math.min(i + max - 1, n)
-        while j < n and j > i do
-            local b = s:byte(j + 1)
-            if b < 128 or b >= 192 then break end -- next byte starts a character: cut here
-            j = j - 1
-        end
-        out[#out + 1] = s:sub(i, j)
-        i = j + 1
-    end
-    return out
-end
-M.splitUtf8 = splitUtf8
-
-local function enqueue(item)
-    if #queue >= QUEUE_MAX then
-        table.remove(queue, 1)
-        stats.dropped = stats.dropped + 1
-    end
-    item.idx = 1
-    queue[#queue + 1] = item
-end
-
-local function enqueueText(text) enqueue({ msgs = { text } }) end
-
----------------------------------------------------------------------------------------------------
--- Sending: one message per SEND_GAP, held while the game would refuse it
----------------------------------------------------------------------------------------------------
-
-local function sendNext()
-    local item = queue[1]
-    if not item or C.Clock() < nextSendAt or C.CommBlocked() then return end
-    if item.id and item.idx == 1 and heard[item.id] then -- another player sent or confirmed it meanwhile
-        table.remove(queue, 1)
-        return
-    end
-    local r = C.SendGuild(PREFIX, item.msgs[item.idx])
-    if r ~= stats.lastResult then
-        ns.Debug("relay: send result " .. tostring(r) .. " (0 = ok)")
-        stats.lastResult = r
-    end
-    if r == C.SEND_OK then
-        stats.sent = stats.sent + 1
-        item.idx = item.idx + 1
-        if item.idx > #item.msgs then
-            table.remove(queue, 1)
-            if item.id then
-                heard[item.id] = C.Clock()
-                stats.answered = stats.answered + 1
-            end
-        end
-    elseif r == C.SEND_LOCKDOWN then
-        nextSendAt = C.Clock() + 5 -- boss fight: keep it, try again later
-    elseif r and C.SEND_THROTTLED[r] then
-        nextSendAt = C.Clock() + THROTTLE_WAIT
-    else
-        table.remove(queue, 1) -- refused for good (or no API): drop, never retry forever
-        stats.dropped = stats.dropped + 1
-        ns.Debug("relay: message refused (" .. tostring(r) .. ")")
-    end
-end
-
----------------------------------------------------------------------------------------------------
--- Member side: answer a need with own lines
----------------------------------------------------------------------------------------------------
+M.splitUtf8 = Comms.SplitUtf8
 
 local function lineMessages(row)
     local payload = table.concat({ row.s, tostring(row.t), row.a or "", row.g or "", row.fd and "1" or "0",
         row.m }, SEP)
-    local chunks = splitUtf8(payload, CHUNK)
+    local chunks = Comms.SplitUtf8(payload, CHUNK)
     local msgs = {}
     for k, chunk in ipairs(chunks) do
         msgs[k] = table.concat({ "T", row.id, k .. "/" .. #chunks, chunk }, SEP)
@@ -140,14 +74,66 @@ local function lineMessages(row)
 end
 M.lineMessages = lineMessages
 
-local function onNeed(sender, s, rangesText)
+local function myCounts()
     local cid = club()
-    if not cid or isSelf(sender) then return end
+    local held = (cid and not S.IsCollector()) and #S.Guild(cid).chat or 0
+    return held, stats.answered, stats.relayed
+end
+
+local function hello()
+    if not club() then return false end
+    local held, given, filled = myCounts()
+    Comms.Send(table.concat({ "H", S.VERSION, S.IsCollector() and "c" or "m", tostring(held), tostring(given),
+        tostring(filled) }, SEP), Comms.NORMAL)
+    helloSent = true
+    return true
+end
+
+-- "0.2.10" > "0.2.9": compare dotted numbers.
+local function older(a, b)
+    local x, y = {}, {}
+    for n in tostring(a):gmatch("%d+") do x[#x + 1] = tonumber(n) end
+    for n in tostring(b):gmatch("%d+") do y[#y + 1] = tonumber(n) end
+    for i = 1, math.max(#x, #y) do
+        if (x[i] or 0) ~= (y[i] or 0) then return (x[i] or 0) < (y[i] or 0) end
+    end
+    return false
+end
+M.older = older
+
+---------------------------------------------------------------------------------------------------
+-- Member side: answer a need with own lines
+---------------------------------------------------------------------------------------------------
+
+local function queueLine(row)
+    local id = row.id
+    queued[id] = C.Clock()
+    Comms.Queue({
+        msgs = M.lineMessages(row), prio = Comms.BULK,
+        skip = function() return heard[id] ~= nil end, -- another player sent or confirmed it meanwhile
+        onSent = function()
+            queued[id] = nil
+            heard[id] = C.Clock()
+            stats.answered = stats.answered + 1
+        end,
+        onDrop = function() queued[id] = nil end,
+    })
+end
+
+local function onNeed(sender, text, me)
+    local s, rangesText = text:match("^N\t(%a)\t(.+)$")
+    local cid = club()
+    if not s or not cid or me then return end
+    local now = C.Clock()
+    local started = roundAt[sender] or -1e9
+    if now - started >= NEED_ANSWER_GAP then
+        roundAt[sender] = now -- a new round
+    elseif now - started > NEED_ROUND then
+        return -- same asker again too soon: ignored (spam protection)
+    end
     local ranges = {}
     for a, b in rangesText:gmatch("(%d+)%-(%d+)") do ranges[#ranges + 1] = { tonumber(a), tonumber(b) } end
     if #ranges == 0 then return end
-    local queued = {}
-    for _, item in ipairs(queue) do if item.id then queued[item.id] = true end end
     local rows = {}
     for _, row in ipairs(S.Guild(cid).chat) do
         if row.s == s and row.m and row.src == "live" and not heard[row.id] and not queued[row.id] then
@@ -170,7 +156,7 @@ local function onNeed(sender, s, rangesText)
             return
         end
         for _, row in ipairs(rows) do
-            if not heard[row.id] then enqueue({ msgs = lineMessages(row), id = row.id }) end
+            if not heard[row.id] and not queued[row.id] then queueLine(row) end
         end
     end
     C.After(math.random(ANSWER_MIN, ANSWER_MAX), function() ns.Safe("Relay.answer", answer) end)
@@ -229,7 +215,7 @@ local function sendNeeds()
     if #msgs == 0 then return end
     stats.lastNeed = C.Now()
     ns.Debug(string.format("relay: asking for text gaps (%d message(s))", #msgs))
-    for _, m in ipairs(msgs) do enqueueText(m) end
+    for _, m in ipairs(msgs) do Comms.Send(m, Comms.NORMAL) end
 end
 
 local function scheduleNeeds(delay)
@@ -269,7 +255,7 @@ local function flushAcks()
     while #pendingAck > 0 do
         local ids = {}
         while #pendingAck > 0 and #ids < ACK_IDS do ids[#ids + 1] = table.remove(pendingAck, 1) end
-        enqueueText("G" .. SEP .. table.concat(ids, ","))
+        Comms.Send("G" .. SEP .. table.concat(ids, ","), Comms.NORMAL)
     end
 end
 
@@ -277,14 +263,26 @@ end
 -- Receiving
 ---------------------------------------------------------------------------------------------------
 
-local function onText(sender, id, k, n, chunk)
+local function onText(sender, text, me)
+    local id, k, n, chunk = text:match("^T\t([^\t]+)\t(%d+)/(%d+)\t(.*)$")
+    if not id or me then return end
+    k, n = tonumber(k), tonumber(n)
     heard[id] = C.Clock() -- members: someone is sending this line, skip it
     lastForeignText = C.Clock()
     if not S.IsCollector() or n < 1 or n > 20 or k < 1 or k > n then return end
     local key = sender .. "|" .. id
     local p = partsBuf[key]
     if not p then
-        p = { n = n, chunks = {}, got = 0, at = C.Clock() }
+        -- Bounded: one sender cannot make us keep endless half-received lines.
+        local total, mine, oldestKey, oldestAt = 0, 0, nil, math.huge
+        for kk, q in pairs(partsBuf) do
+            total = total + 1
+            if q.sender == sender then mine = mine + 1 end
+            if q.at < oldestAt then oldestKey, oldestAt = kk, q.at end
+        end
+        if mine >= PARTS_PER_SENDER then return end
+        if total >= PARTS_MAX and oldestKey then partsBuf[oldestKey] = nil end
+        p = { n = n, chunks = {}, got = 0, at = C.Clock(), sender = sender }
         partsBuf[key] = p
     end
     if p.n ~= n or p.chunks[k] then return end
@@ -295,7 +293,9 @@ local function onText(sender, id, k, n, chunk)
     accept(sender, id, table.concat(p.chunks))
 end
 
-local function onGot(idsText)
+local function onGot(_, text)
+    local idsText = text:match("^G\t(.+)$")
+    if not idsText then return end
     local ids, any = {}, false
     for id in idsText:gmatch("[^,]+") do
         ids[id] = true
@@ -306,86 +306,160 @@ local function onGot(idsText)
     if any and cid and not S.IsCollector() then S.RemoveChat(cid, ids) end -- members drop confirmed lines
 end
 
-ns.On("CHAT_MSG_ADDON", function(prefix, text, channel, sender)
-    if C.IsSecret(prefix, text, channel, sender) then return end
-    if prefix ~= PREFIX or channel ~= "GUILD" or type(text) ~= "string" or type(sender) ~= "string" then return end
-    if not isSelf(sender) then stats.received = stats.received + 1 end
-    local kind = text:sub(1, 1)
-    if kind == "T" then
-        local id, k, n, chunk = text:match("^T\t([^\t]+)\t(%d+)/(%d+)\t(.*)$")
-        if id and not isSelf(sender) then onText(sender, id, tonumber(k), tonumber(n), chunk) end
-    elseif kind == "N" then
-        local s, ranges = text:match("^N\t(%a)\t(.+)$")
-        if s then onNeed(sender, s, ranges) end
-    elseif kind == "G" then
-        local ids = text:match("^G\t(.+)$")
-        if ids then onGot(ids) end
-    elseif kind == "H" then
-        local ver, role = text:match("^H\t([^\t]*)\t([cm])")
-        if not ver or isSelf(sender) then return end
-        if role == "c" then collectors[sender] = C.Clock() end
-        ns.Debug(string.format("relay: hello from %s (%s, v%s)", sender, role == "c" and "collector" or "member", ver))
-        -- A member who just logged in may hold text for our gaps.
-        if role == "m" and S.IsCollector() and C.Clock() - lastNeed >= NEED_MIN_GAP then scheduleNeeds(5) end
+local function onHello(sender, text, me)
+    local ver, role, rest = text:match("^H\t([^\t]*)\t([cm])(.*)$")
+    if not ver or me then return end
+    local held, given, filled = rest:match("^\t(%d+)\t?(%d*)\t?(%d*)")
+    local before = seen[sender]
+    if role == "c" then collectors[sender] = C.Clock() end
+    seen[sender] = { ver = ver, role = role, at = C.Clock(), held = tonumber(held), given = tonumber(given),
+        filled = tonumber(filled) }
+    ns.Debug(string.format("relay: hello from %s (%s, v%s)", sender, role == "c" and "collector" or "member", ver),
+        before ~= nil)
+    -- A member who just logged in may hold text for our gaps (periodic hellos do not count).
+    local fresh = not before or C.Clock() - before.at > WHO_FRESH
+    if fresh and role == "m" and S.IsCollector() and C.Clock() - lastNeed >= NEED_MIN_GAP then
+        scheduleNeeds(5)
     end
-end)
-
----------------------------------------------------------------------------------------------------
--- Startup, housekeeping, status
----------------------------------------------------------------------------------------------------
-
-local function hello()
-    local cid = club()
-    if not cid then return false end
-    local held = S.IsCollector() and 0 or #S.Guild(cid).chat
-    enqueueText(table.concat({ "H", S.VERSION, S.IsCollector() and "c" or "m", tostring(held) }, SEP))
-    helloSent = true
-    return true
 end
+
+local function onWho(_, _, me)
+    if me or C.Clock() - whoAnsweredAt < WHO_ANSWER_GAP then return end
+    whoAnsweredAt = C.Clock()
+    C.After(math.random(1, WHO_SPREAD), function() ns.Safe("Relay.hello", hello) end)
+end
+
+Comms.Handle("N", onNeed)
+Comms.Handle("T", onText)
+Comms.Handle("G", onGot)
+Comms.Handle("H", onHello)
+Comms.Handle("W", onWho)
+
+---------------------------------------------------------------------------------------------------
+-- Startup, housekeeping
+---------------------------------------------------------------------------------------------------
 
 local function housekeeping()
     local now = C.Clock()
     for id, at in pairs(heard) do if now - at > HEARD_TTL then heard[id] = nil end end
+    for id, at in pairs(queued) do if now - at > HEARD_TTL then queued[id] = nil end end
     for key, p in pairs(partsBuf) do if now - p.at > PARTS_TTL then partsBuf[key] = nil end end
     for who, at in pairs(collectors) do if now - at > 4 * 3600 then collectors[who] = nil end end
+    for who, v in pairs(seen) do if now - v.at > 4 * 3600 then seen[who] = nil end end
     local cid = club()
     if cid and not S.IsCollector() then S.PruneMember(cid, C.Now()) end
 end
 
 function M.OnInit()
     if not C.HasComm then return end
-    if not registered then
-        C.RegisterPrefix(PREFIX)
-        registered = true
-    end
-    C.Ticker(SEND_GAP, function() ns.Safe("Relay.send", sendNext) end)
     C.Ticker(ACK_EVERY, function() ns.Safe("Relay.ack", flushAcks) end)
     C.Ticker(PRUNE_EVERY, function() ns.Safe("Relay.prune", housekeeping) end)
     C.Ticker(NEED_EVERY, function() ns.Safe("Relay.need", sendNeeds) end)
     C.Ticker(HELLO_DELAY, function()
         if not helloSent then ns.Safe("Relay.hello", hello) end
     end)
+    C.Ticker(HELLO_EVERY, function()
+        if helloSent then ns.Safe("Relay.hello", hello) end
+    end)
+end
+
+---------------------------------------------------------------------------------------------------
+-- /gl who and /gl status
+---------------------------------------------------------------------------------------------------
+
+-- Plain copy: { [player] = version } of everyone heard in the last 4 hours (GuildLedgerAPI).
+function M.VersionsSeen()
+    local out = {}
+    for who, v in pairs(seen) do out[who] = v.ver end
+    return out
+end
+
+local function describe(v)
+    local parts = { "version " .. v.ver .. (older(v.ver, S.VERSION) and " |cffffaa00(outdated)|r" or "") }
+    if v.role == "c" then
+        if v.filled then parts[#parts + 1] = string.format("filled %d line(s) from members", v.filled) end
+    else
+        if v.held then parts[#parts + 1] = string.format("keeps %d line(s)", v.held) end
+        if v.given then parts[#parts + 1] = string.format("gave %d to collectors", v.given) end
+    end
+    local ago = math.floor((C.Clock() - v.at) / 60)
+    parts[#parts + 1] = ago < 1 and "just now" or string.format("%d min ago", ago)
+    return table.concat(parts, " - ")
+end
+
+local function printWho()
+    local now = C.Clock()
+    local col, mem = {}, {}
+    for who, v in pairs(seen) do
+        if now - v.at <= WHO_FRESH then
+            table.insert(v.role == "c" and col or mem, { who = who, v = v })
+        end
+    end
+    table.sort(col, function(a, b) return a.who < b.who end)
+    table.sort(mem, function(a, b) return a.who < b.who end)
+    local held, given, filled = myCounts()
+    local me = { ver = S.VERSION, role = S.IsCollector() and "c" or "m", at = now, held = held, given = given,
+        filled = filled }
+    ns.Print(string.format("players online with GuildLedger: %d (you included)", #col + #mem + 1))
+    ns.Head("You")
+    ns.Line((S.IsCollector() and "Collector" or "Member") .. " - " .. describe(me))
+    ns.Head(string.format("Collectors (%d)", #col))
+    if #col == 0 then ns.Line("none online") end
+    for _, e in ipairs(col) do ns.Line(e.who .. " - " .. describe(e.v)) end
+    ns.Head(string.format("Members (%d)", #mem))
+    if #mem == 0 then ns.Line("none heard yet") end
+    for _, e in ipairs(mem) do ns.Line(e.who .. " - " .. describe(e.v)) end
+end
+
+-- /gl who: ask everyone online, show the list once the answers are in.
+function M.Who()
+    if not C.HasComm then
+        ns.Print("sharing with other players is not available in this game version")
+        return
+    end
+    if C.Clock() - whoAskedAt < WHO_ASK_GAP then
+        printWho()
+        return
+    end
+    whoAskedAt = C.Clock()
+    Comms.Send("W", Comms.NORMAL)
+    ns.Print(string.format("asking everyone online who has GuildLedger; the list follows in about %d seconds.",
+        WHO_SPREAD + 5))
+    C.After(WHO_SPREAD + 5, function() ns.Safe("Relay.who", printWho) end)
 end
 
 function M.Status()
+    ns.Head("Sharing with other players")
     if not C.HasComm then
-        ns.Print("relay: |cffffaa00off|r (addon messages not available)")
+        ns.Line("Not available in this game version.")
         return
     end
-    local cid = club()
+    if S.IsCollector() then
+        ns.Line(string.format("Lines filled in by members since login: %d%s.", stats.relayed,
+            stats.rejected > 0 and (" (" .. stats.rejected .. " refused because they did not match)") or ""))
+        ns.Line("Last asked members for missing lines: "
+            .. (stats.lastNeed and date("%H:%M", stats.lastNeed) or "not yet") .. ".")
+    else
+        ns.Line(string.format("Lines given to collectors since login: %d.", stats.answered))
+    end
+    Comms.StatusLines()
     local names = {}
     for who in pairs(collectors) do names[#names + 1] = who end
     table.sort(names)
-    if S.IsCollector() then
-        ns.Print(string.format("relay: role |cff33ff33collector|r; filled %d line(s) from members, rejected %d;"
-            .. " last ask %s; queue %d", stats.relayed, stats.rejected,
-            stats.lastNeed and date("%H:%M", stats.lastNeed) or "never", #queue))
-    else
-        ns.Print(string.format("relay: role member; holding %d line(s) for collectors, sent %d;"
-            .. " queue %d", cid and #S.Guild(cid).chat or 0, stats.answered, #queue))
+    ns.Line("Collectors online: " .. (#names > 0 and table.concat(names, ", ") or "none seen yet") .. ".")
+    local versions, outdated = {}, {}
+    for who, v in pairs(seen) do
+        versions[v.ver] = (versions[v.ver] or 0) + 1
+        if older(v.ver, S.VERSION) then outdated[#outdated + 1] = who .. " (" .. v.ver .. ")" end
     end
-    ns.Print(string.format("relay: messages sent %d, received %d (from others), last send result %s;"
-        .. " collectors seen: %s%s", stats.sent, stats.received, tostring(stats.lastResult),
-        #names > 0 and table.concat(names, ", ") or "none",
-        stats.dropped > 0 and (", dropped " .. stats.dropped) or ""))
+    local parts = {}
+    for ver, n in pairs(versions) do parts[#parts + 1] = string.format("%s by %d player(s)", ver, n) end
+    table.sort(parts)
+    if #parts > 0 then
+        ns.Line("GuildLedger versions seen (last 4 hours): " .. table.concat(parts, ", ") .. ".")
+    end
+    if #outdated > 0 then
+        table.sort(outdated)
+        ns.Line("|cffffaa00Outdated, should update:|r " .. table.concat(outdated, ", ") .. ".")
+    end
 end

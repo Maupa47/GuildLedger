@@ -283,3 +283,41 @@ def test_rows_direct_mode_already_posted_are_not_posted_again(tmp_path):
     log = post_all(archive)  # since=T0: both rows are "new" to the bot by time
     assert [line.split(": ", 1)[1] for line in log.chat] == ["after the switch"]
     assert log.embeds == []
+
+
+def roster_sv(at, members, chat_rows=()):
+    data = sv(list(chat_rows), [])
+    g = data["GuildLedgerDB"]["guilds"][G]
+    g["rosterAt"] = at
+    g["roster"] = {guid: dict(n=name, r=4, rn="Initiate", l=lvl, c="MAGE", fs=T0, ls=at)
+                   for guid, name, lvl in members}
+    return data
+
+
+def test_member_list_reaches_the_bot_once_per_new_snapshot(tmp_path):
+    ingest = FakeIngest()
+    a = collect(tmp_path, "Alpha", roster_sv(T0 + 100, [("P-1", "Ann One", 10), ("P-2", "Bob Two", 20)]))
+    upload(a, "Alpha", ingest)
+    assert upload(a, "Alpha", ingest).files == 0  # nothing new: no second roster upload
+    archive = Archive(tmp_path / "archive.db")
+    for mid, content, data in ingest.messages:
+        assert archive.process_upload(mid, "Alpha", content, data).status == "ok"
+    rows = {r["name"]: r for r in archive.db.execute("SELECT * FROM members")}
+    assert set(rows) == {"Ann One", "Bob Two"}
+    assert rows["Bob Two"]["level"] == 20 and rows["Bob Two"]["rank_name"] == "Initiate"
+    assert rows["Bob Two"]["class"] == "MAGE" and rows["Bob Two"]["in_guild"] == 1
+
+
+def test_newest_snapshot_decides_who_is_in_the_guild(tmp_path):
+    ingest = FakeIngest()
+    old = collect(tmp_path, "Alpha", roster_sv(T0 + 100, [("P-1", "Ann One", 10), ("P-3", "Cat Three", 5)]))
+    new = collect(tmp_path, "Bravo", roster_sv(T0 + 900, [("P-1", "Ann One", 11), ("P-2", "Bob Two", 20)]))
+    upload(new, "Bravo", ingest)  # the newer snapshot arrives first
+    upload(old, "Alpha", ingest)  # an older one from a collector who uploads late
+    archive = Archive(tmp_path / "archive.db")
+    for (mid, content, data), name in zip(ingest.messages, ("Bravo", "Alpha")):
+        archive.process_upload(mid, name, content, data)
+    rows = {r["name"]: r for r in archive.db.execute("SELECT * FROM members")}
+    assert rows["Bob Two"]["in_guild"] == 1 and rows["Ann One"]["in_guild"] == 1
+    assert rows["Ann One"]["level"] == 11  # the old snapshot does not overwrite newer details
+    assert rows["Cat Three"]["in_guild"] == 0  # known from the old list, but gone in the newest

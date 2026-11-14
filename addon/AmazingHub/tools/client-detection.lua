@@ -1,0 +1,283 @@
+-- Client detection (issue #7), run against the real Core/Core.lua,
+-- Core/Compat.lua, UI/FeatureRegistry.lua, UI/Features.lua and the module
+-- files that carry TBC content, under stubbed clients.
+--
+-- WoW: Forever is in the Classic family but has none of the TBC content, and
+-- no WOW_PROJECT_ID of its own yet. This proves AmazingHub.Client recognises TBC
+-- Anniversary only by its project id and its interface together, reports each
+-- capability from the API behind it, and that attunements, the raid cooldown
+-- HUD toggle and the wishlist raid catalogue exist only there, and the
+-- consumable check there and on retail (issue #187), without touching the
+-- player's own toggles.
+--
+-- ponytail: the audit sub-tab filter, the HUD gates, the member detail
+-- attunement section, the /amazing help lines, the Settings consumable test and
+-- the command messages are one condition each and are checked in the game.
+--
+--   luajit -e 'ADDON="."' tools/client-detection.lua
+--
+-- Exits 1 on the first failed check.
+ADDON = ADDON or "."
+
+local checks = 0
+local function check(cond, what)
+  checks = checks + 1
+  if not cond then
+    io.stderr:write("FAIL: " .. what .. "\n")
+    os.exit(1)
+  end
+end
+
+-- ── WoW API surface the files touch while they load and start ────────
+function CreateFrame()
+  return { RegisterEvent = function() end, SetScript = function() end }
+end
+DEFAULT_CHAT_FRAME = { AddMessage = function() end }
+function GetServerTime() return 1757800000 end
+function IsInGuild() return false end
+function hooksecurefunc() end
+function debugstack() return "" end
+C_Timer = { After = function() end }
+
+AmazingHub = { L = setmetatable({}, { __index = function(_, k) return k end }), VERSION = "test" }
+
+-- A client is what GetBuildInfo says, its project constants and which of the
+-- capability APIs exist. Compat.lua reads all of it once, when it loads.
+local function client(c)
+  GetBuildInfo = function() return c.version, c.build, "Sep 1 2026", c.interface end
+  WOW_PROJECT_ID = c.project
+  WOW_PROJECT_BURNING_CRUSADE_CLASSIC = c.tbcProject
+  WOW_PROJECT_MAINLINE = c.mainline
+  local api = c.api or {}
+  C_PlayerInfo = api.surnames and { ShouldDisplaySurname = function() return true end } or nil
+  issecretvalue = api.secrets and function() return false end or nil
+  C_ChatInfo = { InChatMessagingLockdown = api.chatLockdown and function() return false end or nil }
+  C_TradeSkillUI = api.tradeSkillUI and {} or nil
+  TooltipDataProcessor = api.tooltipData and {} or nil
+  C_GuildInfo = { SetNote = api.guildSetNote and function() end or nil }
+  dofile(ADDON .. "/Core/Compat.lua")
+end
+
+local ANNIVERSARY = { version = "2.5.6", build = "63110", interface = 20506, project = 5, tbcProject = 5 }
+local FOREVER     = { version = "1.60.0", build = "64210", interface = 16000, project = 2, tbcProject = 5 }
+local REUSED_ID   = { version = "1.60.1", build = "64300", interface = 16001, project = 5, tbcProject = 5 }
+local UNKNOWN     = { version = "0.0.0", build = "0", interface = 20506 }  -- no WOW_PROJECT_* constants
+-- Retail (Midnight, issue #165): the mainline project id and a 12.x interface, both.
+local RETAIL      = { version = "12.1.5", build = "70448", interface = 120105, project = 1, tbcProject = 5, mainline = 1 }
+local CLIENTS = {
+  { c = ANNIVERSARY, tbc = true,  label = "TBC Anniversary" },
+  { c = FOREVER,     tbc = false, label = "a 1.60 client" },
+  { c = UNKNOWN,     tbc = false, label = "an unknown client" },
+  { c = RETAIL,      tbc = false, retail = true, label = "retail" },
+}
+
+dofile(ADDON .. "/Core/Core.lua")
+function AmazingHub:IsOfficer() return true end
+function AmazingHub:LootSystemShowsWishlist() return true end
+function AmazingHub:LootSystemShowsDKP() return true end
+
+-- ── 1. Which client this is ─────────────────────────────────────────────
+client(ANNIVERSARY)
+local CL = AmazingHub.Client
+check(CL.version == "2.5.6" and CL.build == "63110" and CL.date == "Sep 1 2026" and CL.interface == 20506,
+  "the build fields come from GetBuildInfo")
+check(CL.projectId == 5, "the project id is kept for diagnostics")
+check(CL.isAnniversary == true, "TBC Anniversary is recognised")
+-- maxLevel is the game's cap (issue #53), a fact that follows isAnniversary, not a guess.
+check(CL.maxLevel == 70, "Anniversary stops at 70")
+-- The raid sizes follow isAnniversary too (issues #89, #92).
+check(table.concat(CL.raidSizes, ",") == "10,25,40" and CL.defaultRaidSize == 25, "Anniversary raids are 10, 25 and 40, 25 first")
+local DOCUMENTED = { version = true, build = true, date = true, interface = true, projectId = true,
+  isAnniversary = true, isRetail = true, game = true, maxLevel = true, raidSizes = true, defaultRaidSize = true,
+  classes = true, enchantSlots = true, has = true }
+for key in pairs(CL) do
+  check(DOCUMENTED[key], "AmazingHub.Client carries no flavour guess beyond its documented fields (" .. tostring(key) .. ")")
+end
+
+client(FOREVER)
+check(AmazingHub.Client.isAnniversary == false and AmazingHub.Client.projectId == 2 and AmazingHub.Client.interface == 16000,
+  "a 1.60 client is not Anniversary")
+check(AmazingHub.Client.maxLevel == 60, "and WoW: Forever stops at 60")
+check(table.concat(AmazingHub.Client.raidSizes, ",") == "10,20,40" and AmazingHub.Client.defaultRaidSize == 20,
+  "and its raids are 10, 20 and 40, 20 first")
+client(REUSED_ID)
+check(AmazingHub.Client.isAnniversary == false, "project id 5 on a 1.60 build is not Anniversary")
+client({ version = "2.5.6", build = "1", interface = 20506, project = 2, tbcProject = 5 })
+check(AmazingHub.Client.isAnniversary == false,
+  "an Anniversary interface on another project id is not Anniversary, even with the constant defined")
+client({ version = "2.5.6", build = "1", interface = nil, project = 5, tbcProject = 5 })
+check(AmazingHub.Client.isAnniversary == false and AmazingHub.Client.interface == 0,
+  "a client that reports no interface is not Anniversary")
+client(UNKNOWN)
+check(AmazingHub.Client.isAnniversary == false and AmazingHub.Client.projectId == nil,
+  "a client without project constants is not Anniversary, even at interface 20506")
+
+-- Retail (issue #165): the third client, by its project id and its interface together, as for
+-- Anniversary. Forever runs the mainline UI and may answer the mainline id; its interface is 16001.
+client(ANNIVERSARY)
+check(AmazingHub.Client.isRetail == false and AmazingHub.Client.game == "ANNIVERSARY", "Anniversary is not retail")
+check(#AmazingHub.Client.classes == 9 and AmazingHub.Client.classes[1] == "WARRIOR" and AmazingHub.Client.classes[9] == "DRUID",
+  "Anniversary has the nine classic classes")
+check(table.concat(AmazingHub.Client.enchantSlots, ",") == "1,3,5,7,8,9,10,15,16", "Anniversary keeps the TBC enchant slots")
+client(FOREVER)
+check(AmazingHub.Client.isRetail == false and AmazingHub.Client.game == "FOREVER", "a 1.60 client is Forever")
+check(#AmazingHub.Client.classes == 9 and table.concat(AmazingHub.Client.enchantSlots, ",") == "1,3,5,7,8,9,10,15,16",
+  "Forever has the nine classes and the classic enchant slots")
+client(RETAIL)
+check(AmazingHub.Client.isRetail == true and AmazingHub.Client.isAnniversary == false and AmazingHub.Client.game == "RETAIL",
+  "retail is recognised")
+check(AmazingHub.Client.maxLevel == 90, "retail stops at 90")
+check(table.concat(AmazingHub.Client.raidSizes, ",") == "10,20,30" and AmazingHub.Client.defaultRaidSize == 20,
+  "retail raids are 10, 20 and 30, 20 first")
+check(#AmazingHub.Client.classes == 13, "retail has thirteen classes")
+local RETAIL_CLASSES = {}
+for _, c in ipairs(AmazingHub.Client.classes) do RETAIL_CLASSES[c] = true end
+for _, c in ipairs({ "WARRIOR", "DRUID", "DEATHKNIGHT", "DEMONHUNTER", "MONK", "EVOKER" }) do
+  check(RETAIL_CLASSES[c], c .. " is a retail class")
+end
+check(table.concat(AmazingHub.Client.enchantSlots, ",") == "1,3,5,7,8,11,12,16,17", "Midnight's enchant slots")
+client(setmetatable({ project = 1, mainline = 1 }, { __index = FOREVER }))
+check(AmazingHub.Client.isRetail == false and AmazingHub.Client.game == "FOREVER" and AmazingHub.Client.maxLevel == 60,
+  "a 1.60 client answering the mainline id is Forever")
+client(setmetatable({ project = 2, mainline = 1 }, { __index = RETAIL }))
+check(AmazingHub.Client.isRetail == false, "a retail interface on another project id is not retail")
+client({ version = "12.1.5", build = "1", interface = 120105, project = 1, tbcProject = 5 })
+check(AmazingHub.Client.isRetail == false, "a client without the mainline constant is not retail")
+for _, edge in ipairs({ { 99999, false }, { 100000, true } }) do
+  client(setmetatable({ interface = edge[1] }, { __index = RETAIL }))
+  check(AmazingHub.Client.isRetail == edge[2], "interface " .. edge[1] .. (edge[2] and " is" or " is not") .. " retail")
+end
+-- Retail's UnitFullName gives the realm in the surname's slot: never a surname there.
+client(setmetatable({ api = { surnames = true } }, { __index = RETAIL }))
+check(AmazingHub.Client.has.surnames == false, "retail has no surnames even where the surname API exists")
+client(setmetatable({ api = { surnames = true } }, { __index = FOREVER }))
+check(AmazingHub.Client.has.surnames == true, "Forever has surnames where the API exists")
+
+for _, edge in ipairs({ { 20499, false }, { 20500, true }, { 29999, true }, { 30000, false } }) do
+  client({ version = "2.5.x", build = "1", interface = edge[1], project = 5, tbcProject = 5 })
+  check(AmazingHub.Client.isAnniversary == edge[2],
+    "interface " .. edge[1] .. (edge[2] and " is" or " is not") .. " in the Anniversary range")
+end
+client({ version = "2.5.6", build = "1", interface = "20506", project = 5, tbcProject = 5 })
+check(AmazingHub.Client.interface == 20506 and AmazingHub.Client.isAnniversary, "an interface given as text still counts")
+
+-- ── 2. What it can do ───────────────────────────────────────────────────
+local FLAGS = { "secrets", "chatLockdown", "tradeSkillUI", "tooltipData", "guildSetNote" }
+client(ANNIVERSARY)
+for _, flag in ipairs(FLAGS) do
+  check(AmazingHub.Client.has[flag] == false, flag .. " is false when its API is absent")
+end
+for _, only in ipairs(FLAGS) do
+  client(setmetatable({ api = { [only] = true } }, { __index = ANNIVERSARY }))
+  for _, flag in ipairs(FLAGS) do
+    check(AmazingHub.Client.has[flag] == (flag == only),
+      flag .. (flag == only and " follows its own API" or " ignores " .. only .. "'s API"))
+  end
+end
+GetBuildInfo = function() return "0.0.0", "0", "", 0 end
+C_ChatInfo, C_GuildInfo = nil, nil
+dofile(ADDON .. "/Core/Compat.lua")
+check(AmazingHub.Client.has.chatLockdown == false and AmazingHub.Client.has.guildSetNote == false,
+  "a client without C_ChatInfo or C_GuildInfo at all loads and reports neither")
+
+-- Quest completion, which /amazing attune dumpquests reads on any client.
+C_QuestLog = { IsQuestFlaggedCompleted = function() return true end }
+IsQuestFlaggedCompleted = function() return false end
+check(AmazingHub.Compat.IsQuestComplete(1) == true, "C_QuestLog answers quest completion when it exists")
+C_QuestLog = nil
+IsQuestFlaggedCompleted = function(id) return id == 1 end
+check(AmazingHub.Compat.IsQuestComplete(1) == true and AmazingHub.Compat.IsQuestComplete(2) == false,
+  "without C_QuestLog, quest completion falls back to the global")
+IsQuestFlaggedCompleted = nil
+check(AmazingHub.Compat.IsQuestComplete(1) == false, "without either quest API, no quest reads complete")
+
+-- ── 3. TBC modules exist only on Anniversary ────────────────────────────
+local WISHED, RAID_ITEM = 999001, 21882  -- 21882: the first Karazhan drop in the raid catalogue
+AmazingHub.db = {
+  members = {},
+  settings = { modules = { consumableChecker = true } },
+  guildWishlists = {
+    ["Ana-Firemaw"] = { name = "Ana", class = "MAGE", wishlist = { { itemId = WISHED, order = 1 } } },
+  },
+}
+for _, case in ipairs(CLIENTS) do
+  client(case.c)
+  AmazingHub.AttunementTracker, AmazingHub.ConsumableChecker, AmazingHub.Wishlist = nil, nil, nil
+  AmazingHub.State.startup.failed = {}
+  dofile(ADDON .. "/Modules/AttunementTracker.lua")
+  AmazingHub.ConsumableCatalog = nil
+  dofile(ADDON .. "/Data/ConsumablesRetail.lua")
+  dofile(ADDON .. "/Modules/ConsumableChecker.lua")
+  dofile(ADDON .. "/Modules/WishlistSystem.lua")
+  dofile(ADDON .. "/Modules/RaidTools.lua")
+  local on = case.tbc and " exists on " or " does not exist on "
+  -- Consumables: TBC's table on Anniversary, Midnight's on retail (issue #187); none on Forever.
+  local cons = case.tbc or case.retail == true
+  check((AmazingHub.AttunementTracker ~= nil) == case.tbc, "the attunement tracker" .. on .. case.label)
+  check((AmazingHub.ConsumableChecker ~= nil) == cons,
+    "the consumable checker" .. (cons and " exists on " or " does not exist on ") .. case.label)
+  check(AmazingHub:StartModule({ "AttunementTracker" }) == case.tbc
+    and AmazingHub:StartModule({ "ConsumableChecker", feature = "consumableChecker" }) == cons,
+    "the attunement and consumable modules start only where they exist (" .. case.label .. ")")
+  check(next(AmazingHub.State.startup.failed) == nil, "nothing is recorded as failed to start on " .. case.label)
+  -- The wishlist is everywhere; retail's items come from its Encounter Journal (issue #185).
+  check(AmazingHub.Wishlist ~= nil, "the wishlist exists on " .. case.label)
+  if AmazingHub.Wishlist then
+    AmazingHub.Wishlist:RebuildItemIndex()
+    check(AmazingHub.Wishlist:GetItemInterest(WISHED) ~= nil, "a wished item is searchable on " .. case.label)
+    check((AmazingHub.Wishlist:GetItemInterest(RAID_ITEM) ~= nil) == case.tbc,
+      "the TBC raid catalogue is " .. (case.tbc and "" or "not ") .. "seeded on " .. case.label)
+  end
+  local cds = {}
+  for _, cd in ipairs(AmazingHub.RaidTools:ResolveCoverage(AmazingHub.RaidTools.COOLDOWNS, { SHAMAN = 1, HUNTER = 1, DRUID = 1 })) do
+    cds[cd.name] = cd.covered
+  end
+  check((cds["Bloodlust/Heroism"] ~= nil) == case.tbc and (cds["Misdirection"] ~= nil) == case.tbc,
+    "Bloodlust/Heroism and Misdirection are " .. (case.tbc and "" or "not ") .. "in Raid Tools on " .. case.label)
+  -- Retail has its own list, named by the client from the spell (issue #166): the battle rez is Rebirth.
+  local rez = case.retail and "Rebirth" or "Battle Rez"
+  check(cds[rez] == true and cds["Innervate"] == true, "generic raid cooldowns stay in Raid Tools on " .. case.label)
+end
+
+-- ── 4. The hub and the Settings list ────────────────────────────────────
+AmazingHub.UI = {}
+dofile(ADDON .. "/UI/FeatureRegistry.lua")
+dofile(ADDON .. "/UI/Features.lua")
+local UI = AmazingHub.UI
+local function listed(id)
+  for _, def in ipairs(UI:AllFeatures(nil)) do
+    if def.id == id then return true end
+  end
+  return false
+end
+for _, case in ipairs(CLIENTS) do
+  client(case.c)
+  check(listed("raidHUD") == case.tbc, "raidHUD" .. (case.tbc and " is listed on " or " is not listed on ") .. case.label)
+  check(UI:IsFeatureAllowed(UI:GetFeature("raidHUD")) == case.tbc,
+    "raidHUD" .. (case.tbc and " is allowed on " or " is refused on ") .. case.label)
+  -- The consumable check: Anniversary's and retail's, never Forever's (issue #187).
+  local cons = case.tbc or case.retail == true
+  check(listed("consumableChecker") == cons,
+    "consumableChecker" .. (cons and " is listed on " or " is not listed on ") .. case.label)
+  check(UI:IsFeatureAllowed(UI:GetFeature("consumableChecker")) == cons,
+    "consumableChecker" .. (cons and " is allowed on " or " is refused on ") .. case.label)
+  check(listed("raidTracker"), "raidTracker stays listed on " .. case.label)
+  -- Master Loot: everywhere but retail, which has none (issue #165). Points and the wishlist are
+  -- retail's too since issue #185.
+  for _, id in ipairs({ "lootMaster" }) do
+    check(listed(id) == not case.retail, id .. (case.retail and " is not listed on " or " stays listed on ") .. case.label)
+    check(UI:IsFeatureAllowed(UI:GetFeature(id)) == not case.retail,
+      id .. (case.retail and " is refused on " or " is allowed on ") .. case.label)
+  end
+  -- The loot history and its tab (issue #183), points and the wishlist (issue #185): everywhere,
+  -- retail included.
+  for _, id in ipairs({ "loot", "lootTracker", "dkp", "wishlist" }) do
+    check(listed(id) and UI:IsFeatureAllowed(UI:GetFeature(id)), id .. " is listed and allowed on " .. case.label)
+  end
+  -- The site: everywhere, retail included since issue #182.
+  check(listed("web") and UI:IsFeatureAllowed(UI:GetFeature("web")), "web is listed and allowed on " .. case.label)
+  check(AmazingHub.db.settings.modules.consumableChecker == true and AmazingHub.db.settings.modules.raidHUD == nil,
+    "the player's own toggles are untouched on " .. case.label)
+end
+
+print(("client-detection: %d checks passed"):format(checks))

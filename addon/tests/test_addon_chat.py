@@ -29,7 +29,7 @@ def test_server_history_limit_finishes_and_sets_cursor():
     assert g.errors == 0, g.last_error()
     assert len(g.chat()) == 230
     out = g.slash("status")
-    assert "server sent nothing older" in out and "running" not in out
+    assert "back to the oldest messages the server keeps" in out and "History check: running" not in out
     assert g.sv()["guilds"]["42"]["cursor"]["g"]
     # next session only walks back to the cursor
     for i in range(7):
@@ -38,7 +38,7 @@ def test_server_history_limit_finishes_and_sets_cursor():
     g.reload()
     g.run(60)
     assert len(g.chat()) == 237
-    assert "caught up (+7)" in g.slash("status")
+    assert "up to date (7 new)" in g.slash("status")
 
 
 def test_debug_log_is_saved():
@@ -158,7 +158,7 @@ def test_lockdown_loses_text_but_keeps_meta_and_never_errors():
     status = g.slash("status")
     g.run(30)
     assert g.errors == 0, g.last_error()
-    assert "lockdown" in status
+    assert "Boss-fight chat lock: |cffffaa00ON" in status
     assert len(g.chat()) == 1
     g.W.setLockdown(False)
     g.run(30)
@@ -204,7 +204,7 @@ def test_no_guild_stays_idle():
     g = Game(club=False)
     g.run(120)
     out = g.slash("status")
-    assert "idle" in out
+    assert "Waiting for the guild" in out
     assert g.errors == 0, g.last_error()
     assert g.sv()["guilds"] == {}
 
@@ -213,7 +213,7 @@ def test_status_and_flush():
     g = Game(history=10)
     g.run(30)
     out = g.slash("status")
-    assert "Synthetic Guild" in out and "chat spooled 10" in out and "errors: 0" in out
+    assert "Synthetic Guild" in out and "Lines saved: 10" in out and "Problems: none" in out
     g.slash("flush")
     assert g.W.reloaded == 1
     assert "/gl status" in g.slash("bogus")
@@ -261,7 +261,7 @@ def test_missing_club_api_disables_chat_without_errors():
     W.advance(120)
     out = W.slash("status")
     assert W.ns.errors == 0, W.ns.lastError
-    assert "missing API: club" in out and "idle" in out
+    assert "Not available in this game version: guild chat" in out and "Waiting for the guild" in out
 
 
 def test_only_allowed_globals():
@@ -273,4 +273,4 @@ def test_only_allowed_globals():
     g.W.login()
     g.W.advance(30)
     after = set(L.eval("(function() local t = {} for k in pairs(_G) do t[#t+1] = k end return t end)()").values())
-    assert after - before == {"GuildLedgerDB", "SLASH_GUILDLEDGER1", "SLASH_GUILDLEDGER2"}
+    assert after - before == {"GuildLedgerDB", "GuildLedgerAPI", "SLASH_GUILDLEDGER1", "SLASH_GUILDLEDGER2"}

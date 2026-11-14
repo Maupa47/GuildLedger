@@ -1,0 +1,988 @@
+----------------------------------------------------------------------
+-- Amazing Hub - Companion Export (GOSCOMP1)
+--
+-- Builds the payload the web companion reads: everything the guild's
+-- clients have verified about themselves, in one string a person can
+-- copy out of the game and paste into the site.
+--
+-- Wire format, and it must not drift — the web decoder is written
+-- against exactly this:
+--
+--   "GOSCOMP1:" .. LibDeflate:EncodeForPrint(LibDeflate:CompressDeflate(json))
+--
+-- EncodeForPrint is used rather than base64 because the string has to
+-- survive being selected out of a WoW edit box and pasted into a browser.
+--
+-- Business logic only — UI calls Build() and shows the result.
+----------------------------------------------------------------------
+local Companion = {}
+AmazingHub.Companion = Companion
+local L = AmazingHub.L
+
+-- The marker on the wire carries a colon; the `fmt` field inside the payload
+-- does not. They are two different things and the web checks both.
+local WIRE_PREFIX = "GOSCOMP1:"
+local FMT = "GOSCOMP1"
+
+-- Payload version. 1 was roster, spec, professions, attunements and
+-- attendance. 2 adds the enchant summary, which is what lets the site say
+-- "four slots unenchanted" instead of just showing an item level. 3 adds the
+-- nights RaidTracker has been recording all along — who was actually there,
+-- which is the half of "the signup that doesn't lie" the site never had. 4 adds
+-- what the site needs to arrive at the same attendance number the game shows:
+-- the consumable count behind the flag, the non-guild-raid mark, and each core's
+-- penalty weights. 5 adds the equipment itself -- collected since the first version,
+-- synced between clients since the first version, and discarded by this file every
+-- time -- plus the two things a character cannot be drawn without: the player's sex
+-- and the English race token. 6 says which game the client is: WoW: Forever has no
+-- realms and its names carry a hyphen, so the site builds a Forever guild's keys itself
+-- and refuses a roster from the other game (the site's specs/036). 7 adds `crafting` on
+-- WoW: Forever: each member's profession lines by skill-line ID with the recipes they know
+-- (issue #35, the site's specs/037). 8 adds `look` on WoW: Forever: the {option, choice}
+-- pairs a member's addon read in the barber's chair (issue #37, the site's specs/038). 9 adds
+-- each session's `size`, the raid size the game gave on the way in: on WoW: Forever it is what
+-- decides whether a night counts for attendance (issue #90). 10 is retail's: the `region`, the guild's
+-- home realm in `guildKey` and `realm` (never the exporter's), and each session's `difficulty`, 14
+-- Normal, 15 Heroic, 16 Mythic (issue #182, the site's specs/056). Forever and Anniversary send what
+-- they sent at 9. 11 adds `rosterComplete`, true only when `members` is the whole guild
+-- (AmazingHub:WholeRoster): the one upload the site may read "not listed" from as "left the guild"
+-- (issue #203, the site's #229). Absent otherwise. 12 starts what WoW: Forever's guild feed reads (the
+-- site's #238, contract #246): `journal`, what happened to each character as that character's own
+-- client wrote it down (issue #205), and each member's `feedOptOut`, true for whoever asked not to be
+-- named on Discord. The founding, the readiness threshold and the tabard join it in the same version.
+-- The character's own pack (BuildSelf) is this same version: `self` is one more absent field, and an
+-- export gains nothing by the pack existing. 13 adds `joinRequests`, what the guild's client holds of
+-- the people who asked to join (the site's specs/071, issue amazinghub#245): absent without any. 14 adds
+-- each member's `main`, the key of the character an officer linked them to as an alt (`db.altLinks`,
+-- issue #251, the site's #392), in the same form as the member's own `key`: absent for a main and for
+-- anybody nobody linked, and never in the pack, where nobody says whose alt they are. 15 adds
+-- `lootBook`, what the guild's loot runs on beyond the history (issue #295, the site's #460): see
+-- lootBook() below. Absent with every loot module off. 16 adds `officerRanks`, the guild's officer
+-- threshold as the officers set it ({ max, at }, issue #313, the site's #495): ranks 0..max are
+-- officers. Absent until somebody in the guild chose one, so the site keeps its default.
+local PAYLOAD_VERSION = 16
+
+----------------------------------------------------------------------
+-- JSON encoding
+--
+-- The addon ships a JSON *decoder* (SoftRes imports Gargul strings) but
+-- has never needed an encoder. This one only has to handle what we build
+-- below: strings, finite numbers, booleans, arrays and maps.
+----------------------------------------------------------------------
+local ESCAPES = {
+    ['"'] = '\\"', ["\\"] = "\\\\", ["\b"] = "\\b",
+    ["\f"] = "\\f", ["\n"] = "\\n", ["\r"] = "\\r", ["\t"] = "\\t",
+}
+
+local function jsonString(s)
+    -- Control characters have to go out as \u00XX or the decoder rejects them.
+    -- Player-authored text reaches this function, so it cannot be trusted.
+    local out = tostring(s):gsub('[%c"\\]', function(c)
+        return ESCAPES[c] or string.format("\\u%04x", c:byte())
+    end)
+    return '"' .. out .. '"'
+end
+
+local function jsonNumber(n)
+    if n ~= n or n == math.huge or n == -math.huge then return "0" end
+    -- Integers must not go out as "5.0": the web side reads counts and ids.
+    if n == math.floor(n) then return string.format("%d", n) end
+    return string.format("%.4g", n)
+end
+
+local encode
+
+-- An empty Lua table is ambiguous — it is both {} and []. Every empty
+-- collection we emit is a list, so that is the default; a map is only
+-- produced when there is at least one key.
+local function isArray(t)
+    return t[1] ~= nil or next(t) == nil
+end
+
+encode = function(v)
+    local t = type(v)
+    if v == nil then return "null" end
+    if t == "boolean" then return v and "true" or "false" end
+    if t == "number" then return jsonNumber(v) end
+    if t == "string" then return jsonString(v) end
+    if t ~= "table" then return jsonString(tostring(v)) end
+
+    local parts = {}
+    if isArray(v) then
+        for i = 1, #v do parts[#parts + 1] = encode(v[i]) end
+        return "[" .. table.concat(parts, ",") .. "]"
+    end
+    -- Sorted keys so the same roster always produces the same string, which
+    -- makes "did anything actually change?" answerable by comparison.
+    local keys = {}
+    for k in pairs(v) do keys[#keys + 1] = k end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    for _, k in ipairs(keys) do
+        parts[#parts + 1] = jsonString(k) .. ":" .. encode(v[k])
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+end
+
+Companion.EncodeJson = encode
+
+----------------------------------------------------------------------
+-- Per-member pieces
+----------------------------------------------------------------------
+
+-- Slots where a missing enchant is a real problem in this game. Same list and
+-- the same question the audit panel asks — one source, so the site and the
+-- in-game audit can never disagree about who is missing what.
+local function enchantSummary(gear)
+    if not gear then return nil end
+    local audit = AmazingHub.GearAudit
+    local slots = audit and audit:GetEnchantableSlots()
+    if not slots then return nil end
+
+    local missing, checked = {}, 0
+    for _, slotId in ipairs(slots) do
+        local item = gear[slotId]
+        -- Only an equipped slot can be missing an enchant. An empty slot is a
+        -- different problem and saying "unenchanted" about it would be wrong. On
+        -- retail an off hand that is a shield or a frill takes none (issue #182).
+        if audit:NeedsEnchant(slotId, item) then
+            checked = checked + 1
+            if not (item.enchantId and item.enchantId > 0) then
+                missing[#missing + 1] = AmazingHub.SlotNames[slotId] or ("Slot " .. slotId)
+            end
+        end
+    end
+    if checked == 0 then return nil end
+    return { checked = checked, missing = missing }
+end
+
+-- Every equipped slot, as a DENSE list rather than a map keyed by slot id.
+--
+-- The JSON encoder in this file is hand-written, and a Lua table with the keys 1, 2, 3,
+-- 5 is a sparse array -- exactly what a simple encoder gets wrong. A list of entries
+-- carrying their own slot has no holes in it.
+--
+-- The name rides along even though the id would be enough for a tooltip link: the
+-- character page on the site is public, and a sheet that only becomes readable once
+-- somebody else's script has loaded is not readable. Item names repeat across a guild,
+-- so deflate charges very little for them.
+local function gearFor(data)
+    if not data or not data.gear then return nil end
+
+    local out = {}
+    for _, slotInfo in ipairs(AmazingHub.SlotIDs) do
+        local item = data.gear[slotInfo.id]
+        if item and item.id then
+            local entry = {
+                slot = slotInfo.id,
+                id = item.id,
+                name = item.name or "",
+                quality = tonumber(item.quality) or 0,
+                ilvl = tonumber(item.ilvl) or 0,
+            }
+            -- Absent, not zero: a slot with no enchant and a slot nobody read are
+            -- different claims, and the site is built to tell them apart.
+            if item.enchantId and item.enchantId > 0 then entry.enchant = item.enchantId end
+            if item.gems and #item.gems > 0 then
+                local gems = {}
+                for _, gem in ipairs(item.gems) do
+                    local id = tonumber(gem.id or gem)
+                    if id and id > 0 then gems[#gems + 1] = id end
+                end
+                if #gems > 0 then entry.gems = gems end
+            end
+            out[#out + 1] = entry
+        end
+    end
+
+    -- Nothing equipped at all is a client that has not looked yet, not a naked raider.
+    if #out == 0 then return nil end
+    return out
+end
+
+local function attunementsFor(key)
+    local out = {}
+    if not AmazingHub.AttunementTracker then return out end
+    for _, a in ipairs(AmazingHub.AttunementTracker:GetEffectiveAttunements(key)) do
+        out[#out + 1] = {
+            short = a.short,
+            complete = a.complete and true or false,
+            -- 0..1. A partial chain is the useful number: "Kara 7/9" is a
+            -- different conversation from "Kara 0/9".
+            progress = tonumber(a.progress) or (a.complete and 1 or 0),
+        }
+    end
+    return out
+end
+
+-- v7, WoW: Forever only: every profession line of a member by skill-line ID. For one whose
+-- own addon reported it, the rank, max, specialization and every recipe they know (catalog
+-- and extra IDs, sorted); for one known from the guild roster only, the line marked native.
+-- Nil -- the key absent -- where the client has no profession model or no record of them,
+-- and while a list is still on its way with no earlier one to stand in: the site keeps what
+-- it had instead of learning that they know nothing.
+local function craftingFor(key)
+    local P = AmazingHub.Professions
+    local rec = P and P:Get(key)
+    if not rec then return nil end
+    local out = {}
+    for line, e in pairs(rec.profs) do
+        if rec.src == "native" then
+            out[#out + 1] = { line = line, native = true }
+        elseif not e.recipes and not e.stale then
+            return nil
+        else
+            local recipes, extra = P.Lists(e)
+            local ids = {}
+            for _, id in ipairs(recipes) do ids[#ids + 1] = id end
+            for _, id in ipairs(extra) do ids[#ids + 1] = id end
+            table.sort(ids)
+            out[#out + 1] = { line = line, rank = e.rank, max = e.max, spec = e.spec, recipes = ids }
+        end
+    end
+    table.sort(out, function(a, b) return a.line < b.line end)
+    return out
+end
+
+-- v14: the main an officer linked this character to, as `db.altLinks` holds it ([altKey] = mainKey,
+-- officer-maintained and synced, keyed the way `key` is). Nil -- the key absent -- for a main, for
+-- anybody nobody linked, and for a link to itself or anything that is not a key, which links nobody.
+local function mainOf(key)
+    local links = AmazingHub.db.altLinks
+    local main = type(links) == "table" and links[key] or nil
+    if type(main) ~= "string" or main == "" or main == key then return nil end
+    return main
+end
+
+local function professionsFor(data)
+    local out = {}
+    for _, p in ipairs(data.professions or {}) do
+        -- A profession known from the guild roster only has no rank: nothing to export (issue #31).
+        if p.name and tonumber(p.rank) then out[#out + 1] = { name = p.name, rank = tonumber(p.rank) } end
+    end
+    return out
+end
+
+----------------------------------------------------------------------
+-- Nights
+--
+-- RaidTracker has recorded these since long before the site could receive
+-- them: encounters, five-minute snapshots, who was in the group, whether they
+-- were online, whether they had consumables. This is the first time any of it
+-- leaves the game.
+--
+-- The roll-up happens here rather than on the site because the addon holds
+-- presence per *snapshot*: a four-hour night with 25 people is over a thousand
+-- entries, and `{ snapshots, first, last, offline, consumes }` per person says
+-- everything those screens ask while being an order of magnitude smaller. The
+-- person's count against the session's is the fraction of the night they were
+-- there, which is partial attendance without the whole timeline.
+----------------------------------------------------------------------
+local function rollUpPlayers(session, startTime)
+    local seen = {}
+    for _, snap in ipairs(session.snapshots or {}) do
+        local at = tonumber(snap.time) or 0
+        for key, m in pairs(snap.members or {}) do
+            local p = seen[key]
+            if not p then
+                p = { key = key, snapshots = 0, first = at, last = at,
+                      offline = false, consumes = false }
+                seen[key] = p
+            end
+            p.snapshots = p.snapshots + 1
+            if at < p.first then p.first = at end
+            if at > p.last then p.last = at end
+            -- Both flags are "at least once". Someone who dropped for one
+            -- snapshot dropped; someone who had a flask for one had one.
+            if m.online == false then p.offline = true end
+            if m.hasConsumes then p.consumes = true end
+            -- The count as well as the flag, because the attendance penalty is a
+            -- ratio: `RaidTracker:UpdateAttendanceForLockout` docks the score when
+            -- consumables show up in under half the snapshots that saw the person.
+            -- "At least once" cannot answer that, so the site could never arrive at
+            -- the same number the game shows. A snapshot whose consumables retail could
+            -- not read (nil) counts as the addon counts it, for the player (issue #187).
+            if m.hasConsumes ~= false then p.chits = (p.chits or 0) + 1 end
+        end
+    end
+
+    -- Whoever the session knows was there but no snapshot ever caught.
+    --
+    -- Snapshots do not travel between officers, and the broadcast says so in as many
+    -- words: it carries `players`, the encounters and the already-computed attendance,
+    -- and leaves the frames behind. So an officer who received a night from a peer
+    -- holds everyone who was there and evidence of none of them, and a night the two
+    -- clients merged holds one officer's frames and both officers' people.
+    --
+    -- Emitting only what the frames saw is how the site ended up with three of five
+    -- nights empty and a roster split between perfect and terrible, while the game
+    -- showed a sane number for the same guild — the addon's own rule reads
+    -- `session.players`, which survives the broadcast, and this did not.
+    --
+    -- `snapshots = 0` is the entire signal, and it needs no field of its own: it says
+    -- "in the group, never in a frame". The addon's late and left-early guards check
+    -- membership of the first and last frame, so with no frame to check they do not
+    -- fire, and the site reads the zero the same way.
+    for key in pairs(session.players or {}) do
+        if not seen[key] then
+            local at = tonumber(startTime) or tonumber(session.startTime) or 0
+            seen[key] = { key = key, snapshots = 0, first = at, last = at,
+                          offline = false, consumes = false }
+        end
+    end
+
+    local out = {}
+    for _, p in pairs(seen) do out[#out + 1] = p end
+    table.sort(out, function(a, b) return a.key < b.key end)
+    return out
+end
+
+----------------------------------------------------------------------
+-- What each core docks from a perfect night.
+--
+-- Attendance is a score, not a count: a lockout is worth 100 and arriving late,
+-- leaving early or raiding dry each take a bite out of it. The weights are per
+-- core and an officer can change them, so the site cannot assume 10/10/10 and
+-- still promise the same number the game shows.
+--
+-- Current config, not a stamp on each session: the addon recomputes its whole
+-- history with today's weights every time it rebuilds, and freezing them per
+-- night would make the two drift the moment somebody edited a core.
+----------------------------------------------------------------------
+local function attendanceRules(sessions)
+    if not AmazingHub.CoreManager then return nil end
+    local rules, any = {}, false
+    local seen = {}
+    for _, s in ipairs(sessions or {}) do
+        local tag = s.groupTag or ""
+        if not seen[tag] then
+            seen[tag] = true
+            local p = AmazingHub.CoreManager:GetPenalties(tag)
+            rules[tag] = { late = p.LATE, early = p.LEFT_EARLY, dry = p.NO_CONSUMES }
+            any = true
+        end
+    end
+    return any and rules or nil
+end
+
+local function guildRaidFlag(session)
+    if session.isGuildRaid == false then return false end
+    return nil
+end
+
+local function raidSessions()
+    local db = AmazingHub.db and AmazingHub.db.raidTracker
+    if not db then return nil, nil end
+
+    local sessions = {}
+    for id, s in pairs(db.sessions or {}) do
+        local startTime = tonumber(s.startTime) or tonumber(id) or 0
+        if startTime > 0 then
+            local encounters = {}
+            for _, e in ipairs(s.encounters or {}) do
+                encounters[#encounters + 1] = {
+                    id = tonumber(e.id) or 0,
+                    name = e.name or "",
+                    start = math.floor(tonumber(e.startTime) or 0),
+                    -- Absent, not zero: a night that ended mid-pull has no end
+                    -- and no verdict, which is different from a wipe.
+                    ["end"] = e.endTime and math.floor(e.endTime) or nil,
+                    success = e.success,
+                }
+            end
+            sessions[#sessions + 1] = {
+                id = math.floor(tonumber(id) or startTime),
+                groupTag = s.groupTag or "",
+                -- The planned raid this night was stamped with when it started, so the
+                -- site does not have to guess from an instance name and a clock. Absent
+                -- for a night nobody planned, which is most of them.
+                raidId = type(s.raidId) == "string" and s.raidId ~= "" and s.raidId or nil,
+                instanceID = tonumber(s.instanceID) or 0,
+                -- The raid's size as the game gave it on the way in: on WoW: Forever, 20 and up
+                -- is what counts for attendance (issue #90). Absent for a night recorded before.
+                size = tonumber(s.size),
+                -- Retail's difficulty, 14, 15 or 16: Normal and Heroic the same week are two
+                -- lockouts (issue #182). Absent everywhere else, where a session never has one.
+                difficulty = tonumber(s.difficulty),
+                -- Only when false, mirroring the addon's own `isGuildRaid ~= false`:
+                -- every session recorded before the flag existed is a guild raid, and
+                -- absent has to keep meaning that on the far side too. Attendance
+                -- ignores the ones marked false, so without this the site would count
+                -- somebody's pug alt run against the guild's roster.
+                --
+                -- Spelled out rather than `x and false or nil`, which is the Lua trap
+                -- that cannot ever yield false and would have shipped every alt run as
+                -- a guild raid.
+                guildRaid = guildRaidFlag(s),
+                name = s.name or "",
+                startTime = math.floor(startTime),
+                endTime = s.endTime and math.floor(s.endTime) or nil,
+                -- The denominator every player's count is read against.
+                snapshots = #(s.snapshots or {}),
+                encounters = encounters,
+                players = rollUpPlayers(s, startTime),
+            }
+        end
+    end
+    table.sort(sessions, function(a, b) return a.startTime < b.startTime end)
+
+    -- Tombstones travel as a list of ids. Without them a night an officer
+    -- deleted here comes back from another officer's export, forever.
+    local deleted = {}
+    for id in pairs(db.deletedSessions or {}) do
+        local n = tonumber(id)
+        if n then deleted[#deleted + 1] = math.floor(n) end
+    end
+    table.sort(deleted)
+
+    return sessions, deleted
+end
+
+----------------------------------------------------------------------
+-- The switch
+--
+-- Everything of the guild's that crosses between the game and the site goes
+-- through here — this export today, roster import tomorrow. Guarding the module
+-- rather than each caller means a new entry point cannot forget to ask.
+--
+-- Off by default. The payload carries the whole guild's gear, attunements and
+-- attendance, and a guild that does not use the site should not have that one
+-- mistyped command away. The one thing that does not ask is BuildSelf, which
+-- carries none of that; it says why.
+----------------------------------------------------------------------
+function Companion:IsEnabled()
+    return AmazingHub:GetSetting("companion") == true
+end
+
+function Companion:SetEnabled(on)
+    AmazingHub:SetSetting("companion", on and true or false)
+end
+
+-- Why this client publishes nothing, or nil when it may. A retail guild's world on the site is its
+-- region, and a region the site has none for (China, a test client) is refused here rather than at
+-- the site's door, where nobody in game would read why (issue #182). Build returns it as its error;
+-- the Web panel shows it.
+function Companion:Refused()
+    if not AmazingHub.Client.isRetail or AmazingHub.Compat.Region() then return nil end
+    return L["the guild website takes no guild from this client's region: nothing is published."]
+end
+
+----------------------------------------------------------------------
+-- Payload
+----------------------------------------------------------------------
+-- A field newer than the client that tested it: if it fails it is left out, and goes to
+-- /amazing errors. The roster, the raids and the loot still go up (issue #232).
+local function optional(what, fn, ...)
+    local ok, value = pcall(fn, ...)
+    if ok then return value end
+    AmazingHub:RecordError("export " .. what .. ": " .. tostring(value))
+    return nil
+end
+
+-- One person's line. The one place it is built, so the export and the character's own pack
+-- can never tell the site two different things about somebody.
+--
+-- Everybody on the guild roster, including whoever has never published.
+--
+-- This used to send only clients that had synced, and the reason was
+-- sound: a row built from the guild roster alone carries a level and a
+-- class and nothing the site cannot already guess, and it would look
+-- confirmed while being nothing of the sort.
+--
+-- What that cost only became visible against real data. One guild
+-- published 34 members and 48 different people were recorded raiding,
+-- overlapping by five — and the site had no way to tell "our member who
+-- has not installed it" from "somebody who is not in the guild". Those
+-- are different conversations, and both were invisible.
+--
+-- `lastUpdate = 0` carries it, the same trick as `snapshots = 0`: a value
+-- that already exists saying one more thing, with no field of its own.
+-- The site marks those rows, and that mark is the condition for sending
+-- them at all — without it this recreates exactly what the filter avoided.
+local function memberLine(key, short, classFile, level, rankName, rankIndex)
+    -- Nothing published means no record at all, so everything below reads
+    -- through an empty table rather than guarding each field.
+    local data = AmazingHub.db.members[key] or {}
+    local att = AmazingHub.RaidTracker
+        and AmazingHub.RaidTracker:GetAttendance25ManPercent(key) or 0
+    -- Absent, not [], for a client that published without a skill-line API (issue #10).
+    -- A row that never published, and every Anniversary record, keeps its list.
+    local professions = professionsFor(data)
+    if (tonumber(data.lastUpdate) or 0) > 0 and data.professions == nil then professions = nil end
+
+    return {
+        key = key,
+        -- Name, class, level and rank come from the guild roster, so they are
+        -- known for everybody. Everything after them comes from the person's
+        -- own client and is absent until it has spoken.
+        name = short,
+        class = classFile or "",
+        race = data.race or "",
+        level = level or 0,
+        rank = rankName or "",
+        rankIndex = rankIndex or 0,
+        avgIlvl = math.floor(tonumber(data.avgIlvl) or 0),
+        lastUpdate = math.floor(tonumber(data.lastUpdate) or 0),
+        spec = data.spec,
+        prefRoles = data.prefRoles or {},
+        professions = professions,
+        attunements = attunementsFor(key),
+        att25 = tonumber(att) or 0,
+        enchants = enchantSummary(data.gear),
+        -- v5. Absent for anybody whose client has never published, which is
+        -- most of a guild's roster and is the honest answer for them.
+        gear = gearFor(data),
+        sex = data.sex,
+        raceToken = data.raceToken,
+        crafting = craftingFor(key),
+        -- v8. Absent until the member has sat in a barber's chair with the addon.
+        look = type(data.look) == "table" and data.look or nil,
+        -- v12. Only ever true: absent is "name me" (issue #205).
+        feedOptOut = data.feedOptOut == true or nil,
+        -- v12, WoW: Forever: when they say they joined, their own claim only (issue #208).
+        joinedAt = AmazingHub.Founding and AmazingHub:IsFeatureEnabled("founding") and AmazingHub.Founding:JoinedAtOf(key) or nil,
+        -- v14 (issue #251): whose alt this is, the main's key; absent for everybody else.
+        main = mainOf(key),
+    }
+end
+
+-- What every string says about itself: which guild, which game, who wrote it and when. The site
+-- picks the guild and refuses the wrong game from these, whichever string it was handed.
+local function envelope(guildName, count, members)
+    local retail = AmazingHub.Client.isRetail
+    -- The guild's realm: on retail its home realm, never the exporter's, so officers on two connected
+    -- realms publish one guild (issue #182). Elsewhere this client's, as it always was.
+    local guildRealm = retail and AmazingHub:GuildRealm() or AmazingHub:GetClientRealm()
+    return {
+        fmt = FMT,
+        v = PAYLOAD_VERSION,
+        guildKey = AmazingHub:GetPlayerKey(guildName, guildRealm), -- same rule: "Guild-Realm", or the name alone
+        guildName = guildName,
+        realm = guildRealm,
+        -- The client, not a guess about it: TBC Anniversary and retail are recognised positively
+        -- and everything else is Forever (ADR-0026).
+        game = AmazingHub.Client.isAnniversary and "ANNIVERSARY" or retail and "RETAIL" or "FOREVER",
+        -- Retail only: the same realm name is two realms in two regions (issue #182).
+        region = retail and AmazingHub.Compat.Region() or nil,
+        exportedAt = math.floor(time()),
+        exportedBy = AmazingHub:GetPlayerKey(AmazingHub.Compat.PlayerName()),
+        addonVersion = AmazingHub.VERSION or "0",
+        count = count,
+        members = members,
+    }
+end
+
+----------------------------------------------------------------------
+-- The loot book (v15, issue #295, the site's #460): what the guild's loot runs on, beyond the history.
+--
+--   lootBook = {
+--     points    = { complete = true,  pools = { { core, tag?, mode, at, standings = { {key,name,class,current,earned,spent} } } } },
+--     wishlists = { complete = false, lists = { { key, name, class, items = { {itemId, order, offspec?} } } } },
+--                   (this account's own characters' lists even when emptied, so a clear reaches the site)
+--     prios     = { complete = true,  items = { { itemId, order = { name, ... } } } },
+--     reserves  = { complete = true,  source, listId, at, items = { {itemId, name, class?, note?, plusOnes, hard?} } },
+--     tmb       = { complete = true,  pools = { { core, tag?, entries = { {player, item, priority} } } } },
+--   }
+--
+-- Each set is its own optional(): one that fails is left out and the rest goes up (#232). A set whose
+-- module is off is absent, never empty: absent tells the site nothing, empty tells it the set was
+-- cleared. `complete` says whether what is missing from the set may be read as gone: this client holds
+-- every pool, the officers' whole priority list and the whole reserve import, but only the wishlists it
+-- has heard. `core` is "" for the guild's own pool, `tag` the site's core when the game core is one.
+-- `at` is the record's own time where the game keeps one (the newest points entry, the reserve
+-- import); the site takes the export's time for the rest.
+----------------------------------------------------------------------
+local BOOK_MAX = { standings = 1000, lists = 300, items = 60, prios = 600, reserves = 1500, tmb = 1500 }
+
+local function keyOf(name)
+    if AmazingHub.Points then return AmazingHub.Points:KeyOf(name) end
+    return AmazingHub:GetPlayerKey(name, GetRealmName())
+end
+
+local function clip(s, n) return tostring(s or ""):sub(1, n) end
+
+local function pointsPool(core, tag, pool)
+    local at, standings = 0, {}
+    for _, e in ipairs(pool.log or {}) do
+        local ts = tonumber(e.ts) or 0
+        if ts > at then at = ts end
+    end
+    for key, s in pairs(pool.standings or {}) do
+        if #standings >= BOOK_MAX.standings then break end
+        standings[#standings + 1] = {
+            key = key, name = s.name or key, class = s.class or "",
+            current = tonumber(s.current) or 0, earned = tonumber(s.earned) or 0, spent = tonumber(s.spent) or 0,
+        }
+    end
+    table.sort(standings, function(a, b) return a.key < b.key end)
+    return { core = core, tag = tag, mode = pool.mode or "dkp", at = math.floor(at), standings = standings }
+end
+
+local function corePools(each)
+    local names = {}
+    for name in pairs(AmazingHub.db.cores or {}) do names[#names + 1] = name end
+    table.sort(names)
+    for _, name in ipairs(names) do
+        local core = AmazingHub.db.cores[name]
+        if type(core) == "table" then each(name, core.discordTag, core) end
+    end
+end
+
+function Companion:BookPoints()
+    local pools = {}
+    if AmazingHub.db.points then pools[1] = pointsPool("", nil, AmazingHub.db.points) end
+    corePools(function(name, tag, core)
+        if type(core.points) == "table" then pools[#pools + 1] = pointsPool(name, tag, core.points) end
+    end)
+    return { complete = true, pools = pools }
+end
+
+local function wishItems(list)
+    local items = {}
+    for _, e in ipairs(list or {}) do
+        local id = tonumber(e.itemId)
+        if id and id > 0 and #items < BOOK_MAX.items then
+            items[#items + 1] = { itemId = id, order = tonumber(e.order) or (#items + 1), offspec = e.isOffspec and true or nil }
+        end
+    end
+    table.sort(items, function(a, b) return a.order < b.order end)
+    return items
+end
+
+function Companion:BookWishlists()
+    local byKey = {}
+    -- What this client heard from the guild, then this account's own characters over it.
+    for _, entry in pairs(AmazingHub.db.guildWishlists or {}) do
+        if type(entry) == "table" and type(entry.name) == "string" and entry.name ~= "" then
+            local key = keyOf(entry.name)
+            if key then byKey[key] = { key = key, name = entry.name, class = entry.class or "", items = wishItems(entry.wishlist) } end
+        end
+    end
+    -- My own go up even emptied: that is how the site hears a list was cleared. Heard ones only with items.
+    for key, list in pairs(AmazingHub.db.wishlists or {}) do
+        local member = AmazingHub.db.members and AmazingHub.db.members[key]
+        byKey[key] = {
+            key = key, name = member and member.name or key,
+            class = member and member.class or "", items = wishItems(list), own = true,
+        }
+    end
+    local lists = {}
+    for _, l in pairs(byKey) do
+        if #l.items > 0 or l.own then
+            l.own = nil
+            lists[#lists + 1] = l
+        end
+    end
+    table.sort(lists, function(a, b) return a.key < b.key end)
+    while #lists > BOOK_MAX.lists do lists[#lists] = nil end
+    return { complete = false, lists = lists }
+end
+
+function Companion:BookPrios()
+    local items = {}
+    for itemId, list in pairs(AmazingHub.db.lootPrios or {}) do
+        local id = tonumber(itemId)
+        if id and id > 0 and type(list) == "table" then
+            local ranked = {}
+            for _, e in ipairs(list) do
+                if type(e) == "table" and type(e.name) == "string" and e.name ~= "" then ranked[#ranked + 1] = e end
+            end
+            table.sort(ranked, function(a, b) return (tonumber(a.order) or 99) < (tonumber(b.order) or 99) end)
+            local order = {}
+            for i, e in ipairs(ranked) do order[i] = clip(e.name, 64) end
+            if #order > 0 then items[#items + 1] = { itemId = id, order = order } end
+        end
+    end
+    table.sort(items, function(a, b) return a.itemId < b.itemId end)
+    while #items > BOOK_MAX.prios do items[#items] = nil end
+    return { complete = true, items = items }
+end
+
+function Companion:BookReserves()
+    local sr = AmazingHub.db.softRes or {}
+    local meta = sr.meta or {}
+    local items = {}
+    local ids = {}
+    for itemId in pairs(sr.items or {}) do
+        if tonumber(itemId) then ids[#ids + 1] = tonumber(itemId) end
+    end
+    table.sort(ids)
+    for _, id in ipairs(ids) do
+        for _, e in ipairs(sr.items[id] or sr.items[tostring(id)] or {}) do
+            if #items < BOOK_MAX.reserves and type(e.name) == "string" and e.name ~= "" then
+                items[#items + 1] = {
+                    itemId = id, name = clip(e.name, 64), class = e.class ~= "" and e.class or nil,
+                    note = e.note ~= "" and e.note and clip(e.note, 200) or nil,
+                    plusOnes = tonumber(e.plusOnes) or 0, hard = e.hard and true or nil,
+                }
+            end
+        end
+    end
+    return {
+        complete = true, source = meta.source or "", listId = clip(meta.listId, 100),
+        at = math.floor(tonumber(meta.importedAt) or 0), items = items,
+    }
+end
+
+function Companion:BookTMB()
+    local pools, total = {}, 0
+    corePools(function(name, tag, core)
+        local list = core.lootMaster and core.lootMaster.tmbList
+        if type(list) ~= "table" then return end
+        local entries = {}
+        for _, e in ipairs(list) do
+            if total < BOOK_MAX.tmb and type(e) == "table" and e.player and e.item then
+                total = total + 1
+                entries[#entries + 1] = { player = clip(e.player, 64), item = clip(e.item, 120), priority = tonumber(e.priority) or 1 }
+            end
+        end
+        pools[#pools + 1] = { core = name, tag = tag, entries = entries }
+    end)
+    return { complete = true, pools = pools }
+end
+
+-- v16 (issue #313): which ranks are officers, as the guild chose it. Only with its stamp: a client that
+-- never heard the guild's choice holds its own default, and saying it would overwrite a real choice on
+-- the site with a guess. The stamp is the officers' own, so the site keeps the newest whichever
+-- officer's upload lands last, as the clients do between themselves (Core's OnOfficerMaxRankSync).
+local function officerRanks()
+    local s = AmazingHub.db and AmazingHub.db.settings
+    local max, at = s and s.officerMaxRank, s and tonumber(s.officerMaxRankAt)
+    if type(max) ~= "number" or max ~= math.floor(max) or max < 0 or max > 9 then return nil end
+    if not (at and at > 0 and at < math.huge) then return nil end
+    return { max = max, at = math.floor(at) }
+end
+
+-- The loot book, each set behind its module's switch; nil when this client has none of them on.
+local function lootBook()
+    local book, any = {}, false
+    local function enabled(id) return AmazingHub.IsFeatureEnabled ~= nil and AmazingHub:IsFeatureEnabled(id) end
+    local function put(field, on, fn)
+        if not on then return end
+        local v = optional("lootBook." .. field, fn, Companion)
+        if v then book[field] = v; any = true end
+    end
+    put("points", AmazingHub.Points and enabled("dkp"), Companion.BookPoints)
+    put("wishlists", AmazingHub.Wishlist and enabled("wishlist"), Companion.BookWishlists)
+    put("prios", AmazingHub.Wishlist and enabled("wishlist"), Companion.BookPrios)
+    put("reserves", AmazingHub.SoftRes and enabled("loot"), Companion.BookReserves)
+    put("tmb", AmazingHub.CoreManager and enabled("loot"), Companion.BookTMB)
+    return any and book or nil
+end
+
+function Companion:BuildPayload()
+    local guildName = GetGuildInfo("player")
+    if not guildName then return nil, "not in a guild" end
+    local refused = self:Refused()
+    if refused then return nil, refused end
+    local realm = AmazingHub:GetClientRealm()
+    local retail = AmazingHub.Client.isRetail
+
+    local members, count = {}, 0
+    local n = GetNumGuildMembers() or 0
+    for i = 1, n do
+        local fullName, rankName, rankIndex, level, _, _, _, _, _, _, classFile =
+            GetGuildRosterInfo(i)
+        if fullName then
+            local short = fullName:match("^([^-]+)") or fullName
+            local memberRealm = fullName:match("-(.+)$") or realm
+            local key = AmazingHub:GetPlayerKey(short, memberRealm)
+            count = count + 1
+            members[count] = memberLine(key, short, classFile, level, rankName, rankIndex)
+        end
+    end
+
+    local loot = {}
+    if AmazingHub.LootTracker then
+        for _, e in ipairs(AmazingHub.LootTracker:GetHistory(500) or {}) do
+            -- The history stores an item link, not an id; the site wants the id
+            -- so it can build its own tooltip link.
+            local itemId = tonumber(e.itemId or (e.itemLink and e.itemLink:match("item:(%d+)"))) or 0
+            loot[#loot + 1] = {
+                playerKey = e.playerKey or "",
+                player = e.player or "",
+                itemId = itemId,
+                itemName = e.itemName or "",
+                quality = tonumber(e.quality) or 0,
+                timestamp = math.floor(tonumber(e.timestamp) or 0),
+                raid = e.raid or "",
+            }
+        end
+    end
+
+    local sessions, deletedSessions = raidSessions()
+
+    local payload = envelope(guildName, count, members)
+    payload.rosterComplete = AmazingHub:WholeRoster() and true or nil
+    payload.loot = loot
+    payload.sessions = sessions
+    payload.deletedSessions = deletedSessions
+    payload.attendanceRules = attendanceRules(sessions)
+    -- v12, WoW: Forever only: absent where the module does not exist (issue #205).
+    payload.journal = AmazingHub.Journal and AmazingHub:IsFeatureEnabled("journal")
+        and optional("journal", AmazingHub.Journal.ForExport, AmazingHub.Journal) or nil
+    -- v12: the guild's tabard as the game draws it, absent without one (issue #213). Not on TBC
+    -- Anniversary, whose guilds the site's tabard contest is not for.
+    payload.tabard = not AmazingHub.Client.isAnniversary and optional("tabard", AmazingHub.Compat.GuildTabard) or nil
+    -- v12, WoW: Forever only: absent until the GM records it (issue #208).
+    payload.founding = AmazingHub.Founding and AmazingHub:IsFeatureEnabled("founding")
+        and optional("founding", AmazingHub.Founding.ForExport, AmazingHub.Founding) or nil
+    -- v12, WoW: Forever only (issue #206): only from a client that has heard the guild's choice,
+    -- since an empty one tells the site the minimum was cleared — and with its stamp, so the site
+    -- keeps the newest, whichever officer's upload lands last.
+    payload.guildConfig = not AmazingHub.Client.isAnniversary and not retail and AmazingHub.Readiness
+        and AmazingHub.Readiness:MinIlvlKnown()
+        and { readyMinIlvl = AmazingHub.Readiness:GetMinIlvl(), readyMinIlvlAt = AmazingHub.db.settings.readyMinIlvlAt } or nil
+    -- v13 (specs/071, amazinghub#245): who asked to join and what was decided. Optional: a bug in it must
+    -- never keep the roster, the raids and the loot from going up.
+    payload.joinRequests = AmazingHub.JoinRequests
+        and optional("joinRequests", AmazingHub.JoinRequests.ForExport, AmazingHub.JoinRequests) or nil
+    -- v15 (#295): points, wishlists, priorities, reserves and TMB lists. Never in the pack.
+    payload.lootBook = lootBook()
+    payload.officerRanks = officerRanks()
+    return payload
+end
+
+-- The wire format at the top of this file, in one place, for the export and the pack.
+local function onTheWire(payload, prefix)
+    local LibDeflate = LibStub and LibStub("LibDeflate", true)
+    if not LibDeflate then return nil, "LibDeflate not available" end
+
+    local json = encode(payload)
+    local compressed = LibDeflate:CompressDeflate(json, { level = 9 })
+    if not compressed then return nil, "compression failed" end
+
+    return (prefix or WIRE_PREFIX) .. LibDeflate:EncodeForPrint(compressed)
+end
+
+-- Any other string the site reads with the same wire (GOSOUTB1: the join requests of a character with no
+-- guild): `prefix` with the marker and its colon. Nil and why when it cannot be made.
+function Companion:Pack(prefix, payload)
+    return onTheWire(payload, prefix)
+end
+
+----------------------------------------------------------------------
+-- The string a person copies
+----------------------------------------------------------------------
+function Companion:Build()
+    if not self:IsEnabled() then return nil, "the web companion is off" end
+
+    local payload, err = self:BuildPayload()
+    if not payload then return nil, err end
+    if payload.count == 0 then
+        return nil, "nobody in the guild has shared anything yet"
+    end
+
+    local text, why = onTheWire(payload)
+    if not text then return nil, why end
+    return text, payload.count
+end
+
+----------------------------------------------------------------------
+-- The character's own pack (the site's specs/070)
+--
+-- Deliberately outside Companion:IsEnabled(). The switch exists for the guild's
+-- data: it is off by default because the export carries everybody's gear,
+-- attunements and attendance. This carries one line, the player's own, into a
+-- file on the player's own PC, and it only ever leaves that PC when somebody is
+-- logged into the companion. Behind the switch, a member who installs the app
+-- and signs in would send nothing at all.
+--
+-- The wire format and the decoder are the export's. `self = true` says what it
+-- is, and it has none of what only an officer's upload may say: no loot, nights,
+-- founding, guild settings or `rosterComplete`, without which nobody is read as
+-- having left. The site takes from it only what specs/070 lets a member write.
+----------------------------------------------------------------------
+
+-- My own line as a GOSCOMP1: string, or nil and why. Asks the switch nothing.
+function Companion:BuildSelf()
+    local guildName, rankName, rankIndex = GetGuildInfo("player")
+    -- The guild's db and not merely a guild: a db that never resolved reads the switch as off
+    -- whatever the guild chose, and writing here would replace that officer's export with this.
+    if not guildName or not AmazingHub:IsOnGuildDB() then return nil, "not in a guild" end
+    local refused = self:Refused()
+    if refused then return nil, refused end
+
+    -- Compat.PlayerName, never UnitName: on WoW: Forever that is the first name alone, and the
+    -- site has no such line (issue #26). No guild roster either: this client knows all of it
+    -- about itself, and a quick relog has no roster loaded.
+    local name = AmazingHub.Compat.PlayerName()
+    local key = AmazingHub:GetPlayerKey(name)
+    local mine = key and AmazingHub.db.members[key]
+    -- Nothing read yet is nothing to say, and the site's guard would refuse the stamp anyway.
+    if not mine or (tonumber(mine.lastUpdate) or 0) <= 0 then return nil, "this character has not been read yet" end
+
+    local _, classFile = UnitClass("player")
+    local line = memberLine(key, name, classFile, UnitLevel("player"), rankName, rankIndex)
+    -- A roster's line has a value in every column; one client speaking for itself says what it
+    -- knows. A rank nobody gave would read 0, the Guild Master, and a cold item cache's average
+    -- of 0 would overwrite a real one on the site. Absent, both of them keep what is there.
+    line.rank, line.rankIndex = rankName, rankIndex
+    if line.avgIlvl == 0 then line.avgIlvl = nil end
+    -- Whose alt somebody is, is the officers' to say (altLinks), never a character's about itself.
+    line.main = nil
+
+    local payload = envelope(guildName, 1, { line })
+    payload.self = true
+    -- The one empty field here, and it cannot be absent: the decoder (packages/goscomp's
+    -- assertPayload) refuses a payload with no list. Empty carries no loot, and costs no change there.
+    payload.loot = {}
+
+    local text, why = onTheWire(payload)
+    if not text then return nil, why end
+    return text, payload.count
+end
+
+----------------------------------------------------------------------
+-- What the desktop companion reads
+--
+-- WoW flushes SavedVariables on logout and on /reload, and at no other
+-- moment, so this is the only place a file on disk can come from. The
+-- desktop companion watches that file and uploads what it finds, which is
+-- the whole point: nobody has to remember to copy a string on raid night.
+--
+-- One GOSCOMP1: string per file, and that is why the pack shares the export's
+-- field: the app lifts the first match it finds, so with the two side by side
+-- an officer's upload could pick the pack. Switch on, the export and no pack;
+-- switch off, the pack and no export.
+--
+-- The builds are wrapped. A payload that fails on the way out must never be
+-- the reason someone's client hangs on logout.
+----------------------------------------------------------------------
+local function writeExport()
+    local ok, text = pcall(Companion.Build, Companion)
+    -- Build answers nil for the ordinary cases as well — logged out on a
+    -- guildless alt, nobody has published anything yet. Keeping the previous
+    -- string beats replacing a good payload with nothing.
+    if ok and type(text) == "string" then
+        AmazingHubDB.__companion = text
+        -- When the addon WROTE it. Not when it was delivered: the companion
+        -- does that and never reports back, so the Web panel can only ever
+        -- say "last written".
+        AmazingHubDB.__companionAt = time()
+        AmazingHubDB.__companionSelf = nil
+    elseif AmazingHubDB.__companionSelf then
+        -- Unless the previous string is a pack from before the switch went on, which is
+        -- no good payload: it is what an officer's upload must never pick.
+        AmazingHubDB.__companion, AmazingHubDB.__companionSelf = nil, nil
+    end
+end
+
+local function writePack()
+    local ok, text = pcall(Companion.BuildSelf, Companion)
+    if ok and type(text) == "string" then
+        AmazingHubDB.__companion = text
+        -- No __companionAt: the Web panel's "last written" and Activation's publish
+        -- step read it as the guild publishing, and a pack is not that.
+        AmazingHubDB.__companionSelf = true
+    end
+end
+
+local writer = CreateFrame("Frame")
+writer:RegisterEvent("PLAYER_LOGOUT")
+writer:SetScript("OnEvent", function()
+    if not AmazingHubDB then return end
+    -- The queue of a character with no guild: its own string, for the companion to take to the site.
+    -- Its own pcall, and first: nothing about it may keep the export from being written.
+    if AmazingHub.JoinRequests and AmazingHub.JoinRequests.WriteWire then pcall(AmazingHub.JoinRequests.WriteWire, AmazingHub.JoinRequests) end
+    if Companion:IsEnabled() then writeExport() else writePack() end
+end)

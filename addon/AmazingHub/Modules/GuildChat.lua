@@ -1,0 +1,177 @@
+-- Amazing Hub guard (tools/rebrand-hub.py): chat leaves only to the guild, group or a guild member.
+local SendChatMessage = function(...) return AmazingHub.Compat.GuardedChat(...) end
+----------------------------------------------------------------------
+-- Amazing Hub - Guild chat, kept for the Guild tab (issue #124)
+--
+-- Every line of /g, the player's own included, goes into the guild's own
+-- log, so the Chat sub-tab can show what was said before the window opened
+-- and before the last reload. Sending is the player pressing Enter in that
+-- tab, which is a hardware event, so it is allowed on WoW: Forever too.
+--
+-- Where the server keeps the guild's chat (WoW: Forever, issue #126), the tab
+-- shows that instead: it also holds what was said while the player was away,
+-- and every channel of the guild, Officer and the ones it made, gets a tab.
+-- Only /g is ever written to disk.
+--
+-- A channel is { id, name, kind } from Compat.GuildChatStreams; nil means /g.
+--
+-- Unlike the alliance channel, the line is kept as the game sent it: item
+-- and player links stay clickable. It is what the default chat frame shows
+-- for the same line, and only the guild can say it. Line breaks go: one
+-- line of chat is one line of the feed.
+----------------------------------------------------------------------
+local GuildChat = {}
+AmazingHub.GuildChat = GuildChat
+
+-- Capped on purpose: plain text on the player's disk, and an unbounded log
+-- would grow the SavedVariables file forever.
+GuildChat.MAX_LOG = 200
+
+GuildChat.listeners = {}
+
+function GuildChat:Log()
+    AmazingHub.db.guildChatLog = AmazingHub.db.guildChatLog or {}
+    return AmazingHub.db.guildChatLog
+end
+
+function GuildChat:OnRefresh(fn)
+    if type(fn) == "function" then
+        self.listeners[#self.listeners + 1] = fn
+    end
+end
+
+function GuildChat:_Notify()
+    for _, fn in ipairs(self.listeners) do
+        pcall(fn)
+    end
+end
+
+-- The guild's channels this player can read; nil where the server keeps none, or
+-- in a chat lockdown, when the list arrives secret.
+function GuildChat:Streams()
+    return (AmazingHub.Compat.GuildChatStreams())
+end
+
+-- In a chat lockdown nothing of the server's can be read: a feed keeps what it shows.
+function GuildChat:Locked()
+    return AmazingHub.Compat.InChatLockdown()
+end
+
+local function isGuild(stream)
+    return not stream or stream.kind == "guild"
+end
+
+-- What a channel's tab shows, and whether it came from the server. For /g, the
+-- server's history where it has one, and the addon's log elsewhere or while the
+-- server has nothing loaded yet: never both, so no line shows twice. Any other
+-- channel only ever has the server's.
+function GuildChat:Entries(stream)
+    local server, locked = AmazingHub.Compat.GuildChatHistory(self.MAX_LOG, stream and stream.id)
+    if locked then return nil end
+    if not isGuild(stream) then
+        return server or {}, true
+    end
+    if server and #server > 0 then
+        return server, true
+    end
+    return self:Log(), false
+end
+
+-- A channel's tab opened (true) or closed. Two feeds can show one channel (the
+-- Now card and Guild > Chat), so the server hears the first open and the last
+-- close. Opened, it is asked for older lines while it holds fewer than the cap;
+-- they redraw the tab when they arrive.
+GuildChat.watching = {}
+
+function GuildChat:Watch(on, stream)
+    local id = (not isGuild(stream)) and stream.id or nil
+    local key = id or "guild"
+    local was = self.watching[key] or 0
+    if not on and was == 0 then return end
+    self.watching[key] = was + (on and 1 or -1)
+    if not on then
+        if was == 1 then AmazingHub.Compat.WatchGuildChat(false, id) end
+        return
+    end
+    if was > 0 then return end
+    AmazingHub.Compat.WatchGuildChat(true, id)
+    local server = AmazingHub.Compat.GuildChatHistory(self.MAX_LOG, id)
+    if server and #server < self.MAX_LOG then
+        AmazingHub.Compat.RequestOlderGuildChat(self.MAX_LOG - #server, id)
+    end
+end
+
+-- The class is read now, while the speaker is a GUID the game knows: the
+-- history is drawn in class colours long after they logged off.
+local function classOf(guid)
+    if not guid or AmazingHub.Compat.IsSecret(guid) or not GetPlayerInfoByGUID then return nil end
+    local _, class = GetPlayerInfoByGUID(guid)
+    if AmazingHub.Compat.IsSecret(class) then return nil end
+    return class
+end
+
+function GuildChat:_OnMessage(msg, author, guid)
+    -- Chat in lockdown on Forever: neither the line nor its speaker is readable.
+    if AmazingHub.Compat.IsSecret(msg, author) or not msg or not author then return end
+    -- The data resolved at login for a guildless character is shared by every guildless
+    -- character on the realm: a guild joined since then is not written into it.
+    if not AmazingHub.isGuilded then return end
+    local log = self:Log()
+    log[#log + 1] = {
+        t = GetServerTime(),
+        n = (Ambiguate and Ambiguate(author, "guild")) or author,
+        c = classOf(guid),
+        m = (tostring(msg):gsub("%c", " ")),
+    }
+    while #log > self.MAX_LOG do
+        table.remove(log, 1)
+    end
+    self:_Notify()
+end
+
+-- Only ever called from a tab's Enter or Send click. The line is not logged
+-- here: it shows when the game echoes it back.
+function GuildChat:Send(text, stream)
+    local clean = AmazingHub:SanitizeUserText(text, 240)
+    if clean == "" then
+        return false
+    end
+    -- Forever drops a line sent in an encounter's chat lockdown without an error, so it is
+    -- asked first and the text stays with the player (as Modules/CallToArms.lua does).
+    if AmazingHub.Compat.InChatLockdown() then
+        return false, "locked"
+    end
+    if isGuild(stream) then
+        SendChatMessage(clean, "GUILD")
+    elseif stream.kind == "officer" then
+        SendChatMessage(clean, "OFFICER")
+    else
+        return AmazingHub.Compat.SendGuildStream(stream.id, clean)
+    end
+    return true
+end
+
+function GuildChat:Initialize()
+    do return end -- Amazing Hub: GuildLedger keeps the guild chat (no second reader of the club history)
+    local f = CreateFrame("Frame")
+    AmazingHub.Compat.RegisterEvent(f, "CHAT_MSG_GUILD")
+    -- The server's channels: a new line, older ones arriving, a channel made or
+    -- removed, the list arriving. Absent where there are none.
+    AmazingHub.Compat.RegisterEvent(f, "CLUB_MESSAGE_ADDED", true)
+    AmazingHub.Compat.RegisterEvent(f, "CLUB_MESSAGE_HISTORY_RECEIVED", true)
+    AmazingHub.Compat.RegisterEvent(f, "CLUB_STREAM_ADDED", true)
+    AmazingHub.Compat.RegisterEvent(f, "CLUB_STREAM_REMOVED", true)
+    AmazingHub.Compat.RegisterEvent(f, "CLUB_STREAMS_LOADED", true)
+    f:SetScript("OnEvent", function(_, event, ...)
+        if event == "CHAT_MSG_GUILD" then
+            local msg, author = ...
+            local guid = select(12, ...)
+            AmazingHub:SafeCall(function() GuildChat:_OnMessage(msg, author, guid) end)
+            return
+        end
+        local clubId = ...
+        AmazingHub:SafeCall(function()
+            if AmazingHub.Compat.IsGuildClub(clubId) then GuildChat:_Notify() end
+        end)
+    end)
+end

@@ -172,7 +172,7 @@ def test_malformed_rows_are_skipped(spool, basic):
     assert res.skipped == 4
 
 
-@pytest.mark.parametrize("db", [{}, {"GuildLedgerDB": {"schema": 3}}, {"GuildLedgerDB": "x"}])
+@pytest.mark.parametrize("db", [{}, {"GuildLedgerDB": {"schema": 4}}, {"GuildLedgerDB": "x"}])
 def test_schema_check(spool, db):
     with pytest.raises(SchemaError):
         spool.import_sv(db, "c1")

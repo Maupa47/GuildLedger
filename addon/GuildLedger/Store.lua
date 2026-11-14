@@ -5,8 +5,9 @@ local _, ns = ...
 local S = {}
 ns.Store = S
 
-S.VERSION = "0.2.1"
-S.SCHEMA = 2
+S.VERSION = "0.5.0"
+S.SCHEMA = 3
+S.MAX_LINKS = 500 -- collector: link requests kept until the companion uploads them (ring buffer)
 S.MEMBER_MAX = 2000 -- member role: lines kept for collectors (CLAUDE.md 5.7)
 S.MEMBER_AGE = 3 * 86400
 S.MAX_CHAT = 20000
@@ -28,6 +29,9 @@ function S.Init()
         db.opts = db.opts or {}
         db.opts.collector = true
         db.schema = 2
+    end
+    if db.schema == 2 then
+        db.schema = 3 -- 2 -> 3: adds guilds[..].links (collectors) and db.link (account); nothing to convert
     end
     db.schema = db.schema or S.SCHEMA
     db.meta = db.meta or {}
@@ -274,4 +278,27 @@ function S.PruneMember(clubId, now)
         removed = removed + keepRows(clubId, function() i = i + 1 return i > extra end)
     end
     return removed
+end
+
+---------------------------------------------------------------------------------------------------
+-- Discord link requests heard by a collector (schema 3; docs/PACK_PLAN.md section 10)
+---------------------------------------------------------------------------------------------------
+
+-- row = { id, t, k = "link"|"alt", code?, tag, n = sender, g = GUID if known }. Returns true when new.
+function S.AddLink(clubId, row)
+    local g = S.Guild(clubId)
+    g.links = g.links or {}
+    for _, r in ipairs(g.links) do
+        if r.id == row.id then return false end
+    end
+    g.links[#g.links + 1] = row
+    while #g.links > S.MAX_LINKS do table.remove(g.links, 1) end
+    S.unsaved = S.unsaved + 1
+    return true
+end
+
+-- Account-wide link state: { tag = "...", pending = { code, at, acked }, requested = true once acked }.
+function S.LinkState()
+    db.link = db.link or {}
+    return db.link
 end

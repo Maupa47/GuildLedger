@@ -1,0 +1,809 @@
+----------------------------------------------------------------------
+-- Amazing Hub - Audit Panel (guild readiness)
+-- "Auditoria" tab with sub-tabs: Attunement progression grid and the
+-- guild-wide enchant audit. Visual layout only — data comes from
+-- AmazingHub.AttunementTracker and AmazingHub.GearAudit (Rule 3 / Rule 10).
+----------------------------------------------------------------------
+local UI = AmazingHub.UI
+local C = AmazingHub.Colors
+local L = AmazingHub.L
+local WHITE = "Interface\\Buttons\\WHITE8x8"
+
+local SUBTABS = {
+    { key = "ready",   label = L["Readiness"] },
+    { key = "attune",  label = L["Attunements"], tbc = true },  -- TBC content (ADR-0014)
+    { key = "resist",  label = L["Resistances"], tbc = true },  -- targets are TBC fights
+    { key = "enchant", label = L["Enchants"] },
+    { key = "sync",    label = L["Sync"] },
+}
+
+local ROW_H = 24
+local NAME_W = 170
+local COL_W = 92
+
+-- Ready-check icons render reliably inside FontStrings (no font-glyph risk).
+local ICON_DONE = "|TInterface\\RAIDFRAME\\ReadyCheck-Ready:14:14|t"
+local ICON_NONE = "|TInterface\\RAIDFRAME\\ReadyCheck-NotReady:14:14|t"
+
+----------------------------------------------------------------------
+-- Shared builders
+----------------------------------------------------------------------
+local function MakeScrollList(panel, name, topInset)
+    local scroll = CreateFrame("ScrollFrame", name, panel, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", 0, -(topInset or 0))
+    scroll:SetPoint("BOTTOMRIGHT", -10, 0)
+    UI:SkinScrollBar(scroll, name)
+    local content = CreateFrame("Frame", nil, scroll)
+    content:SetSize(1, 1)
+    scroll:SetScrollChild(content)
+    UI:BindScrollChildWidth(scroll, content)
+    return scroll, content
+end
+
+local function MakeRow(content, yOff, index)
+    local row = CreateFrame("Frame", nil, content, "BackdropTemplate")
+    row:SetSize(content:GetWidth() - 4, ROW_H)
+    row:SetPoint("TOPLEFT", 0, -yOff)
+    row:SetBackdrop({ bgFile = WHITE })
+    local alt = (index % 2 == 0) and C.row1 or C.row2
+    row:SetBackdropColor(alt.r, alt.g, alt.b, alt.a)
+    return row
+end
+
+local function ClearContent(content)
+    for _, child in pairs({ content:GetChildren() }) do child:Hide() end
+end
+
+----------------------------------------------------------------------
+-- READINESS sub-panel — "is the raid ready?" one-screen rollup
+-- Aggregates attunement + enchants + iLvl + (in-raid) consumables.
+----------------------------------------------------------------------
+local function BuildReadySub(panel)
+    panel.targetIdx = 0   -- 0 = all raids; 1..N = a specific attunement raid
+    -- The attunement target is TBC's (ADR-0014) and the consumables column the checker's, on
+    -- Anniversary and retail (issue #187): where the game has neither, there is nothing to cycle
+    -- through or to count (issue #184).
+    local hasAttune, hasCons = AmazingHub.AttunementTracker ~= nil, AmazingHub.ConsumableChecker ~= nil
+    -- WoW: Forever has no attunements: its column is the level, the door to a raid (issue #207).
+    local forever = not AmazingHub.Client.isAnniversary and not AmazingHub.Client.isRetail
+    panel.statusIdx = 0   -- 0 = every status; 1..N = one of them (issue #220)
+    local STATUSES = { { "ready", L["ready"] }, { "warn", L["check"] }, { "notready", L["not ready"] } }
+
+    local summary = UI:CreateText(panel, "", 10, C.gold.r, C.gold.g, C.gold.b)
+    summary:SetPoint("TOPLEFT", 4, -4)
+
+    local targetBtn
+    if hasAttune then
+        targetBtn = UI:CreateButton(panel, L["Target: All raids"], 220, 20)
+        targetBtn:SetPoint("TOPRIGHT", -12, -2)
+    end
+
+    -- /amazing specs: the group's talent specs, read now (#142).
+    local specsBtn = UI:CreateButton(panel, L["Scan group talents"], 150, 20)
+    if targetBtn then
+        specsBtn:SetPoint("TOPRIGHT", targetBtn, "TOPLEFT", -6, 0)
+    else
+        specsBtn:SetPoint("TOPRIGHT", -12, -2)
+    end
+    specsBtn:SetScript("OnClick", function()
+        if AmazingHub.SpecChecker then AmazingHub.SpecChecker:ScanGroup() end
+    end)
+    -- /amazing cons: the raid's consumables, read now, with the announce (on retail the Raid HUD that
+    -- holds the other way in does not exist; issue #187).
+    local leftmost = specsBtn
+    if hasCons then
+        local consBtn = UI:CreateButton(panel, L["Check Consumables"], 150, 20)
+        consBtn:SetPoint("TOPRIGHT", specsBtn, "TOPLEFT", -6, 0)
+        consBtn:SetScript("OnClick", function() AmazingHub:ShowConsumablePopup() end)
+        leftmost = consBtn
+    end
+    -- Forever's filters: a core and a status, each cycled like the target above (issue #220).
+    local coreBtn, statusBtn
+    if forever then
+        statusBtn = UI:CreateButton(panel, L["Status: All"], 120, 20)
+        statusBtn:SetPoint("TOPRIGHT", leftmost, "TOPLEFT", -6, 0)
+        coreBtn = UI:CreateButton(panel, L["Core: All"], 130, 20)
+        coreBtn:SetPoint("TOPRIGHT", statusBtn, "TOPLEFT", -6, 0)
+        leftmost = coreBtn
+    end
+    -- A narrow window cuts the summary short rather than lay the buttons over it.
+    summary:SetPoint("TOPRIGHT", leftmost, "TOPLEFT", -8, -2)
+    summary:SetWordWrap(false)
+    summary:SetJustifyH("LEFT")
+
+    local header = CreateFrame("Frame", nil, panel)
+    header:SetPoint("TOPLEFT", 0, -26)
+    header:SetPoint("TOPRIGHT", -10, -26)
+    header:SetHeight(16)
+    local function hcol(txt, x)
+        local fs = UI:CreateHeaderText(header, txt, 9)
+        fs:SetPoint("LEFT", x, 0)
+    end
+    hcol(L["MEMBER"], 8)
+    hcol(L["STATUS"], 160)
+    hcol(L["iLVL"], 250)
+    if hasAttune then hcol(L["ATTUNE"], 310) end
+    if forever then hcol(L["LEVEL"], 310) end
+    hcol(L["ENCHANTS"], 400)
+    if hasCons then hcol(L["CONSUMES"], 510) end
+    if forever then
+        hcol(L["CORE"], 470)
+        hcol(L["ROLE"], 580)
+    end
+
+    local foot = UI:CreateText(panel, "", 10, C.silver.r, C.silver.g, C.silver.b)
+    foot:SetPoint("BOTTOMLEFT", 4, 2)
+    foot:SetJustifyH("LEFT")
+
+    local listHolder = CreateFrame("Frame", nil, panel)
+    listHolder:SetPoint("TOPLEFT", 0, -46)
+    listHolder:SetPoint("BOTTOMRIGHT", 0, 0)
+    local _, content = MakeScrollList(listHolder, "AmazingHubAuditReadyScroll")
+
+    local function refresh()
+        content:SetWidth(listHolder:GetWidth() - 12)
+        ClearContent(content)
+
+        local targets = AmazingHub.Readiness:GetTargets()
+        local target = (panel.targetIdx > 0) and targets[panel.targetIdx] or nil
+        local targetShort = target and target.short or nil
+        if targetBtn then targetBtn.label:SetText(target and (L["Target: "] .. target.short) or L["Target: All raids"]) end
+
+        local rows = AmazingHub.Readiness:GetReport(targetShort)
+        local c = AmazingHub.Readiness:Summarize(rows)
+        summary:SetText(string.format(L["%d ready  |  %d need attention  |  %d not ready"],
+            c.ready, c.warn, c.notready))
+
+        if forever then
+            local names = AmazingHub.CoreManager and AmazingHub.CoreManager:GetSortedNames() or {}
+            if panel.coreIdx > #names then panel.coreIdx = 0 end
+            panel.coreName = names[panel.coreIdx]
+            local status = STATUSES[panel.statusIdx]
+            coreBtn.label:SetText(panel.coreName and (L["Core: "] .. panel.coreName) or L["Core: All"])
+            statusBtn.label:SetText(status and (L["Status: "] .. status[2]) or L["Status: All"])
+
+            AmazingHub.Readiness:WithSeats(rows)
+            -- The footer reads the whole guild: a status filter hides rows, not what a core has.
+            local lines = {}
+            for _, x in ipairs(AmazingHub.Readiness:Compositions(rows, panel.coreName)) do
+                lines[#lines + 1] = string.format(L["%s: tanks %d/%d  |  healers %d/%d  |  dps %d/%d"],
+                    x.core, x.tanks, x.wantTanks, x.healers, x.wantHealers, x.dps, x.wantDps)
+            end
+            foot:SetText(table.concat(lines, "\n"))
+            listHolder:SetPoint("BOTTOMRIGHT", 0, #lines > 0 and #lines * 14 + 6 or 0)
+            rows = AmazingHub.Readiness.Filtered(rows, panel.coreName, status and status[1] or nil)
+        end
+
+        local yOff = 0
+        for idx, r in ipairs(rows) do
+            local row = MakeRow(content, yOff, idx)
+            local cr, cg, cb = AmazingHub:GetClassColor(r.class)
+            local nameFS = UI:CreateText(row, r.name, 11, cr, cg, cb)
+            nameFS:SetPoint("LEFT", 8, 0)
+            if r.status == "nodata" then nameFS:SetTextColor(0.45, 0.45, 0.5) end
+
+            local stFS = UI:CreateText(row, "", 11, 1, 1, 1)
+            stFS:SetPoint("LEFT", 160, 0)
+            if r.status == "ready" then
+                stFS:SetText(ICON_DONE .. " |cff4CFF4C" .. L["ready"] .. "|r")
+            elseif r.status == "notready" and r.reason == "level" then
+                stFS:SetText(ICON_NONE .. " |cffFF5555" .. L["Level"] .. " " .. (r.level or 0) .. "|r")
+            elseif r.status == "notready" then
+                stFS:SetText(ICON_NONE .. " |cffFF5555" .. L["not attuned"] .. "|r")
+            elseif r.status == "warn" then
+                stFS:SetText("|cffEDCC7B! " .. L["check"] .. "|r")
+            else
+                stFS:SetText("|cff808080\226\128\147|r")
+            end
+
+            -- A 60 with no addon data is ready by level only, said where its item level would be (#207).
+            local ilvlFS = UI:CreateText(row, r.levelOnly and L["level only"] or r.ilvl > 0 and tostring(r.ilvl) or "\226\128\148",
+                10, C.silver.r, C.silver.g, C.silver.b)
+            ilvlFS:SetPoint("LEFT", 250, 0)
+            ilvlFS:SetWidth(56); ilvlFS:SetWordWrap(false); ilvlFS:SetJustifyH("LEFT")
+
+            if forever then
+                local lvlFS = UI:CreateText(row, tostring(r.level or 0), 10, C.silver.r, C.silver.g, C.silver.b)
+                lvlFS:SetPoint("LEFT", 310, 0)
+            end
+            if hasAttune then
+                local attColor = (r.attTotal > 0 and r.attDone == r.attTotal) and C.green or C.gold
+                if r.targetOk == false then attColor = C.red elseif r.targetOk == true then attColor = C.green end
+                local attTxt = r.attTotal > 0 and (r.attDone .. "/" .. r.attTotal) or "\226\128\148"
+                local attFS = UI:CreateText(row, attTxt, 10, attColor.r, attColor.g, attColor.b)
+                attFS:SetPoint("LEFT", 310, 0)
+            end
+
+            local enchTxt, ec
+            if not r.hasGear then enchTxt, ec = "\226\128\148", C.textDim
+            elseif r.missEnch > 0 then enchTxt, ec = string.format(L["%d missing"], r.missEnch), C.red
+            else enchTxt, ec = "OK", C.green end
+            local enchFS = UI:CreateText(row, enchTxt, 10, ec.r, ec.g, ec.b)
+            enchFS:SetPoint("LEFT", 400, 0)
+
+            if forever then
+                -- The seat in the chosen core, or the first, with how many more.
+                local seat = r.seats[1]
+                for _, s in ipairs(r.seats) do
+                    if s.core == panel.coreName then seat = s end
+                end
+                local more = (#r.seats > 1 and not panel.coreName) and (" +" .. (#r.seats - 1)) or ""
+                local coreFS = UI:CreateText(row, seat and (seat.core .. more) or "\226\128\148", 10, C.silver.r, C.silver.g, C.silver.b)
+                coreFS:SetPoint("LEFT", 470, 0)
+                coreFS:SetWidth(104); coreFS:SetWordWrap(false); coreFS:SetJustifyH("LEFT")
+                local rc = (seat and seat.main) and C.silver or C.textDim
+                local roleName = seat and AmazingHub.CoreManager.ROLE_LABELS[seat.role]
+                local roleFS = UI:CreateText(row, roleName or "\226\128\148", 10, rc.r, rc.g, rc.b)
+                roleFS:SetPoint("LEFT", 580, 0)
+            end
+
+            if hasCons then
+                local consTxt, cc
+                if r.missCons == nil then consTxt, cc = "\226\128\148", C.textDim
+                elseif r.missCons > 0 then consTxt, cc = string.format(L["%d missing"], r.missCons), C.red
+                else consTxt, cc = "OK", C.green end
+                local consFS = UI:CreateText(row, consTxt, 10, cc.r, cc.g, cc.b)
+                consFS:SetPoint("LEFT", 510, 0)
+            end
+
+            yOff = yOff + ROW_H + 2
+        end
+
+        if #rows == 0 then
+            local empty = UI:CreateText(content, L["No roster data yet."], 11, C.silver.r, C.silver.g, C.silver.b)
+            empty:SetPoint("TOPLEFT", 4, -4)
+        end
+        content:SetHeight(math.max(1, yOff))
+    end
+
+    if forever then
+        panel.coreIdx = 0
+        coreBtn:SetScript("OnClick", function()
+            panel.coreIdx = panel.coreIdx + 1
+            refresh()
+        end)
+        statusBtn:SetScript("OnClick", function()
+            panel.statusIdx = (panel.statusIdx + 1) % (#STATUSES + 1)
+            refresh()
+        end)
+    end
+
+    if targetBtn then
+        targetBtn:SetScript("OnClick", function()
+            local targets = AmazingHub.Readiness:GetTargets()
+            panel.targetIdx = panel.targetIdx + 1
+            if panel.targetIdx > #targets then panel.targetIdx = 0 end
+            refresh()
+        end)
+    end
+
+    return refresh
+end
+
+----------------------------------------------------------------------
+-- ATTUNEMENTS sub-panel — guild progression grid
+----------------------------------------------------------------------
+local function BuildAttuneSub(panel)
+    local legend = UI:CreateText(panel,
+        ICON_DONE .. " " .. L["attuned"] .. "    " .. ICON_NONE .. " " .. L["not started"]
+        .. "    |cffEDCC7Bx/y|r " .. L["in progress"] .. "    |cff808080\226\128\147|r " .. L["no data"],
+        9, C.silver.r, C.silver.g, C.silver.b)
+    legend:SetPoint("TOPLEFT", 4, -2)
+
+    -- Column header (fixed, above the scroll)
+    local header = CreateFrame("Frame", nil, panel)
+    header:SetPoint("TOPLEFT", 0, -20)
+    header:SetPoint("TOPRIGHT", -10, -20)
+    header:SetHeight(30)
+    panel.headerCells = {}
+    local hName = UI:CreateHeaderText(header, L["MEMBER"], 10)
+    hName:SetPoint("LEFT", 8, 6)
+
+    local listHolder = CreateFrame("Frame", nil, panel)
+    listHolder:SetPoint("TOPLEFT", 0, -52)
+    listHolder:SetPoint("BOTTOMRIGHT", 0, 0)
+    local _, content = MakeScrollList(listHolder, "AmazingHubAuditAttuneScroll")
+
+    return function()
+        content:SetWidth(listHolder:GetWidth() - 12)
+        ClearContent(content)
+        for _, fs in ipairs(panel.headerCells) do fs:Hide() end
+
+        local cols, rows = AmazingHub.AttunementTracker:GetGuildMatrix()
+
+        -- Header column labels + per-column attuned counts
+        local totalsWithData = 0
+        for _, r in ipairs(rows) do if r.hasData then totalsWithData = totalsWithData + 1 end end
+        for ci, col in ipairs(cols) do
+            local x = NAME_W + (ci - 1) * COL_W
+            local lbl = UI:CreateHeaderText(header, col.short, 10)
+            lbl:SetPoint("LEFT", x, 6)
+            panel.headerCells[#panel.headerCells + 1] = lbl
+            local doneN = 0
+            for _, r in ipairs(rows) do
+                local c = r.cells[col.short]
+                if c and c.complete then doneN = doneN + 1 end
+            end
+            local cnt = UI:CreateText(header, doneN .. "/" .. totalsWithData, 8, C.textDim.r, C.textDim.g, C.textDim.b)
+            cnt:SetPoint("LEFT", x, -8)
+            panel.headerCells[#panel.headerCells + 1] = cnt
+        end
+
+        local yOff = 0
+        for idx, r in ipairs(rows) do
+            local row = MakeRow(content, yOff, idx)
+            local cr, cg, cb = AmazingHub:GetClassColor(r.class)
+            local nameFS = UI:CreateText(row, r.name, 11, cr, cg, cb)
+            nameFS:SetPoint("LEFT", 8, 0)
+            if not r.hasData then nameFS:SetTextColor(0.45, 0.45, 0.5) end
+
+            for ci, col in ipairs(cols) do
+                local x = NAME_W + (ci - 1) * COL_W
+                local cell = UI:CreateText(row, "", 11, 1, 1, 1)
+                cell:SetPoint("LEFT", x, 0)
+                local c = r.cells[col.short]
+                if not r.hasData or not c then
+                    cell:SetText("|cff808080\226\128\147|r")  -- en dash, gray
+                elseif c.complete then
+                    cell:SetText(ICON_DONE)
+                elseif (c.progress or 0) > 0 then
+                    cell:SetText(string.format("|cffEDCC7B%d/%d|r", c.questsDone or 0, c.questsTotal or 0))
+                else
+                    cell:SetText(ICON_NONE)
+                end
+            end
+            yOff = yOff + ROW_H + 2
+        end
+
+        if #rows == 0 then
+            local empty = UI:CreateText(content, L["No roster data yet."], 11, C.silver.r, C.silver.g, C.silver.b)
+            empty:SetPoint("TOPLEFT", 4, -4)
+        end
+        content:SetHeight(math.max(1, yOff))
+    end
+end
+
+----------------------------------------------------------------------
+-- RESISTANCES sub-panel — guild resistance-gear grid (member x school)
+-- Shows the max resistance each member can field per school (from gear they
+-- own, bags included), coloured against that school's headline fight.
+----------------------------------------------------------------------
+local function BuildResistSub(panel)
+    local R = AmazingHub.Resistances
+
+    local legend = UI:CreateText(panel,
+        L["Max resistance each member can equip from owned gear (bags included). Green = a solid set for that fight."],
+        9, C.silver.r, C.silver.g, C.silver.b)
+    legend:SetPoint("TOPLEFT", 4, -2)
+
+    -- Column header: MEMBER + one column per school (coloured), fight/target below.
+    local header = CreateFrame("Frame", nil, panel)
+    header:SetPoint("TOPLEFT", 0, -20)
+    header:SetPoint("TOPRIGHT", -10, -20)
+    header:SetHeight(30)
+    local hName = UI:CreateHeaderText(header, L["MEMBER"], 10)
+    hName:SetPoint("LEFT", 8, 6)
+    for ci, sc in ipairs(R.SCHOOLS) do
+        local x = NAME_W + (ci - 1) * COL_W
+        local lbl = UI:CreateHeaderText(header, sc.label, 10)
+        lbl:SetPoint("LEFT", x, 6)
+        lbl:SetTextColor(sc.r, sc.g, sc.b)
+        local sub = UI:CreateText(header, sc.fight .. " \226\137\165" .. sc.target, 8,
+            C.textDim.r, C.textDim.g, C.textDim.b)
+        sub:SetPoint("LEFT", x, -8)
+    end
+
+    local listHolder = CreateFrame("Frame", nil, panel)
+    listHolder:SetPoint("TOPLEFT", 0, -52)
+    listHolder:SetPoint("BOTTOMRIGHT", 0, 0)
+    local _, content = MakeScrollList(listHolder, "AmazingHubAuditResistScroll")
+
+    return function()
+        content:SetWidth(listHolder:GetWidth() - 12)
+        ClearContent(content)
+
+        local rows = R:GetRows()
+        local yOff = 0
+        for idx, r in ipairs(rows) do
+            local row = MakeRow(content, yOff, idx)
+            local cr, cg, cb = AmazingHub:GetClassColor(r.class)
+            local nameFS = UI:CreateText(row, r.name, 11, cr, cg, cb)
+            nameFS:SetPoint("LEFT", 8, 0)
+
+            for ci, sc in ipairs(R.SCHOOLS) do
+                local x = NAME_W + (ci - 1) * COL_W
+                local v = (r.res and r.res[sc.key]) or 0
+                local tier = R:Tier(v, sc.target)
+                local col = C.textDim
+                if tier == "ready" then col = C.green
+                elseif tier == "partial" then col = C.gold
+                elseif tier == "low" then col = C.silver end
+                local txt = v > 0 and tostring(v) or "|cff808080\226\128\148|r"
+                local cell = UI:CreateText(row, txt, 11, col.r, col.g, col.b)
+                cell:SetPoint("LEFT", x, 0)
+            end
+            yOff = yOff + ROW_H + 2
+        end
+
+        if #rows == 0 then
+            local empty = UI:CreateText(content, L["No resistance data synced yet."], 11,
+                C.silver.r, C.silver.g, C.silver.b)
+            empty:SetPoint("TOPLEFT", 4, -4)
+        end
+        content:SetHeight(math.max(1, yOff))
+    end
+end
+
+----------------------------------------------------------------------
+-- ENCHANTS sub-panel — guild enchant audit
+----------------------------------------------------------------------
+local function BuildEnchantSub(panel)
+    local summary = UI:CreateText(panel, "", 10, C.gold.r, C.gold.g, C.gold.b)
+    summary:SetPoint("TOPLEFT", 4, -4)
+
+    local listHolder = CreateFrame("Frame", nil, panel)
+    listHolder:SetPoint("TOPLEFT", 0, -24)
+    listHolder:SetPoint("BOTTOMRIGHT", 0, 0)
+    local _, content = MakeScrollList(listHolder, "AmazingHubAuditEnchantScroll")
+
+    return function()
+        content:SetWidth(listHolder:GetWidth() - 12)
+        ClearContent(content)
+
+        local all = AmazingHub.GearAudit:GetGuildEnchantAudit()
+        local problems = {}
+        for _, r in ipairs(all) do
+            if r.missingCount > 0 then problems[#problems + 1] = r end
+        end
+        summary:SetText(string.format(L["%d with missing enchants  |  %d scanned"], #problems, #all))
+
+        local yOff = 0
+        for idx, r in ipairs(problems) do
+            local row = MakeRow(content, yOff, idx)
+            local cr, cg, cb = AmazingHub:GetClassColor(r.class)
+            local nameFS = UI:CreateText(row, r.name, 11, cr, cg, cb)
+            nameFS:SetPoint("LEFT", 8, 0)
+
+            local cntFS = UI:CreateText(row, string.format(L["%d missing"], r.missingCount), 10, C.red.r, C.red.g, C.red.b)
+            cntFS:SetPoint("LEFT", 150, 0)
+
+            local slots = table.concat(r.missing, ", ")
+            local slotsFS = UI:CreateText(row, slots, 10, C.silver.r, C.silver.g, C.silver.b)
+            slotsFS:SetPoint("LEFT", 250, 0)
+            slotsFS:SetWidth(content:GetWidth() - 270)
+            slotsFS:SetJustifyH("LEFT")
+            slotsFS:SetWordWrap(false)
+
+            yOff = yOff + ROW_H + 2
+        end
+
+        if #problems == 0 then
+            local msg = #all == 0 and L["No gear data synced yet."] or L["Everyone is fully enchanted!"]
+            local empty = UI:CreateText(content, msg, 11, C.green.r, C.green.g, C.green.b)
+            empty:SetPoint("TOPLEFT", 4, -4)
+        end
+        content:SetHeight(math.max(1, yOff))
+    end
+end
+
+----------------------------------------------------------------------
+-- SYNC sub-panel — addon adoption / version / last sync
+----------------------------------------------------------------------
+
+-- The recruitment's numbers as lines of text: AmzHubGossip:Audit() has them and keeps a copy in
+-- AmazingHubDB. Whatever it lacks reads as zero, and one that raises shows nothing: the panel never falls
+-- over a counter.
+local function RecruitLines()
+    local gossip = AmazingHub.AmzHubGossip
+    if AmazingHub.Client.isAnniversary or not (gossip and gossip.Audit) then return nil end
+    local ok, a = pcall(gossip.Audit, gossip)
+    if not ok or type(a) ~= "table" then return nil end
+    -- A value an old or damaged save holds wrong costs the tab its line, never the tab.
+    local built, lines = pcall(function()
+        local g, r, ch = a.gossip or {}, a.requests or {}, a.channel
+        local d = type(r.dropped) == "table" and r.dropped or {}
+        -- Tried and refused, tried and taken, or never tried (the channel had no number yet): three things.
+        local function sent(v, skipped)
+            if v == nil then return skipped and L["not tried"] or L["no"] end
+            return v and L["yes"] or L["no"]
+        end
+        local function yn(v) return v and L["yes"] or L["no"] end
+        local out = {
+            string.format(L["rounds %d  -  ads in %d, out %d  -  peers %d  -  dropped %d"],
+                g.rounds or 0, g.adsIn or 0, g.adsOut or 0, g.peers or 0, g.dropped or 0),
+            string.format(L["Whisper test: %s"], g.whisper or L["no spelling came back: gossip and requests do not whisper"]),
+            string.format(L["requests: %d open  -  asked %d, delivered %d  -  invites %d, confirmed by the game %d  -  dropped: name %d, guild %d"],
+                r.open or 0, r.asked or 0, r.delivered or 0, r.invites or 0, r.confirmed or 0, d.name or 0, d.guild or 0),
+            string.format(L["Senders refused as officers: %d"], g.officerRefused or 0),
+        }
+        if type(ch) == "table" then
+            local h = type(ch.heard) == "table" and ch.heard or {}
+            out[#out + 1] = string.format(L["Channel probe: command sent %s, timer sent %s  -  heard back: command %s, timer %s"],
+                sent(ch.click, ch.clickSkipped), sent(ch.timer, ch.timerSkipped), yn(h.click), yn(h.timer))
+        else
+            out[#out + 1] = L["Channel probe: not run"]
+        end
+        return out
+    end)
+    if not built then return nil end
+    return lines
+end
+
+local function BuildSyncSub(panel)
+    local summary = UI:CreateText(panel, "", 10, C.gold.r, C.gold.g, C.gold.b)
+    summary:SetPoint("TOPLEFT", 4, -6)
+
+    -- Maupa mesh observability: realm-wide, cross-addon presence beyond the
+    -- guild-only sync above. Makes the otherwise-invisible mesh auditable.
+    local meshLine = UI:CreateText(panel, "", 9, C.silver.r, C.silver.g, C.silver.b)
+    meshLine:SetPoint("TOPLEFT", 4, -20)
+
+    local refresh  -- forward declaration so the Sync button can refresh post-sync
+
+    local exportBtn = UI:CreateButton(panel, L["Export Roster"], 110, 20)
+    exportBtn:SetPoint("TOPRIGHT", -12, -2)
+    exportBtn:SetScript("OnClick", function()
+        AmazingHub:ShowExportPopup(L["Roster Export"], AmazingHub:ExportRoster())
+    end)
+
+    -- Manual sync: broadcast our data + re-request everyone's, then refresh the
+    -- list once responses have had a moment to arrive.
+    local syncBtn = UI:CreateButton(panel, L["Sync now"], 90, 20)
+    syncBtn:SetPoint("TOPRIGHT", exportBtn, "TOPLEFT", -6, 0)
+    syncBtn:SetScript("OnClick", function()
+        if AmazingHub.CommSystem then AmazingHub.CommSystem:FullSync() end
+        C_Timer.After(2.5, function() if refresh then refresh() end end)
+    end)
+
+    -- /amazing mergeraids: the same night recorded twice becomes one (#142).
+    local mergeBtn = UI:CreateButton(panel, L["Merge duplicate sessions"], 170, 20)
+    mergeBtn:SetPoint("TOPRIGHT", syncBtn, "TOPLEFT", -6, 0)
+    mergeBtn:SetScript("OnClick", function() AmazingHub:MergeRaidSessions() end)
+    summary:SetPoint("TOPRIGHT", mergeBtn, "TOPLEFT", -8, -4)
+    summary:SetWordWrap(false)
+    summary:SetJustifyH("LEFT")
+
+    local listHolder = CreateFrame("Frame", nil, panel)
+    listHolder:SetPoint("TOPLEFT", 0, -34)
+    listHolder:SetPoint("BOTTOMRIGHT", 0, 0)
+    local _, content = MakeScrollList(listHolder, "AmazingHubAuditSyncScroll")
+
+    -- /amazing probe channel (specs/071-o-recrutamento). Made once; the list clears its children and the
+    -- refresh puts it back under the recruitment lines.
+    local probeBtn = UI:CreateButton(content, L["Probe channel"], 140, 20)
+    probeBtn:SetScript("OnClick", function()
+        if not AmazingHub.Probe then return end
+        AmazingHub.Probe:RunChannel()
+        -- The verdict comes CHANNEL_WAIT seconds in; a second later the counters take it up here.
+        C_Timer.After(AmazingHub.Probe.CHANNEL_WAIT + 1, function() if refresh and panel:IsShown() then refresh() end end)
+    end)
+
+    refresh = function()
+        content:SetWidth(listHolder:GetWidth() - 12)
+        ClearContent(content)
+
+        local rows, withAddon, outdated = AmazingHub.CommSystem:GetSyncHealth()
+        summary:SetText(string.format(L["%d/%d have Amazing Hub  |  %d outdated"], withAddon, #rows, outdated))
+
+        if AmazingHub.Mesh then
+            meshLine:SetText(string.format(
+                L["Maupa mesh: %s  |  %d peers  |  %d on Amazing Hub"],
+                AmazingHub.Mesh:HealthLine(), AmazingHub.Mesh:PeerCount(), AmazingHub.Mesh:PeerCount("gos")))
+        end
+
+        local yOff = 0
+
+        ------------------------------------------------------------------
+        -- Amazing Hub messages this session (issue #312): what the guildmates' broadcasts became, so a
+        -- sync that stores nothing shows where it was lost.
+        ------------------------------------------------------------------
+        local cs = AmazingHub.CommSystem
+        if cs.SyncCounters then
+            local n = cs:SyncCounters()
+            local line = string.format(L["Amazing Hub messages this session: received %d  -  stored %d  -  dropped %d"],
+                n.received, n.stored, n.dropped)
+            if n.topReason then
+                line = line .. "  -  " .. string.format(L["top drop reason: %s"],
+                    (cs.DROP_REASON_TEXT or {})[n.topReason] or n.topReason)
+            end
+            local fs = UI:CreateText(content, line, 9, C.silver.r, C.silver.g, C.silver.b)
+            fs:SetPoint("TOPLEFT", 8, -yOff)
+            yOff = yOff + 18
+        end
+
+        ------------------------------------------------------------------
+        -- The recruitment: the gossip's rounds, the requests, the whisper test and the channel probe.
+        ------------------------------------------------------------------
+        local lines = RecruitLines()
+        probeBtn:Hide()
+        if lines then
+            local head = UI:CreateText(content, L["Recruitment"], 10, C.gold.r, C.gold.g, C.gold.b)
+            head:SetPoint("TOPLEFT", 8, -yOff)
+            yOff = yOff + 15
+            for _, line in ipairs(lines) do
+                local fs = UI:CreateText(content, line, 9, C.silver.r, C.silver.g, C.silver.b)
+                fs:SetPoint("TOPLEFT", 8, -yOff)
+                yOff = yOff + 14
+            end
+            probeBtn:ClearAllPoints()
+            probeBtn:SetPoint("TOPLEFT", 8, -(yOff + 2))
+            probeBtn:Show()
+            yOff = yOff + 32
+        end
+
+        ------------------------------------------------------------------
+        -- Alliance diagnostics. A cross-guild sync with no instrumentation
+        -- cannot be debugged in the field, so the counters and the per-guild
+        -- freshness live here, next to the mesh health line.
+        ------------------------------------------------------------------
+        local ally, async = AmazingHub.Alliance, AmazingHub.AllianceSync
+        if ally and async and ally:Get() then
+            local diag = async:Diagnostics()
+            local pact = ally:Get()
+            local bridge = ally:CurrentBridge() or L["nobody online"]
+            if ally:AmBridge() then bridge = bridge .. " " .. L["(you)"] end
+
+            local hdr = UI:CreateText(content, string.format(
+                L["Alliance %s  -  bridge: %s  -  probes %d"],
+                pact.tag, bridge, diag.stats.probes), 10, C.gold.r, C.gold.g, C.gold.b)
+            hdr:SetPoint("TOPLEFT", 8, -yOff)
+            yOff = yOff + 15
+
+            local counters = UI:CreateText(content, string.format(
+                L["head %d/%d  -  pull %d/%d  -  push %d/%d  -  rejected %d"],
+                diag.stats.headOut, diag.stats.headIn,
+                diag.stats.pullOut, diag.stats.pullIn,
+                diag.stats.pushOut, diag.stats.pushIn, diag.stats.rejected),
+                9, C.silver.r, C.silver.g, C.silver.b)
+            counters:SetPoint("TOPLEFT", 8, -yOff)
+            yOff = yOff + 18
+
+            local DOMAINS = { "roster", "craft", "events", "lfg", "board" }
+            local colHdr = { L["GUILD"], L["HEAD IN"], L["PUSH IN"] }
+            local xs = { 8, 130, 200 }
+            for i, label in ipairs(colHdr) do
+                local fs = UI:CreateText(content, label, 9, C.textDim.r, C.textDim.g, C.textDim.b)
+                fs:SetPoint("TOPLEFT", xs[i], -yOff)
+            end
+            for i, d in ipairs(DOMAINS) do
+                local fs = UI:CreateText(content, d, 9, C.textDim.r, C.textDim.g, C.textDim.b)
+                fs:SetPoint("TOPLEFT", 275 + (i - 1) * 58, -yOff)
+            end
+            yOff = yOff + 14
+
+            for _, g in ipairs(diag.guilds) do
+                local nameFS = UI:CreateText(content, g.guild, 10, C.text.r, C.text.g, C.text.b)
+                nameFS:SetPoint("TOPLEFT", 8, -yOff)
+                nameFS:SetWidth(118)
+                nameFS:SetJustifyH("LEFT")
+                nameFS:SetWordWrap(false)
+
+                local headFS = UI:CreateText(content,
+                    g.lastHeadIn and AmazingHub:TimeAgo(g.lastHeadIn) or L["never"],
+                    10, C.textDim.r, C.textDim.g, C.textDim.b)
+                headFS:SetPoint("TOPLEFT", 130, -yOff)
+
+                local pushFS = UI:CreateText(content,
+                    g.lastPushIn and AmazingHub:TimeAgo(g.lastPushIn) or L["never"],
+                    10, C.textDim.r, C.textDim.g, C.textDim.b)
+                pushFS:SetPoint("TOPLEFT", 200, -yOff)
+
+                -- "--" means we have never received that domain from this guild.
+                for i, d in ipairs(DOMAINS) do
+                    local info = g.domains[d]
+                    local has = info and (info.theirs or 0) > 0
+                    local fs = UI:CreateText(content, has and L["ok"] or "--", 10,
+                        has and C.online.r or C.offline.r,
+                        has and C.online.g or C.offline.g,
+                        has and C.online.b or C.offline.b)
+                    fs:SetPoint("TOPLEFT", 275 + (i - 1) * 58, -yOff)
+                end
+                yOff = yOff + 15
+            end
+            yOff = yOff + 12
+        end
+
+        for idx, r in ipairs(rows) do
+            local row = MakeRow(content, yOff, idx)
+            local cr, cg, cb = AmazingHub:GetClassColor(r.class)
+            local nameFS = UI:CreateText(row, r.name, 11, cr, cg, cb)
+            nameFS:SetPoint("LEFT", 8, 0)
+
+            if not r.hasAddon then
+                local st = UI:CreateText(row, L["no addon"], 10, C.red.r, C.red.g, C.red.b)
+                st:SetPoint("LEFT", 180, 0)
+            else
+                local st = UI:CreateText(row, ICON_DONE, 11, 1, 1, 1)
+                st:SetPoint("LEFT", 180, 0)
+                local verColor = r.outdated and C.gold or C.silver
+                local verStr = r.version and ("v" .. r.version) or "?"
+                if r.outdated then verStr = verStr .. L[" (outdated)"] end
+                local ver = UI:CreateText(row, verStr, 10, verColor.r, verColor.g, verColor.b)
+                ver:SetPoint("LEFT", 220, 0)
+
+                local last = UI:CreateText(row, AmazingHub:TimeAgo(r.lastUpdate), 9, C.textDim.r, C.textDim.g, C.textDim.b)
+                last:SetPoint("LEFT", 420, 0)
+            end
+
+            yOff = yOff + ROW_H + 2
+        end
+
+        if #rows == 0 then
+            local empty = UI:CreateText(content, L["No roster data yet."], 11, C.silver.r, C.silver.g, C.silver.b)
+            empty:SetPoint("TOPLEFT", 4, -4)
+        end
+        content:SetHeight(math.max(1, yOff))
+    end
+
+    -- Live-update the mesh line as HELLOs arrive (throttled in AmazingHub.Mesh),
+    -- but only while this sub-panel is actually visible.
+    if AmazingHub.Mesh then
+        AmazingHub.Mesh:OnRefresh(function()
+            if panel:IsShown() then refresh() end
+        end)
+    end
+
+    return refresh
+end
+
+----------------------------------------------------------------------
+-- Panel assembly (sub-tab bar + sub-panels)
+----------------------------------------------------------------------
+function AmazingHub:CreateAuditPanel(parent, _mainFrame)
+    parent.subPanels = {}
+    parent.activeSub = "ready"
+
+    local subtabs = {}
+    for _, t in ipairs(SUBTABS) do
+        if not t.tbc or AmazingHub.Client.isAnniversary then subtabs[#subtabs + 1] = t end
+    end
+
+    local bar = CreateFrame("Frame", nil, parent)
+    bar:SetPoint("TOPLEFT", 10, -8)
+    bar:SetPoint("TOPRIGHT", -10, -8)
+    bar:SetHeight(28)
+    UI:StyleSubTabBar(bar)
+
+    local subTabBtns = {}
+    local function selectSub(key)
+        parent.activeSub = key
+        for k, info in pairs(parent.subPanels) do info.panel:SetShown(k == key) end
+        for k, btn in pairs(subTabBtns) do btn:SetActive(k == key) end
+        local info = parent.subPanels[key]
+        if info and info.refresh then AmazingHub:SafeCall(info.refresh) end
+    end
+    parent.SelectSub = selectSub
+
+    parent.RefreshActive = function()
+        local info = parent.subPanels[parent.activeSub]
+        if info and info.refresh then AmazingHub:SafeCall(info.refresh) end
+    end
+
+    local x = 0
+    for _, t in ipairs(subtabs) do
+        local btn = UI:CreateTab(bar, t.label, 130, true)
+        btn:SetPoint("LEFT", x, 0)
+        btn:SetScript("OnClick", function() selectSub(t.key) end)
+        subTabBtns[t.key] = btn
+        x = x + btn:GetWidth() + 4  -- a tab its label grew pushes the next one (issue #28)
+    end
+
+    local function makeSubPanel()
+        local p = CreateFrame("Frame", nil, parent)
+        p:SetPoint("TOPLEFT", 12, -42)
+        p:SetPoint("BOTTOMRIGHT", -12, 10)
+        p:Hide()
+        return p
+    end
+
+    local builders = { ready = BuildReadySub, attune = BuildAttuneSub, resist = BuildResistSub,
+        enchant = BuildEnchantSub, sync = BuildSyncSub }
+    for _, t in ipairs(subtabs) do
+        local p = makeSubPanel()
+        parent.subPanels[t.key] = { panel = p, refresh = builders[t.key](p) }
+    end
+
+    parent:SetScript("OnShow", function()
+        selectSub(parent.activeSub or "ready")
+    end)
+end

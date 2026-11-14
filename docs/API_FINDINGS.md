@@ -72,3 +72,15 @@ Details worth knowing:
 |---|---|
 | Timing in game (`debugprofilestop`) | roster snapshot of 541 members **3.0 ms** (max of 6), guild event log read 0.7 ms, history step (≤ 500 messages) 1.4 ms. All far below one frame (16 ms at 60 fps). |
 | Chat lockdown during a boss fight | **not yet checked in game** (covered by the stub tests only). |
+
+## Map (pack step M, 2026-11-13) — checked in the docs, not yet in game
+
+From `MapDocumentation.lua`, `InstanceDocumentation.lua`, `UnitDocumentation.lua` (forever branch): `C_Map.GetBestMapForUnit`,
+`C_Map.GetPlayerMapPosition` (returns a `Vector2DMixin`, read with `:GetXY()` as Blizzard's own map code does),
+`C_Map.GetMapInfo` (`parentMapID`, `name`), `C_Map.GetMapRectOnMap`, `IsInInstance`, `UnitInParty`, `UnitInRaid`
+(`SecretWhenUnitIdentityRestricted`). None of the map returns is marked secret; the addon checks anyway.
+`WorldMapFrame` is loaded at start (not load-on-demand); `MapCanvasMixin:GetCanvas/GetCanvasScale/GetMapID` exist.
+Dots are plain frames on the canvas (no `AcquirePin`: its pools need an XML template inheriting
+`MapCanvasPinMixin`, which may not be loaded when our addon loads). **To check in game:** dots appear and scale,
+no taint error when using the map in combat / clicking quest pins and flight points, positions in cities and
+instances (expected: nothing sent inside instances).
