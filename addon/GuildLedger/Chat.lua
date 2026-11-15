@@ -278,7 +278,7 @@ local function syncStep(sid)
         ns.Debug(string.format("sync %s start: cursor %s, floor %s", letter,
             ce and date("%m-%d %H:%M:%S", math.floor(ce / 1e6)) or "none", tostring(S.Floor(clubId))))
     end
-    local oldestR, newestR = C.LastRange(clubId, sid)
+    local _, newestR = C.LastRange(clubId, sid)
     if not newestR then
         -- Empty or not yet downloaded: ask a few times, then leave it to the periodic sync.
         if st.pages >= 3 then finishSync(sid, "the server has no guild chat history") return end

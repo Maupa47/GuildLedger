@@ -1,7 +1,7 @@
--- API: the bridge for other addons, the global GuildLedgerAPI (docs/PACK_PLAN.md section 8; Amazing Hub's Ledger tab).
+-- API: the bridge for other addons, the global GuildLedgerAPI (docs/dev/PACK_PLAN.md section 8; Amazing Hub's Ledger tab).
 -- Everything returned is a fresh plain table (strings, numbers, booleans): callers cannot reach our data.
--- The only calls that change anything are the two map switches and RequestLink (the same as /gl map share|pins
--- on|off and /gl link CODE, but without a chat line).
+-- The only calls that change anything are the map settings and RequestLink (the same as the /gl map commands
+-- and /gl link CODE, but without a chat line).
 -- Every function is safe to call at any time, also before ADDON_LOADED or when GuildLedger switched itself off.
 
 local _, ns = ...
@@ -37,14 +37,24 @@ function API.GetStatus()
     }
 end
 
--- { available, share, pins, shown }
+-- { available, share, pins, shown, shape = "round"|"square", size, sizeMin, sizeMax, outline,
+--   colors = { { class = "MAGE", r, g, b, custom = true|false }, ... } (classes in the guild) }
 function API.GetMap()
-    if not ready() or not ns.Map then return { available = false, share = false, pins = false, shown = 0 } end
+    if not ready() or not ns.Map then
+        return { available = false, share = false, pins = false, shown = 0, colors = {} }
+    end
     return ns.Map.Settings()
 end
 
 function API.SetMapShare(on) if ready() and ns.Map then ns.Map.Set("share", on and true or false) end end
 function API.SetMapPins(on) if ready() and ns.Map then ns.Map.Set("pins", on and true or false) end end
+
+-- Look of the dots (same as /gl map shape|size|outline|reset): what = "shape" ("round"|"square"), "size" (number),
+-- "outline" (boolean), "color" (class file, r, g, b 0..1; no r = the game's class colour), "reset". true if accepted.
+function API.SetMapLook(what, a, r, g, b)
+    if not ready() or not ns.Map then return false end
+    return ns.Map.SetLook(what, a, r, g, b) and true or false
+end
 
 -- { requested, code?, sentAt?, acked?, expired? }
 function API.GetLink()

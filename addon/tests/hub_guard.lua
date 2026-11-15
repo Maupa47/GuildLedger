@@ -42,7 +42,7 @@ LibStub = setmetatable({
 }, { __call = function(_, name) registry[name] = registry[name] or {}; return registry[name] end })
 AmazingHub = { L = setmetatable({}, { __index = function(_, k) return k end }), VERSION = "test" }
 
-local GUILD = { ["Ana"] = true, ["Lethaniel Blightwood"] = true }
+local GUILD = { ["Ana"] = true, ["Alia Testwood"] = true }
 C_GuildInfo = { MemberExistsByName = function(name) return GUILD[name] == true end }
 
 local addon, chat, joined = {}, {}, 0
@@ -72,8 +72,8 @@ check(#addon == 0, "no addon message to a channel, SAY or YELL")
 Compat.SendAddonMessage("AMAZINGHUB", "x", "WHISPER", "Stranger")
 Compat.SendAddonMessageNow("AMAZINGHUB", "x", "WHISPER", "Stranger")
 check(#addon == 0, "no addon whisper to somebody outside the guild")
-Compat.SendAddonMessage("AMAZINGHUB", "x", "WHISPER", "Lethaniel Blightwood")
-check(#addon == 1 and addon[1] == "WHISPER:Lethaniel Blightwood", "an addon whisper to a guild member goes")
+Compat.SendAddonMessage("AMAZINGHUB", "x", "WHISPER", "Alia Testwood")
+check(#addon == 1 and addon[1] == "WHISPER:Alia Testwood", "an addon whisper to a guild member goes")
 AmazingHub.IsGuildmate = function(_, name) return name == "Bob" end
 C_GuildInfo.MemberExistsByName = nil
 Compat.SendAddonMessage("AMAZINGHUB", "x", "WHISPER", "Bob")

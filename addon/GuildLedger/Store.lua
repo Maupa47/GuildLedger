@@ -5,7 +5,7 @@ local _, ns = ...
 local S = {}
 ns.Store = S
 
-S.VERSION = "0.5.0"
+S.VERSION = "0.5.1"
 S.SCHEMA = 3
 S.MAX_LINKS = 500 -- collector: link requests kept until the companion uploads them (ring buffer)
 S.MEMBER_MAX = 2000 -- member role: lines kept for collectors (CLAUDE.md 5.7)
@@ -281,7 +281,7 @@ function S.PruneMember(clubId, now)
 end
 
 ---------------------------------------------------------------------------------------------------
--- Discord link requests heard by a collector (schema 3; docs/PACK_PLAN.md section 10)
+-- Discord link requests heard by a collector (schema 3; docs/dev/PACK_PLAN.md section 10)
 ---------------------------------------------------------------------------------------------------
 
 -- row = { id, t, k = "link"|"alt", code?, tag, n = sender, g = GUID if known }. Returns true when new.

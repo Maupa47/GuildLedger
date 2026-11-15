@@ -10,7 +10,7 @@ Use BugSack/BugGrabber (or `/console scriptErrors 1`) so Lua errors are visible.
 ### Setup
 
 1. In PowerShell from the repo root: `.\tools\install.ps1`
-   (links into `D:\World of Warcraft\_forever_\Interface\AddOns`; pass `-AddOnsDir "<path>"` for another folder).
+   (links into `<WoW folder>\_forever_\Interface\AddOns`; pass `-AddOnsDir "<path>"` for another folder).
 2. Start Forever, enable **GLProbe** in the AddOn list, log in with a character **in the guild**
    (ideally an officer). Stay out of combat and instances throughout.
 3. **Do not open the guild/Communities window** (J / Ctrl+J) until step 6 says so. Item 4 depends on it.
@@ -72,7 +72,7 @@ Nothing to test in game yet: the addon that writes `GuildLedger.lua` comes in Ph
 
 ## Phase 2: Addon chat capture
 
-The `GuildLedger` folder is already linked into `D:\World of Warcraft\_forever_\Interface\AddOns`
+The `GuildLedger` folder is already linked into `<WoW folder>\_forever_\Interface\AddOns`
 (`.\tools\install.ps1` does it again if needed). Use `/console scriptErrors 1` or BugSack to see Lua errors.
 
 ### Steps
@@ -88,7 +88,7 @@ The `GuildLedger` folder is already linked into `D:\World of Warcraft\_forever_\
 | 7 | Optional: run a dungeon boss fight while people chat in `/g`, then `/gl status` after the fight | `needs sync` goes back to `false` shortly after combat; lines from the fight are counted as "without text". No errors. |
 | 8 | `/reload` once more, then tell Claude Code you're done. | — |
 
-Claude Code then reads `D:\World of Warcraft\_forever_\WTF\Account\<ACCOUNT>\SavedVariables\GuildLedger.lua`,
+Claude Code then reads `<WoW folder>\_forever_\WTF\Account\<ACCOUNT>\SavedVariables\GuildLedger.lua`,
 checks authors/times against what you noted in step 3, and imports it into a scratch spool with the companion.
 
 ### Developer tests (no game)
@@ -208,7 +208,7 @@ and the companion merge (diff < log < sys, leave/kick family, time window in the
 4. Report: screenshots of `#gl-ingest` and both log channels, and the bot's console output.
    Then delete `companion/test2/` and the Test2/Stranger webhooks.
 
-## Phase 5b: Deploy to the server (Infomaniak VPS, <server address>)
+## Phase 5b: Deploy to the server (`<server>` = `[deploy] ssh` in `bot/config.toml`)
 
 Everything runs from PowerShell on your PC; `tools/deploy.ps1` packs the code (no secrets, databases or
 logs), copies it over SSH and runs `bot/deploy/setup.sh` on the server.
@@ -334,14 +334,14 @@ folders). Character screen → AddOns: both listed, none "out of date". BugSack 
 
 Result 2026-11-14: the admin ran the hub round and reported "it works, tested all features".
 
-## Bridge test round (v0.5.0 Phase 10: Ledger tab) — run when ready
+## Bridge test round (v0.5.1: Ledger tab, Classic look, tabs) — run when ready
 
 Setup: the admin PC is repo-linked, so just `/reload` (no new folders this time). Testers: the new
-`dist\Amazing-Forever-Guild-Pack-0.5.0.zip` (both folders replaced).
+`dist\Amazing-Forever-Guild-Pack-0.5.1.zip` (both folders replaced).
 
 | # | What | Expected |
 |---|---|---|
-| B1 | `/amazing`, click the **Ledger** tab | "GUILDLEDGER 0.5.0", the WORLD MAP switches, and a STATUS block with the same lines as `/gl status` |
+| B1 | `/amazing`, click the **Ledger** tab | "GUILDLEDGER 0.5.1", the WORLD MAP switches, and a STATUS block with the same lines as `/gl status` |
 | B2 | stay on the tab for 15 s while guild chat happens | the status numbers update by themselves (every 5 s) |
 | B3 | untick "Show my position…", then type `/gl status` | no chat line when clicking; `/gl status` says "Your position: not shared"; tick again → "shared" |
 | B4 | untick "Show guild members on my world map", open the world map near a sharing member | no dots; tick again → dots return |
@@ -354,3 +354,14 @@ Setup: the admin PC is repo-linked, so just `/reload` (no new folders this time)
 | B11 | Discord `/link` → type the code in the box → Link | green "link code sent…"; box empties; after a collector's `/reload` the confirm DM arrives (as L1) |
 | B12 | look at the tab bar, the minimap menu and Settings | no Achievements, Alliance, Recruitment or Web; Journal still there |
 | B13 | Settings → About → Links; the login line | "made by Maupa"; nowhere in game GuildOS, Guild OS or Chehul |
+| B14 | after `/reload`, `/amazing` | Classic look: bronze game frames, game tabs and buttons, the game's font |
+| B15 | Settings → "Interface style": Modern → Apply → Reload | flat dark look with its own fonts; `/amazing style classic` + reload brings Classic back |
+| B16 | `/amazing`: look at the tab row | no Raids, Loot or Trials tab |
+| B17 | Settings → MODULES: tick **Raids** (officers: also Loot, Trials) | the tab appears at once; a line beside each says "Off by default" |
+| B18 | `/reload`, `/amazing` | the ticked tabs are still there; untick them again to hide |
+| B19 | Settings → General | every section heading starts with "+" and is closed; click one: it opens ("-"), the rest moves down; `/reload`: it is still open |
+| B20 | Settings → General → **+ WORLD MAP** | the two map switches, Marker Round/Square with a preview dot, Size slider, Dark outline, one coloured button per class in the guild |
+| B21 | Square, size 18, outline off; *Open world map* (a guild member must share, see the pack round) | dots are squares, larger, no rim; Round + outline on: round dots with a dark rim |
+| B22 | click a class, pick red, OK; right-click it | the class's dots turn red (button marked `*`); right-click: back to the game's colour. *Cancel* in the picker restores the old colour |
+| B23 | Ledger tab | no map switches any more; the intro line points to Settings, World map |
+| B24 | unzip `dist\Amazing-Forever-Guild-Pack-0.5.1.zip` with 7-Zip or *Extract All* to a test folder | exactly two folders, `GuildLedger` and `AmazingHub`, each with its `.toc` directly inside |

@@ -1,4 +1,4 @@
--- Link (docs/PACK_PLAN.md section 10): tie characters to a Discord user. Addons have no network, so a link
+-- Link (docs/dev/PACK_PLAN.md section 10): tie characters to a Discord user. Addons have no network, so a link
 -- request travels: member's addon -> guild addon channel -> any online collector -> SavedVariables ->
 -- companion -> #gl-ingest -> bot, which asks the Discord user to confirm. Only that confirmation links.
 --   L code tag   member: "/gl link CODE" was typed (re-sent every 3 min until acknowledged, 30 min at most)

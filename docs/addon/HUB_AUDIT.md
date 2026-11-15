@@ -125,7 +125,21 @@ Not done: physically deleting the dead section 2 files; `.pkgmeta`; hiding the d
   empty; renamed names could have been taken by anyone.
 - **Hidden tabs** (`tools/hub-extra/PackTweaks.lua`; window, minimap menu and Settings): Achievements, Alliance,
   Recruitment, Web. The Journal stays (in-game data).
+- **Off by default** (0.5.1, admin's wish): Raids, Loot, Trials. `AmazingHub.OFF_BY_DEFAULT` in PackTweaks plus a
+  rebrand patch in `IsFeatureEnabled`: a tab nobody set is off, also on installs that predate this; a player's
+  tick in Settings → MODULES is saved and wins. The background trackers (raid, loot, trial) keep running.
+- **Settings** (`tools/hub-extra/SettingsPlus.lua`, 0.5.1): wraps upstream's `RefreshSettingsPanel` without patching
+  it. While upstream builds the page, its `UI:CreateHeaderText` calls are recorded; afterwards every recorded
+  heading becomes a fold-out ("+"/"-", state in `settings.openSections`, all closed by default); a closed
+  section's controls are hidden and everything below moves up by re-anchoring. On the General page a
+  **WORLD MAP** section is appended: GuildLedger's map switches (moved from the Ledger tab) and the dot look
+  (`GuildLedgerAPI.SetMapLook`), class colours through the game's `ColorPickerFrame:SetupColorPickerAndShow`
+  (Blizzard_ColorPickerFrame, Mainline and Classic, forever branch).
 - **Discord link box** in the Ledger tab (`GuildLedgerAPI.RequestLink`, same as `/gl link CODE`).
+- **Classic look by default** (admin's wish): upstream's "forever" style (the game's own bronze frames, tabs,
+  buttons and the game's font) is the default and is called **Classic**; upstream's flat default is **Modern**.
+  Settings → Interface style, or `/amazing style classic|modern` (both need a reload). A client without the
+  game's art falls back to Modern. Upstream called its bronze style a beta; B14 checks it in game.
 
 ### Upstream modules the pack does not use
 

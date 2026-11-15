@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 log = logging.getLogger(__name__)
 
 MODES = ("direct", "upload")
+PLACEHOLDER = "YOUR_ACCOUNT_FOLDER"  # in config.example.toml's sv_path
 
 
 @dataclass
@@ -62,15 +63,24 @@ def load(path: str | Path | None) -> Config:
 
     base = path.resolve().parent
     cfg = Config(data_dir=base)
+    # mode / timezone / data_dir: in [general] since 0.5.1; at the top level in older config files.
+    general = raw.get("general", {}) or {}
+
+    def opt(key: str):
+        return general.get(key, raw.get(key))
+
     if "sv_path" in raw:
         cfg.sv_path = Path(raw["sv_path"])
-    cfg.timezone = str(raw.get("timezone", cfg.timezone))
-    cfg.mode = str(raw.get("mode", cfg.mode))
+        if PLACEHOLDER in str(raw["sv_path"]):
+            raise ConfigError(f"{path}: sv_path still contains {PLACEHOLDER}; put in your account folder's name"
+                              " (see COLLECTOR.md, step 3)")
+    cfg.timezone = str(opt("timezone") or cfg.timezone)
+    cfg.mode = str(opt("mode") or cfg.mode)
     if cfg.mode not in MODES:
         raise ConfigError(f"mode must be one of {MODES}, not {cfg.mode!r}")
     cfg.collector = str(raw.get("collector", cfg.collector)).strip() or "collector"
-    if "data_dir" in raw:
-        d = Path(raw["data_dir"])
+    if opt("data_dir"):
+        d = Path(opt("data_dir"))
         cfg.data_dir = d if d.is_absolute() else base / d
     direct = raw.get("direct", {}) or {}
     cfg.chat_webhook = str(direct.get("chat_webhook", ""))

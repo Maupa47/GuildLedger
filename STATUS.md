@@ -1,104 +1,67 @@
-# GuildLedger — status
+# Status
 
-Last updated: 2026-11-14. Keep this file current when something changes (what runs, what is open).
+Last updated: 2026-11-14. Keep this file current when something changes. Overview of the project: [README.md](README.md).
 
 ## What runs right now
 
-| Part | Where | Version / state |
+| | Where | State |
 |---|---|---|
-| Bot | VPS `<server address>`, systemd `guildledger-bot` | deployed 2026-11-13 00:19 (schema-2 aware); archive ~9 300 chat rows, ~110 events |
-| Collectors | the admin (Maupa) and two officers (listed in `[collectors]` of `bot/config.toml`) | companion in `mode = "upload"` → `#gl-ingest` |
-| Addon on the admin PC | linked from the repo (`tools/install.ps1`) | **v0.5.0** in the repo (GuildLedger + AmazingHub; run `tools\install.ps1` once to link AmazingHub, then `/reload`), role collector |
-| Members | one test member | had v0.2.0; v0.5.0 via CurseForge "Amazing Forever Guild Pack" (under review) or `dist/Amazing-Forever-Guild-Pack-0.5.0.zip` (both folders) |
+| **Part 1: addon pack** | | |
+| Admin PC | linked from the repo (`tools\install.ps1`) | v0.5.1 (GuildLedger + Amazing Hub), role collector |
+| Players | CurseForge "Amazing Forever Guild Pack" | 0.5.0 under review; 0.5.1 ready in `dist\` (not uploaded) |
+| **Part 2: collection system** | | |
+| Bot | the VPS (`<server>` = `[deploy] ssh` in `bot\config.toml`), systemd `guildledger-bot` | updated 2026-11-14 18:19 (link + activity commands, `server_id` set); archive ~9 300 chat rows |
+| Collectors | the admin and two officers (`[collectors]` in `bot\config.toml`) | admin: up to date; the two officers: need the 0.5.1 collector zip (admin is checking with them) |
 | Backups | VPS, daily 04:30, 14 days | restore check passed 2026-11-12 |
-| Monitoring | `#gl-ops` webhook in `bot/config.toml` `[ops]` (placeholder added, empty = off) | needs the webhook + `deploy.ps1 -UpdateConfig` |
-| Code | GitHub `Maupa47/GuildLedger` (private) | improvements below not pushed yet; CI runs on the next push |
+| Monitoring | `#gl-ops` | **off**: `[ops] webhook` empty (docs/collection/ADMIN.md section 5) |
+| Code | GitHub `Maupa47/GuildLedger` (private) | CI runs every test on push |
 
-Posting delay: bot holds chat 60 s (`hold_chat_seconds` in `bot/config.toml`). Discord can only be as current
-as the last `/reload` or logout of any collector (WoW writes the addon's data only then).
-
-## Done
-
-- **Phase 0–6 (v1, all verified in game / on the server):** chat capture (live text paired with server IDs,
-  history as "text not captured"), roster capture (system messages, roster comparison, guild event log),
-  companion (parser, spool, export, direct posting, upload mode), bot (merge, archive, posting, backfill),
-  VPS deployment with backups, hardening (timing 0.7–3 ms in game, ring buffers), README, officer package.
-- **Phase 7 (v0.2, relay) — built, in-game test NOT passed yet:** one addon, two roles. Members (default) keep
-  recent lines and answer a collector's "who has text for these times?" over hidden guild addon messages;
-  collectors fill their gaps (CLAUDE.md 5.7, schema 2). First in-game try (2026-11-13) sent nothing: the addon
-  held all messages on `AreOutgoingAddonChatMessagesRestricted()`; fixed in v0.2.1.
-- **Improvements (2026-11-13, 156 tests green):**
-  - CI: `.github/workflows/tests.yml` runs every test on push (root `conftest.py` sets the paths).
-  - Bot: daily coverage report + "no upload for 6 h" warning + rejected-upload notes in `#gl-ops`
-    (`bot/guildledger_bot/ops.py`); `report` command for the shell.
-  - Companion: single-instance lock (`watch.lock`), `autostart-on.cmd` / `autostart-off.cmd` (in the zip).
-  - Addon v0.2.2: need "rounds" (a long gap list comes in several messages) with spam limit, bounded
-    multi-part buffer, addon versions seen + outdated list in `/gl status`, debug log of the fields of
-    history lines without author name ("?" lines, open question since Phase 2).
-  - Addon v0.3.0: plain-language `/gl status`; silent by default (no chat output without a command);
-    `/gl who` (who is online with GuildLedger, role, version, counts; new message `W`, hello every 15 min);
-    CurseForge package `dist/GuildLedger-<version>.zip` (addon + README.md, no programs) and
-    docs/CURSEFORGE.md (project text, upload steps). Collectors keep getting the separate collector zip.
-
-- **Pack v0.4.0 (docs/PACK_PLAN.md; built 2026-11-13, tests green, NOT tested in game):**
-  - `Comms.lua`: one message queue with priorities for all addon messages; budgets in shared/schema.md 5.
-  - Roster upload: collectors send the trusted member list; the bot's `members` table now fills (rank, level,
-    class, first/last seen online); newest snapshot decides who is in the guild.
-  - `Map.lua`: guild members on the world map, demand-driven, sharing on by default with opt-out (decision 6).
-  - Discord link (schema 3): `Link.lua`, companion/bot link rows, bot `link.py` + confirmation DMs with buttons,
-    slash commands; roles set by officers with `/roles` in Discord (decision 5: guild-member + rank roles;
-    nicknames later).
-  - Activity commands: `/seen`, `/joined`, `/activity`, `/inactive`.
-  - The plan is docs/PACK_PLAN.md (section 0 = decisions and corrections).
-
-- **Pack v0.5.0: Amazing Hub (Phase 9; built 2026-11-14, 195 tests green, NOT tested in game):**
-  - Decision 3 revised 2026-11-14: fork GuildOS after all, as **Amazing Hub** (`addon/AmazingHub`, `/amazing`):
-    roster, professions + known recipes of every member with the hub, recipe browser / who can craft, trials,
-    raids, loot, calendar.
-  - Generated by `tools/rebrand-hub.py` from `vendor-ref/GuildOS` (pinned 1.20.1); never edit the folder by hand.
-  - Talks only to guild / group / guild members (guard at every way out); chat-posting features off; its
-    guild chat log and map off (GuildLedger's are used). Details: docs/HUB_AUDIT.md section 8.
-  - Pack zip now has both folders; THIRD_PARTY.md credits GuildOS. GuildLedger itself unchanged except the
-    version number.
-  - Before publishing: the admin contacts the GuildOS author (decision 4).
-  - Hub test round reported OK by the admin (2026-11-14).
-- **Phase 10, bridge (built 2026-11-14, 203 tests green, NOT tested in game):** `GuildLedger/API.lua` (global
-  `GuildLedgerAPI`) and the hub's **Ledger** tab: the `/gl status` lines, map switches, update notice;
-  `/amazing map` opens the world map with GuildLedger's dots.
-- **Names and tabs (2026-11-14):** no GuildOS/Chehul in game (hub = Amazing Hub, maker = Maupa; MIT notice kept in
-  LICENSE / TOC metadata / THIRD_PARTY.md); Achievements, Alliance, Recruitment, Web tabs hidden; Discord link box
-  in the Ledger tab. Unused upstream modules: docs/HUB_AUDIT.md section 9.
+Discord can only be as current as the last `/reload` or logout of any collector (WoW writes addon data only
+then); the bot then holds chat 60 s before posting.
 
 ## Next steps (in order)
 
-1. **Deploy order for 0.4.0:** bot first (`deploy.ps1 -UpdateConfig`; before that the README "Discord link" setup:
-   re-invite with `applications.commands`, `server_id` in `bot/config.toml`), then every collector's addon **and**
-   companion together (old companions refuse schema 3), then testers/members.
-2. **Pack test round** (docs/INGAME_TESTS.md): relay, map, link, activity, silence; plus the open checks from test
-   round 2 (#gl-ops report/warning, boss fight, CI after a push).
-3. Decided 2026-11-14: MIT, guild-member + `/roles`, map on by default. Still open: nicknames.
-4. **Bridge test round** (docs/INGAME_TESTS.md, B1–B13): `/reload` on the admin PC is enough.
-5. Later: delete the unused upstream modules for good (docs/HUB_AUDIT.md section 9).
-6. Publish 0.5.0 on CurseForge (docs/CURSEFORGE.md) after the tests and the GuildOS author's answer.
+1. **Officers update** (both addon folders and the companion together; an old companion refuses the new data):
+   send them `dist\GuildLedger-collector-0.5.1.zip`. Their existing `config.toml` keeps working.
+2. **Discord roles:** `/roles verified …`, `/roles rank …`, `/roles show` (docs/collection/ADMIN.md section 2).
+3. **Monitoring:** `#gl-ops` webhook (ADMIN.md section 5).
+4. **In-game test rounds** (docs/dev/INGAME_TESTS.md): bridge round B1–B15 (alone: `/reload` is enough), pack
+   round (relay, map, link, activity; needs a second player).
+5. **Publish 0.5.1 on CurseForge** (docs/addon/CURSEFORGE.md) after the tests and the GuildOS author's answer.
+6. Open decision: Discord nicknames (`set_nickname`). Later: delete the hub's unused upstream modules
+   (docs/addon/HUB_AUDIT.md section 9).
+
+## Done (newest first)
+
+- **0.5.1 (2026-11-14):** hub in the game's Classic look by default (Modern in Settings); Raids, Loot, Trials
+  tabs off by default (Settings → Modules); Settings sections fold out; World map section with the dot look
+  (shape, size, outline, class colours); zips with standard paths; docs sorted into addon / collection / dev; config examples
+  rewritten with where-to-find-it comments (companion: `[general]` section, old layout still read); dead code
+  and the Phase 0 probe addon removed.
+- **Names and tabs:** nothing in game says GuildOS (hub = Amazing Hub, maker = Maupa; MIT notice kept in
+  LICENSE, TOC metadata, THIRD_PARTY.md); Achievements, Alliance, Recruitment, Web tabs hidden; Discord link box.
+- **Phase 10, bridge:** `GuildLedgerAPI` and the hub's Ledger tab (status, map switches, update notice).
+- **Phase 9, Amazing Hub (0.5.0):** GuildOS fork generated by `tools/rebrand-hub.py`; talks only to guild,
+  group and guild members; chat-posting features off. Hub test round passed (2026-11-14).
+- **0.4.0 pack plan** (docs/dev/PACK_PLAN.md): message queue (`Comms.lua`), roster upload, world-map dots,
+  Discord link (schema 3) with roles, activity commands `/seen`, `/joined`, `/activity`, `/inactive`.
+- **0.2–0.3:** member/collector roles with relay of missed chat text (schema 2), `/gl who`, plain-language
+  `/gl status`, silent by default, CurseForge package, `#gl-ops` report, CI, companion autostart.
+- **Phases 0–6 (v1, verified):** chat capture, roster capture, companion, bot, VPS deployment with backups,
+  hardening.
 
 ## Working on it from another machine
 
 - `git clone https://github.com/Maupa47/GuildLedger.git`; tests: `pip install pytest lupa discord.py`, then
-  `python -m pytest addon/tests companion/tests bot/tests` (no game, no Discord, no secrets needed).
-- **Not in git (secrets, by design):** `bot/config.toml` (bot token, webhooks, collector IDs — the source for
-  the server config) and `companion/config.toml` (your webhook). Without them you can code and test, but not
-  deploy or collect. To deploy from another PC, copy `bot/config.toml` over yourself (not via git/chat) and
-  have your SSH key for `<server>` there.
-- Deploy code changes: `powershell -ExecutionPolicy Bypass -File .\tools\deploy.ps1`; config only:
-  `… deploy.ps1 -UpdateConfig`. Never `-FirstTime` again (it was done; setup refuses to replace the archive).
-- Server checks: README.md "Bot host" table (status, logs, archive stats, backup + restore check).
-- Where things are explained: CLAUDE.md (spec and rules), shared/schema.md (formats, merge rules),
-  docs/API_FINDINGS.md (what the game really does), docs/INGAME_TESTS.md (test steps per phase), README.md.
+  `python -m pytest addon/tests companion/tests bot/tests` (no game, Discord or secrets needed).
+- **Not in git (secrets):** `bot\config.toml` and `companion\config.toml`. Copy them over yourself (never via
+  git or chat) to deploy or collect; also your SSH key for `<server>`.
+- Never run `deploy.ps1 -FirstTime` again (setup refuses to replace the archive).
 
 ## Known limits
 
-- Chat text only exists for lines a collector (or, with v0.2, a member) saw live and outside a boss fight;
-  the rest is archived as "who wrote when". Server history reaches ~27 h back.
+- Chat text exists only for lines a collector or member saw live and outside a boss fight; the rest is
+  archived as "who wrote when". Server history reaches ~27 h back.
 - Roster changes seen only by the roster comparison have a time window, not an exact time.
-- Collectors and (since v0.2) members are trusted to send real text; relayed lines are checked against the
-  server's message ID, author and time, and marked with who relayed them (`rb` / `relayed_by`).
+- Collectors and members are trusted to send real text; relayed lines are checked against the server's
+  message ID, author and time, and marked with who relayed them.

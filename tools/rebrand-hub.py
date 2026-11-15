@@ -1,4 +1,4 @@
-"""Build addon/AmazingHub from a GuildOS checkout (docs/HUB_AUDIT.md section 7, docs/PACK_PLAN.md Phase 9).
+"""Build addon/AmazingHub from a GuildOS checkout (docs/addon/HUB_AUDIT.md section 7, docs/dev/PACK_PLAN.md Phase 9).
 
     python tools/rebrand-hub.py [--src vendor-ref/GuildOS] [--out addon/AmazingHub] [--any-commit]
 
@@ -19,8 +19,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PINNED = "80883a096cdf9fa1366fb1a248e99b4462d74a21"  # GuildOS 1.20.1, audited in docs/HUB_AUDIT.md
-HUB_VERSION = "0.5.0"
+PINNED = "80883a096cdf9fa1366fb1a248e99b4462d74a21"  # GuildOS 1.20.1, audited in docs/addon/HUB_AUDIT.md
+HUB_VERSION = "0.5.1"
 
 # What is not copied (not part of the addon, or replaced by our own files).
 SKIP_DIRS = {".git", ".github", "docs", "__pycache__"}
@@ -121,7 +121,7 @@ PATCHES: list[tuple[str, str, str, str]] = [
     # --- 2. Off until an officer turns it on (decision 7) and features that leave the guild ----------------------
     ("Core/Core.lua",
      "local OFF_UNTIL_TESTED = {}\n",
-     "-- Amazing Hub: off until an officer switches them on (docs/HUB_AUDIT.md sections 2-3).\n"
+     "-- Amazing Hub: off until an officer switches them on (docs/addon/HUB_AUDIT.md sections 2-3).\n"
      "local OFF_UNTIL_TESTED = { alliance = true, recruitment = true, web = true, founding = true }\n",
      "network and chat-posting features start off"),
     ("Core/Core.lua",
@@ -130,11 +130,19 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "            consumableChecker = false, -- Amazing Hub: posts results in chat; officers switch it on\n"
      "            recruitment = false,       -- Amazing Hub: welcome lines / auto-invite; officers switch it on\n",
      "chat-posting modules start off"),
+    ("Core/Core.lua",
+     "    if OFF_UNTIL_TESTED[id] and (not mods or mods[id] == nil) then return false end\n",
+     "    if OFF_UNTIL_TESTED[id] and (not mods or mods[id] == nil) then return false end\n"
+     "    -- Amazing Hub: tabs hidden until a player ticks them in Settings (also on installs that predate this)\n"
+     "    if AmazingHub.OFF_BY_DEFAULT and AmazingHub.OFF_BY_DEFAULT[id] and (not mods or mods[id] == nil) then\n"
+     "        return false\n"
+     "    end\n",
+     "Raids, Loot, Trials tabs off until switched on"),
     ("Modules/NoteCommand.lua",
      "    if AmazingHub.db.noteCommand.enabled == nil then AmazingHub.db.noteCommand.enabled = true end\n",
      "    if AmazingHub.db.noteCommand.enabled == nil then AmazingHub.db.noteCommand.enabled = false end -- Amazing Hub\n",
      "!note replies start off"),
-    # --- 3. GuildLedger does these (docs/HUB_AUDIT.md section 4) --------------------------------------------------
+    # --- 3. GuildLedger does these (docs/addon/HUB_AUDIT.md section 4) --------------------------------------------------
     ("Modules/GuildChat.lua",
      "function GuildChat:Initialize()\n",
      "function GuildChat:Initialize()\n"
@@ -172,6 +180,89 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "table.concat(own.ct, \"+\") == \"Chaupa Costa+Mira Thornwood\"",
      "table.concat(own.ct, \"+\") == string.char(67, 104, 101, 104, 117, 108) .. \" Costa+Mira Thornwood\"",
      "test fixture (compressed, cannot be renamed) still holds the original test character"),
+    # --- Classic look by default (admin's wish 2026-11-14): the game's own frames, buttons, tabs and font;
+    #     "Modern" (the flat dark look with its own fonts) is chosen in Settings or with /amazing style modern.
+    ("Core/Style.lua",
+     "Style.DEFAULT = \"amazinghub\"\nStyle.ORDER = { \"amazinghub\", \"forever\" }\n",
+     "Style.DEFAULT = \"forever\" -- Amazing Hub: the classic look unless the player picks Modern\n"
+     "Style.ORDER = { \"forever\", \"amazinghub\" }\n"
+     "Style.ALIASES = { classic = \"forever\", modern = \"amazinghub\" }\n",
+     "classic style by default"),
+    ("Core/Style.lua",
+     "Style.current = Style.DEFAULT\n",
+     "Style.current = \"amazinghub\" -- until Resolve at load picks the account's style (Classic by default)\n",
+     "flat until resolved"),
+    # upstream's style check, told about Classic/Modern (so all its other checks keep running)
+    ("tools/style.lua",
+     "S:Available()[2] == \"forever\", \"the Forever client offers both\")",
+     "S:Available()[1] == \"forever\", \"the Forever client offers both, Classic first\")",
+     "style test: order"),
+    ("tools/style.lua",
+     "S:Name(\"amazinghub\") == \"AmazingHub\" and S:Name(\"forever\") == \"WoW: Forever\"",
+     "S:Name(\"amazinghub\") == \"Modern\" and S:Name(\"forever\") == \"Classic\"",
+     "style test: names"),
+    ("tools/style.lua",
+     "check(ok and AmazingHubDB.style == \"forever\", \"a style the client draws is saved for the account\")\n",
+     "check(ok and AmazingHubDB.style == \"forever\", \"a style the client draws is saved for the account\")\n"
+     "check(S:Choose(\"modern\") and AmazingHubDB.style == \"amazinghub\" and S:Choose(\"classic\")\n"
+     "  and AmazingHubDB.style == \"forever\", \"classic and modern are names for the two styles\")\n",
+     "style test: aliases"),
+    ("tools/style.lua",
+     "check(said(\"WoW: Forever\") and said(\"AmazingHub\"), ",
+     "check(said(\"Classic\") and said(\"Modern\"), ",
+     "style test: fallback message"),
+    ("tools/style.lua",
+     "check(S:Resolve() == \"amazinghub\" and #printed == 0, \"nothing saved: amazinghub, silently\")\n",
+     "check(S:Resolve() == \"forever\" and #printed == 0, \"nothing saved: Classic, silently\")\n"
+     "S = load({ db = {}, noArt = true })\n"
+     "check(S:Resolve() == \"amazinghub\" and #printed == 0, \"nothing saved and no art: Modern, silently\")\n",
+     "style test: classic default"),
+    ("tools/style.lua",
+     "S = load({ db = {} })\nlocal C = AmazingHub.Colors\n",
+     "S = load({ db = { style = \"amazinghub\" } })\nlocal C = AmazingHub.Colors\n",
+     "style test: modern palette check picks modern"),
+    ("tools/style.lua",
+     "check(applies[1].label.text == \"Apply\" and applies[2].label.text == \"In use\" and applies[2].enabled == false,",
+     "check(applies[2].label.text == \"Apply\" and applies[1].label.text == \"In use\" and applies[1].enabled == false,",
+     "style test: Classic (in use) is listed first"),
+    ("tools/style.lua",
+     "applies[1].scripts.OnClick(applies[1])\n",
+     "applies[2].scripts.OnClick(applies[2])\n",
+     "style test: press Modern's Apply (the second button)"),
+    ("Core/Style.lua",
+     "        AmazingHub:Print(\"  \" .. id .. \" - \" .. self:Name(id)",
+     "        AmazingHub:Print(\"  \" .. self:Name(id):lower() .. \" - \" .. self:Name(id)",
+     "/amazing style lists classic and modern"),
+    ("Core/Style.lua",
+     "tostring(id), table.concat(self.ORDER, \", \")))",
+     "tostring(id), \"classic, modern\"))",
+     "unknown style names classic and modern"),
+    ("tools/style.lua",
+     "check(said(\"amazinghub - AmazingHub (in use)\") and said(\"forever - WoW: Forever\"), ",
+     "check(said(\"modern - Modern (in use)\") and said(\"classic - Classic\"), ",
+     "style test: list wording"),
+    ("Core/Style.lua",
+     "    amazinghub = { name = \"AmazingHub\", desc = L[\"Flat and dark: the look Amazing Hub was made with.\"] },\n"
+     "    forever = { name = \"WoW: Forever\",\n"
+     "                desc = L[\"The game's own bronze frames, tabs and buttons. A beta: tell us what looks off.\"] },\n",
+     "    amazinghub = { name = \"Modern\", desc = \"Flat and dark, with its own clean fonts.\" },\n"
+     "    forever = { name = \"Classic\",\n"
+     "                desc = \"Like the game's own windows: bronze frames, tabs and buttons, and the game's font.\" },\n",
+     "style names Classic and Modern"),
+    ("Core/Style.lua",
+     "    local id = (want and self:Has(want)) and want or self.DEFAULT\n",
+     "    -- Amazing Hub: the default is Classic, which needs the client's art; without it, Modern.\n"
+     "    local fallback = self:Has(self.DEFAULT) and self.DEFAULT or \"amazinghub\"\n"
+     "    local id = (want and self:Has(want)) and want or fallback\n",
+     "classic default falls back to modern"),
+    ("Core/Style.lua",
+     "function Style:Choose(id)\n",
+     "function Style:Choose(id)\n    id = self.ALIASES[id] or id -- /amazing style classic | modern\n",
+     "style aliases"),
+    ("Core/Style.lua",
+     "function Style:Apply(id)\n",
+     "function Style:Apply(id)\n    id = self.ALIASES[id] or id\n",
+     "style aliases in apply"),
     # --- 4. Version shown and synced --------------------------------------------------------------------------------
     ("Core/Config.lua",
      "AmazingHub.VERSION           = \"1.20.1\"",
@@ -182,8 +273,15 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "second slash alias"),
 ]
 
+# Patches whose anchor occurs a known number of times: (file, old, new, why, times).
+PATCHES_ALL: list[tuple[str, str, str, str, int]] = [
+    ("tools/style.lua", "S = load({ db = {} }); S:Resolve()",
+     "S = load({ db = { style = \"amazinghub\" } }); S:Resolve()",
+     "style test: blocks that check the flat look pick Modern (nothing saved is Classic now)", 3),
+]
+
 # Our own hub files: (file in tools/hub-extra, folder in the hub). Appended to the TOC in this order.
-EXTRAS = [("PackTweaks.lua", "UI"), ("LedgerPanel.lua", "UI")]
+EXTRAS = [("PackTweaks.lua", "UI"), ("LedgerPanel.lua", "UI"), ("SettingsPlus.lua", "UI")]
 
 # Files that call the chat globals directly get guarded file-locals in front, so no code path sends past the guard.
 # (Replacing the globals themselves would taint Blizzard's chat frame; file-locals touch only this addon.)
@@ -281,6 +379,13 @@ def build(src: Path, out: Path, any_commit: bool) -> int:
         n = text.count(old)
         if n != 1:
             sys.exit(f"patch '{why}' expected its anchor once in {rel}, found {n}: GuildOS changed; update the patch.")
+        f.write_bytes(text.replace(old, new).encode("utf-8"))
+    for rel, old, new, why, times in PATCHES_ALL:
+        f = out / rel
+        text = f.read_bytes().decode("utf-8")
+        n = text.count(old)
+        if n != times:
+            sys.exit(f"patch '{why}' expected its anchor {times}x in {rel}, found {n}: GuildOS changed; update it.")
         f.write_bytes(text.replace(old, new).encode("utf-8"))
     # Our own files (tools/hub-extra), loaded last so they can register tabs and replace hub functions.
     toc = out / "AmazingHub.toc"

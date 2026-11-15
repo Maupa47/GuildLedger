@@ -16,7 +16,6 @@ from .svparse import as_dict, as_list
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
 SCHEMAS_READ = (1, 2, 3)  # 2: chat key rb -> relayed_by; 3: guilds[..].links (Discord link requests)
 STREAMS = {"g", "o", "d", "x"}
 CHAT_SRC = {"live", "meta", "event"}

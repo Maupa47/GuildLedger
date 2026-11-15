@@ -72,6 +72,23 @@ for _, id in ipairs({ "achievements", "alliance", "recruitment", "web" }) do
 end
 check(hiddenDefs.journal.condition == nil, "the journal tab stays")
 
+-- Raids, Loot, Trials: off until ticked in Settings, also on installs whose saved settings predate this
+do
+  local src = io.open(ADDON .. "/Core/Core.lua", "rb"):read("*a")
+  local body = src:match("\nfunction AmazingHub:IsFeatureEnabled%(id%).-\nend\n")
+  check(body and body:find("OFF_BY_DEFAULT", 1, true), "IsFeatureEnabled reads OFF_BY_DEFAULT")
+  assert(loadstring("local OFF_UNTIL_TESTED = {}\n" .. body))()
+  AmazingHub.db = { settings = { modules = { raidTracker = true } } }
+  for _, id in ipairs({ "raids", "loot", "trials" }) do
+    check(AmazingHub:IsFeatureEnabled(id) == false, id .. " tab is off by default")
+  end
+  check(AmazingHub:IsFeatureEnabled("roster") and AmazingHub:IsFeatureEnabled("guild"), "other tabs stay on")
+  AmazingHub.db.settings.modules.raids = true
+  check(AmazingHub:IsFeatureEnabled("raids") == true, "ticking Raids in Settings shows it")
+  AmazingHub.db = nil
+  check(AmazingHub:IsFeatureEnabled("loot") == false, "off before the saved settings load too")
+end
+
 dofile(ADDON .. "/UI/LedgerPanel.lua")
 
 local function visible()
@@ -116,23 +133,15 @@ check(v:find("Role: Member", 1, true) and v:find("World map", 1, true) and v:fin
   "the /gl status lines are shown")
 check(not v:find("not running", 1, true), "and no 'not running'")
 
--- the switches mirror the settings and write through the API
--- (find the checkboxes through their onChanged handlers: the panel keeps them in upvalues)
-local boxes = {}
-local i = 1
+-- the map switches moved to Settings (SettingsPlus.lua): the Ledger tab only points there
+local i, boxes = 1, 0
 while true do
   local name, val = debug.getupvalue(refresh, i)
   if not name then break end
-  if type(val) == "table" and val.checkbox then boxes[val.label] = val end
+  if type(val) == "table" and rawget(val, "checkbox") then boxes = boxes + 1 end
   i = i + 1
 end
-local share = boxes["Show my position to guild members on the world map"]
-local pins = boxes["Show guild members on my world map"]
-check(share and pins, "both map switches exist")
-check(share.checkbox.checked == true and pins.checkbox.checked == false, "the switches show GuildLedger's settings")
-share.checkbox.onChanged(nil, false)
-pins.checkbox.onChanged(nil, true)
-check(set.share == false and set.pins == true, "the switches write through GuildLedgerAPI")
+check(boxes == 0 and v:find("options: Settings, World map", 1, true), "no map switches in the Ledger tab any more")
 
 -- the Discord link box sends the code through the API and shows the answer
 local linked

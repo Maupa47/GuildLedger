@@ -106,6 +106,59 @@ def test_viewer_with_pins_off_sends_no_watch():
     assert sent(guild, VIEWER, "V") == [] and sent(guild, SHARER, "P") == []
 
 
+ROUND = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
+MAGE = (0.25, 0.78, 0.92)
+
+
+def shown_pin(view):
+    pins = [p for p in view.W.ns.Map.Pins().values() if p.shown]
+    assert len(pins) == 1
+    return pins[0]
+
+
+def near(seq, want):
+    return all(abs(a - b) < 0.01 for a, b in zip(list(seq.values())[:len(want)], want))
+
+
+def test_dot_look_default_round_with_outline_and_class_colour():
+    guild = map_guild()
+    view = guild.g(VIEWER)
+    view.W.addMember(SHARER, "Player-1-SHARER")  # a mage in the viewer's member list
+    view.L.execute("WorldMapFrame.open = true")
+    guild.run(15)
+    pin = shown_pin(view)
+    assert pin.dot.texture == ROUND and near(pin.dot.vertex, MAGE)
+    assert pin.rim.shown and pin.rim.texture == ROUND
+    assert list(pin.dot.size.values()) == [12, 12] and list(pin.size.values()) == [16, 16]
+
+
+def test_dot_look_commands_square_size_no_outline_and_own_class_colour():
+    guild = map_guild()
+    view = guild.g(VIEWER)
+    view.W.addMember(SHARER, "Player-1-SHARER")
+    assert "square, 20 px" in view.slash("map shape square") + view.slash("map size 20")
+    view.slash("map outline off")
+    api = view.L.globals().GuildLedgerAPI
+    assert api.SetMapLook("color", "MAGE", 1, 0, 0) is True
+    assert api.SetMapLook("shape", "triangle") is False and api.SetMapLook("size", 99) is True
+    view.L.execute("WorldMapFrame.open = true")
+    guild.run(15)
+    pin = shown_pin(view)
+    assert pin.dot.texture is False and near(pin.dot.color, (1, 0, 0))
+    assert list(pin.dot.size.values()) == [24, 24] and not pin.rim.shown  # 99 is held to the largest size
+    m = api.GetMap()
+    assert (m.shape, m.size, m.outline) == ("square", 24, False)
+    assert m.colors[1]["class"] == "MAGE" and m.colors[1].custom and abs(m.colors[1].r - 1) < 0.01
+    view.reload()  # remembered
+    assert view.L.globals().GuildLedgerAPI.GetMap().shape == "square"
+    view.slash("map colors reset")
+    m = view.L.globals().GuildLedgerAPI.GetMap()
+    assert not m.colors[1].custom and abs(m.colors[1].r - 0.25) < 0.01
+    view.slash("map reset")
+    m = view.L.globals().GuildLedgerAPI.GetMap()
+    assert (m.shape, m.size, m.outline) == ("round", 12, True)
+
+
 def test_sharing_is_on_by_default_and_an_old_automatic_off_does_not_count():
     guild = Guild([(SHARER, "member"), (VIEWER, "member")])  # nobody typed anything
     guild.g(SHARER).L.execute("GuildLedgerDB.opts.mapShare = false")  # what 0.4.0 wrote by itself

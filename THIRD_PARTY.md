@@ -5,7 +5,7 @@
 Amazing Hub is built from **GuildOS 1.20.1** (commit `80883a0`) by Chehul (danielcosta42),
 https://github.com/danielcosta42/GuildOS, by `tools/rebrand-hub.py`: renamed (so it never shares data, globals or
 message prefixes with a real GuildOS install), messages limited to the own guild, group and guild members, and
-some features off by default (see `docs/HUB_AUDIT.md`). All credit for the hub's features goes to the GuildOS
+some features off by default (see `docs/addon/HUB_AUDIT.md`). All credit for the hub's features goes to the GuildOS
 author.
 
 GuildOS is released under the MIT License; its licence is kept as `addon/AmazingHub/LICENSE`:

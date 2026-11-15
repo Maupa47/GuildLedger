@@ -11,14 +11,15 @@ local Style = {}
 AmazingHub.Style = Style
 local L = AmazingHub.L
 
-Style.DEFAULT = "amazinghub"
-Style.ORDER = { "amazinghub", "forever" }
-Style.current = Style.DEFAULT
+Style.DEFAULT = "forever" -- Amazing Hub: the classic look unless the player picks Modern
+Style.ORDER = { "forever", "amazinghub" }
+Style.ALIASES = { classic = "forever", modern = "amazinghub" }
+Style.current = "amazinghub" -- until Resolve at load picks the account's style (Classic by default)
 
 local INFO = {
-    amazinghub = { name = "AmazingHub", desc = L["Flat and dark: the look Amazing Hub was made with."] },
-    forever = { name = "WoW: Forever",
-                desc = L["The game's own bronze frames, tabs and buttons. A beta: tell us what looks off."] },
+    amazinghub = { name = "Modern", desc = "Flat and dark, with its own clean fonts." },
+    forever = { name = "Classic",
+                desc = "Like the game's own windows: bronze frames, tabs and buttons, and the game's font." },
 }
 
 -- Names are the client's atlas ELEMENTS. On WoW: Forever an element resolves to its -c60 member (the
@@ -146,6 +147,7 @@ function Style:Current() return self.current end
 
 -- Saves the account's choice; it is used from the next load on.
 function Style:Choose(id)
+    id = self.ALIASES[id] or id -- /amazing style classic | modern
     if not INFO[id] then return false, "unknown" end
     if not self:Has(id) then return false, "unavailable" end
     if type(AmazingHubDB) ~= "table" then AmazingHubDB = {} end
@@ -157,7 +159,9 @@ end
 -- said once. The Forever style re-points the palette in place and takes the game's font.
 function Style:Resolve()
     local want = type(AmazingHubDB) == "table" and AmazingHubDB.style or nil
-    local id = (want and self:Has(want)) and want or self.DEFAULT
+    -- Amazing Hub: the default is Classic, which needs the client's art; without it, Modern.
+    local fallback = self:Has(self.DEFAULT) and self.DEFAULT or "amazinghub"
+    local id = (want and self:Has(want)) and want or fallback
     self.current, self.gameFont = id, nil
     if want and want ~= id then
         AmazingHub:Print(string.format(L["The %s style is not available on this client; using %s."],
@@ -180,10 +184,11 @@ end
 
 -- The picker's and /amazing style's verb: save, then offer the reload.
 function Style:Apply(id)
+    id = self.ALIASES[id] or id
     local ok, why = self:Choose(id)
     if not ok then
         if why == "unknown" then
-            AmazingHub:Print(string.format(L["Unknown style: %s. Styles: %s"], tostring(id), table.concat(self.ORDER, ", ")))
+            AmazingHub:Print(string.format(L["Unknown style: %s. Styles: %s"], tostring(id), "classic, modern"))
         else
             AmazingHub:Print(string.format(L["The %s style is not available on this client."], self:Name(id)))
         end
@@ -196,7 +201,7 @@ end
 function Style:PrintList()
     for _, id in ipairs(self.ORDER) do
         local tag = (id == self.current and L["in use"]) or ((not self:Has(id)) and L["not available here"]) or nil
-        AmazingHub:Print("  " .. id .. " - " .. self:Name(id) .. (tag and (" (" .. tag .. ")") or ""))
+        AmazingHub:Print("  " .. self:Name(id):lower() .. " - " .. self:Name(id) .. (tag and (" (" .. tag .. ")") or ""))
     end
 end
 

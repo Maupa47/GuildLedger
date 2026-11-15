@@ -998,7 +998,7 @@ end
 -- later release could not turn it on for them. Somebody who chose keeps their choice either way.
 -- Empty since the journal and the founding were tried on the live game (issue #289): left off, no
 -- founding reached the guild website and the site's founding achievements were never earned.
--- Amazing Hub: off until an officer switches them on (docs/HUB_AUDIT.md sections 2-3).
+-- Amazing Hub: off until an officer switches them on (docs/addon/HUB_AUDIT.md sections 2-3).
 local OFF_UNTIL_TESTED = { alliance = true, recruitment = true, web = true, founding = true }
 
 function AmazingHub:IsFeatureEnabled(id)
@@ -1008,6 +1008,10 @@ function AmazingHub:IsFeatureEnabled(id)
     if def and def.core then return true end
     local mods = self.db and self.db.settings and self.db.settings.modules
     if OFF_UNTIL_TESTED[id] and (not mods or mods[id] == nil) then return false end
+    -- Amazing Hub: tabs hidden until a player ticks them in Settings (also on installs that predate this)
+    if AmazingHub.OFF_BY_DEFAULT and AmazingHub.OFF_BY_DEFAULT[id] and (not mods or mods[id] == nil) then
+        return false
+    end
     if not mods then return true end
     return mods[id] ~= false
 end

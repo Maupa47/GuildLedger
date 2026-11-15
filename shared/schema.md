@@ -130,9 +130,9 @@ dropped), held during a boss-fight lock or a throttle. Every message ≤ 255 byt
 | `P` map position | players with sharing on (off by default) | only while a `V` for their zone or a parent map was heard in the last 45 s; ≤ 1 per 10 s, only after moving or every 30 s | HIGH | 50 sharers in one watched zone, all moving: 5/s; nobody looking: 0 |
 
 Receivers: every online GuildLedger client receives every message; handling one is a table lookup (no
-disk, no chat output). New kinds (map, link) must add their row here before code (docs/PACK_PLAN.md rule 9).
+disk, no chat output). New kinds (map, link) must add their row here before code (docs/dev/PACK_PLAN.md rule 9).
 
-## 6. Discord link (schema 3, docs/PACK_PLAN.md section 10)
+## 6. Discord link (schema 3, docs/dev/PACK_PLAN.md section 10)
 
 SavedVariables: collectors keep `guilds["<clubId>"].links` (ring buffer, 500): `{ id, t, k = "link"|"alt", code?, tag,
 n = sender as the game gives it, g = GUID from the collector's roster if known }`; every account keeps `link =

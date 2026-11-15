@@ -1,4 +1,4 @@
-"""API.lua: GuildLedgerAPI, the bridge the Amazing Hub's Ledger tab reads (docs/PACK_PLAN.md section 8)."""
+"""API.lua: GuildLedgerAPI, the bridge the Amazing Hub's Ledger tab reads (docs/dev/PACK_PLAN.md section 8)."""
 
 from game import Game
 from test_addon_relay import Guild

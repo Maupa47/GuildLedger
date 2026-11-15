@@ -166,10 +166,10 @@ S = load({ noArt = true })
 check(S:Has("amazinghub") and not S:Has("forever"), "a client without the art (Anniversary) draws only amazinghub")
 check(#S:Available() == 1 and S:Available()[1] == "amazinghub", "and offers only it")
 S = load()
-check(S:Has("forever") and #S:Available() == 2 and S:Available()[2] == "forever", "the Forever client offers both")
+check(S:Has("forever") and #S:Available() == 2 and S:Available()[1] == "forever", "the Forever client offers both, Classic first")
 S = load({ without = { ["common-internaltab"] = true } })
 check(not S:Has("forever"), "a client missing one of the key atlases does not offer forever")
-check(S:Name("amazinghub") == "AmazingHub" and S:Name("forever") == "WoW: Forever" and S:Name("x") == "x",
+check(S:Name("amazinghub") == "Modern" and S:Name("forever") == "Classic" and S:Name("x") == "x",
   "the styles' names are their brands")
 
 -- ── 3. Choosing ────────────────────────────────────────────────────────
@@ -178,6 +178,8 @@ local ok, why = S:Choose("neon")
 check(not ok and why == "unknown" and AmazingHubDB.style == nil, "an unknown style is refused, and nothing is saved")
 ok = S:Choose("forever")
 check(ok and AmazingHubDB.style == "forever", "a style the client draws is saved for the account")
+check(S:Choose("modern") and AmazingHubDB.style == "amazinghub" and S:Choose("classic")
+  and AmazingHubDB.style == "forever", "classic and modern are names for the two styles")
 S = load({ noArt = true })
 ok, why = S:Choose("forever")
 check(not ok and why == "unavailable", "forever is refused where the client has no art")
@@ -185,14 +187,16 @@ check(not ok and why == "unavailable", "forever is refused where the client has 
 -- ── 4. Resolving at load ───────────────────────────────────────────────
 S = load({ db = { style = "forever" }, noArt = true })
 check(S:Resolve() == "amazinghub" and S:Current() == "amazinghub", "a saved forever on a client without the art falls back")
-check(said("WoW: Forever") and said("AmazingHub"), "and says so in chat")
+check(said("Classic") and said("Modern"), "and says so in chat")
 S = load({ db = {} })
-check(S:Resolve() == "amazinghub" and #printed == 0, "nothing saved: amazinghub, silently")
+check(S:Resolve() == "forever" and #printed == 0, "nothing saved: Classic, silently")
+S = load({ db = {}, noArt = true })
+check(S:Resolve() == "amazinghub" and #printed == 0, "nothing saved and no art: Modern, silently")
 S = load({ db = { style = "forever" } })
 check(S:Resolve() == "forever" and S:Current() == "forever", "a saved forever where the art exists is used")
 
 -- ── 5. The palette and the font ────────────────────────────────────────
-S = load({ db = {} })
+S = load({ db = { style = "amazinghub" } })
 local C = AmazingHub.Colors
 local GOLD, ACCENT = C.gold, C.accent          -- as a module captures them at load
 local flatGold = C.gold.r
@@ -212,7 +216,7 @@ AmazingHub:ApplyFont(fs, 12)
 check(S.gameFont and fs.font == STANDARD_TEXT_FONT, "and every text takes the game's font")
 
 -- ── 6. Painting by role ────────────────────────────────────────────────
-S = load({ db = {} }); S:Resolve()
+S = load({ db = { style = "amazinghub" } }); S:Resolve()
 C = AmazingHub.Colors
 local f = newRegion("Frame")
 check(S:Paint(f, "window") == "flat" and f.backdrop.bgFile == "Interface\\Buttons\\WHITE8x8"
@@ -264,7 +268,7 @@ check(S:Paint(f, "titlebar") == "flat" and f.__styleBg,
   "without the metal frame there is no edge to be the bar: the title bar keeps its band (#148)")
 
 -- ── 7. The controls, through the real Helpers ──────────────────────────
-S = load({ db = {} }); S:Resolve()
+S = load({ db = { style = "amazinghub" } }); S:Resolve()
 local UI = AmazingHub.UI
 local b = UI:CreateButton(UIParent, "Go", 120, 26)
 check(not b.__forever and b.backdrop.edgeSize == 1, "amazinghub: a button is today's bordered backdrop")
@@ -383,20 +387,20 @@ for _, c in ipairs(host.children) do
   if c.text == S:Description("forever") then longDesc = c end
 end
 check(#applies == 2 and y > 100, "the picker lists each style the client draws, with its button")
-check(applies[1].label.text == "Apply" and applies[2].label.text == "In use" and applies[2].enabled == false,
+check(applies[2].label.text == "Apply" and applies[1].label.text == "In use" and applies[1].enabled == false,
   "the one in use says so and cannot be pressed")
 check(longDesc and longDesc.w > 0 and longDesc.w < 380 - 16, "a description wraps short of the button")
-applies[1].scripts.OnClick(applies[1])
+applies[2].scripts.OnClick(applies[2])
 check(AmazingHubDB.style == "amazinghub" and popups[1], "Apply saves the choice and offers the reload")
 S = load({ db = {}, noArt = true }); S:Resolve()
 host = newRegion("Frame")
 check(S:BuildPicker(host, 100) == 100 and #host.children == 0, "with one style there is nothing to choose: no section at all")
 
 -- ── 8. /amazing style ──────────────────────────────────────────────────────
-S = load({ db = {} }); S:Resolve()
+S = load({ db = { style = "amazinghub" } }); S:Resolve()
 dofile(ADDON .. "/Core/Commands.lua")
 SlashCmdList.AMAZINGHUB("style")
-check(said("amazinghub - AmazingHub (in use)") and said("forever - WoW: Forever"), "/amazing style lists the styles and marks the one in use")
+check(said("modern - Modern (in use)") and said("classic - Classic"), "/amazing style lists the styles and marks the one in use")
 SlashCmdList.AMAZINGHUB("style forever")
 check(AmazingHubDB.style == "forever" and popups[1] and popups[1].which == "AMAZINGHUB_STYLE_RELOAD",
   "/amazing style forever saves it and offers the reload")

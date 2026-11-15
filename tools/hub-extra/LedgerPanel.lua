@@ -1,7 +1,7 @@
 ----------------------------------------------------------------------
 -- Amazing Hub - Ledger tab (Amazing Forever Guild Pack, Phase 10; our own file, not upstream)
--- Shows GuildLedger's status (the same lines as /gl status), its map switches and a newer version
--- seen in the guild, through the global GuildLedgerAPI. Without GuildLedger the tab says so and
+-- Shows GuildLedger's status (the same lines as /gl status), the Discord link box and a newer version
+-- seen in the guild, through the global GuildLedgerAPI. The world-map options are in Settings (SettingsPlus.lua). Without GuildLedger the tab says so and
 -- nothing errors. Copied in by tools/rebrand-hub.py from tools/hub-extra/; edit it there.
 ----------------------------------------------------------------------
 local UI = AmazingHub.UI
@@ -82,13 +82,6 @@ function AmazingHub:CreateLedgerPanel(parent)
         y = y + (fs:GetStringHeight() or size) + (gap or 6)
     end
 
-    local share = UI:CreateCheckbox(content, "Show my position to guild members on the world map", 18)
-    local pins = UI:CreateCheckbox(content, "Show guild members on my world map", 18)
-    local open = UI:CreateButton(content, "Open world map", 140)
-    open:SetScript("OnClick", function() AmazingHub:ToggleGuildMap() end)
-    share.checkbox.onChanged = function(_, checked) local a = api(); if a then call(a.SetMapShare, checked) end end
-    pins.checkbox.onChanged = function(_, checked) local a = api(); if a then call(a.SetMapPins, checked) end end
-
     -- Discord link: the code from /link in the guild Discord, same as /gl link CODE.
     local refresh
     local codeBox = makeInput(content, 150, "code from Discord")
@@ -120,7 +113,7 @@ function AmazingHub:CreateLedgerPanel(parent)
         content:SetWidth(width())
         local a = api()
         if not a then
-            share:Hide(); pins:Hide(); open:Hide(); codeBox:Hide(); linkBtn:Hide()
+            codeBox:Hide(); linkBtn:Hide()
             line("GuildLedger is not running.", 13, C.gold)
             line("It comes in the same pack (Amazing Forever Guild Pack). On the character screen, open AddOns,"
                 .. " tick \"GuildLedger (Amazing Forever Guild Pack)\" and log in again.", 11, C.textDim, 8)
@@ -129,26 +122,13 @@ function AmazingHub:CreateLedgerPanel(parent)
         end
 
         line("GUILDLEDGER " .. tostring(call(a.Version) or "?"), 13, C.gold, 4, 4)
-        line("Keeps the guild chat and roster log for Discord, and shows guild members on the world map.",
-            11, C.textDim, 8, 10)
+        line("Keeps the guild chat and roster log for Discord, and shows guild members on the world map"
+            .. " (options: Settings, World map).", 11, C.textDim, 8, 10)
         local newer, who = call(a.NewerVersion)
         if newer then
             line(string.format("Update available: version %s (seen from %s). Update the Amazing Forever Guild Pack"
                 .. " in your addon manager.", tostring(newer), tostring(who)), 11, C.red, 8, 10)
         end
-
-        line("WORLD MAP", 12, C.gold)
-        local m = call(a.GetMap) or {}
-        share.checkbox:SetChecked(m.share and true or false)
-        pins.checkbox:SetChecked(m.pins and true or false)
-        if m.available then
-            share.checkbox:Enable(); pins.checkbox:Enable()
-        else
-            share.checkbox:Disable(); pins.checkbox:Disable()
-        end
-        place(share, 26)
-        place(pins, 30)
-        place(open, 34)
 
         line("DISCORD LINK", 12, C.gold)
         line("Links your characters to your Discord account. In the guild Discord type /link, then enter the code"

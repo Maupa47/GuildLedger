@@ -202,7 +202,7 @@ end
 ns.StatusReport = status -- GuildLedgerAPI.GetStatus captures exactly these lines
 
 local function usage()
-    ns.Print("commands: /gl status, /gl who, /gl link CODE, /gl map share|pins on|off, /gl sync, /gl flush,"
+    ns.Print("commands: /gl status, /gl who, /gl link CODE, /gl map (world-map dots), /gl sync, /gl flush,"
         .. " /gl collector on|off, /gl officer on|off, /gl debug on|off")
 end
 

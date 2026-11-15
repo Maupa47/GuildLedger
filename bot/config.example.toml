@@ -1,57 +1,88 @@
-# GuildLedger bot configuration. On the server: /etc/guildledger/config.toml (mode 600, owner guildledger).
-# For a local test: copy to bot/config.toml (git-ignored). Token and webhook URLs are secrets.
+# GuildLedger bot - settings (admin only)
+#
+# WHERE THIS FILE LIVES
+#   Your PC:   bot\config.toml                 (copy of this file; git-ignored; the master copy you edit)
+#   Server:    /etc/guildledger/config.toml    (mode 600; sent by  tools\deploy.ps1 -UpdateConfig)
+# Edit bot\config.toml on your PC, then:  powershell -ExecutionPolicy Bypass -File .\tools\deploy.ps1 -UpdateConfig
+# Token and webhook URLs are passwords: never paste them into chat, issues or commits.
+#
+# HOW TO GET DISCORD IDs (the long numbers below)
+#   Discord -> User Settings -> Advanced -> turn on "Developer Mode".
+#   Then right-click a channel / the server icon / a role -> "Copy ... ID".
+# HOW TO GET A WEBHOOK URL
+#   Right-click the channel -> Edit Channel -> Integrations -> Webhooks -> New Webhook -> Copy Webhook URL.
+#   The webhook ID is the number right after /api/webhooks/ in that URL.
+#
+# Values marked REQUIRED must be filled in, or the bot refuses to start and says which one is missing.
+# Full walkthrough: docs/collection/ADMIN.md
+
 
 [discord]
-# Developer Portal -> your application -> Bot -> Reset Token. Keep it only in this file.
+# REQUIRED. https://discord.com/developers/applications -> your application -> Bot -> Reset Token -> Copy.
 token = ""
-# Discord: User Settings -> Advanced -> Developer Mode on; then right-click #gl-ingest -> Copy Channel ID.
+# REQUIRED. ID of the private #gl-ingest channel where collectors upload (right-click it -> Copy Channel ID).
 ingest_channel_id = 0
-# Your Discord server's ID (right-click the server icon -> Copy Server ID): slash commands appear at once.
+# Recommended. Your Discord server's ID (right-click the server icon -> Copy Server ID).
+# With it, slash commands (/link, /seen, ...) appear at once; with 0 they can take up to an hour.
 server_id = 0
 
-# One webhook per collector in #gl-ingest. Key = the webhook ID (the number right after
-# /api/webhooks/ in its URL), value = the collector's name. Uploads from any other author are ignored;
-# delete a collector's line (and its webhook) to revoke it.
+
 [collectors]
-# 1234567890123456789 = "Maupa"
+# REQUIRED: at least one line. One webhook in #gl-ingest per collecting officer:
+#   <webhook ID> = "<the officer's character name>"
+# Uploads from any other webhook are ignored. To revoke an officer: delete their webhook in Discord and their
+# line here. Example (made-up numbers):
+# 1111111111111111111 = "First Officer"
+# 2222222222222222222 = "Second Officer"
+
 
 [post]
-# Webhooks of the two log channels (the same ones direct mode used is fine).
-chat_webhook = ""
-roster_webhook = ""
+# REQUIRED (at least one): webhook URLs of the two log channels the bot posts into.
+chat_webhook = ""      # e.g. #guild-chat-log
+roster_webhook = ""    # e.g. #guild-roster-log
+# Time zone for the times shown in Discord.
 timezone = "Europe/Zurich"
-# Chat lines without text: "summary" | "lines" | "skip"
+# Chat lines whose text nobody captured: "summary" (one line per stretch) | "lines" (each one) | "skip".
 meta = "summary"
-# Chat waits this long after it arrives before posting, so another collector's copy can add missing text.
-# Longer = more chance to fill gaps, but lines trickle out instead of appearing at once after an upload.
+# Wait this long before posting chat, so another collector's copy can still add missing text.
 hold_chat_seconds = 60
 every_seconds = 30
-# Rows older than this (unix seconds) are archived but not posted. Default: the bot's first start,
-# because direct mode already posted everything before that.
+# Rows older than this (unix seconds) are archived but not posted. Default: the bot's first start.
 # since = 1794355200
 
-[storage]
-db_path = "/var/lib/guildledger/guildledger.db"
-
-[backup]
-# Optional: webhook of a private #gl-backup channel. The daily backup (gzip) is also posted there,
-# so the archive survives the loss of the server. Empty = local backups only (14 days).
-webhook = ""
 
 [ops]
-# Optional: webhook of a private #gl-ops channel. Daily coverage report (lines, share with text, gaps,
-# uploads per collector) and warnings (no upload for alert_after_hours, rejected uploads).
+# Optional monitoring. Webhook URL of a private #gl-ops channel: daily report (chat lines, share with text,
+# gaps, uploads per collector) and warnings (no upload for alert_after_hours, rejected uploads). Empty = off.
 webhook = ""
 report_hour = 6          # local time; the report covers the previous day
 alert_after_hours = 6
 
+
+[backup]
+# Optional. Webhook URL of a private #gl-backup channel: the daily database backup is also posted there,
+# so the archive survives the loss of the server. Empty = backups stay on the server only (14 days).
+webhook = ""
+
+
 [link]
-# Decision 5 (docs/PACK_PLAN.md): what a confirmed link does on the Discord server. All off by default.
-# Easier: set the roles with /roles in Discord (saved on the server, wins over the values here).
-# Needs the bot permissions Manage Roles / Manage Nicknames, and the bot's role above the roles it assigns.
-verified_role_id = 0     # role for members with a linked character in the guild (0 = off)
-set_nickname = false     # nickname = highest-level linked character in the guild
+# Optional: what a confirmed Discord link does. Easier: set roles with /roles in Discord (saved on the
+# server; wins over these values). Needs the bot permission Manage Roles, and the bot's role above them.
+verified_role_id = 0     # role ID for members with a linked character in the guild (0 = off)
+set_nickname = false     # true: nickname = highest-level linked character (needs Manage Nicknames)
 grace_days = 7           # roles stay this long after the last linked character left the guild
+
 [link.rank_roles]
-# guild rank name = Discord role ID, e.g.
-# "Officer" = 123456789012345678
+# guild rank name = Discord role ID. Example (made-up number):
+# "Officer" = 333333333333333333
+
+
+[storage]
+# Leave as it is on the server.
+db_path = "/var/lib/guildledger/guildledger.db"
+
+
+[deploy]
+# Only on your PC, for tools\deploy.ps1: the SSH login of the server, e.g. "ubuntu@your-server.example".
+# The bot itself ignores this section.
+ssh = ""

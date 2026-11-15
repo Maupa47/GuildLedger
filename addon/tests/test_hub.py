@@ -68,10 +68,15 @@ def test_ledger_tab():
     assert _run_lua(lj, Path(__file__).with_name("hub_ledger.lua"), HUB) == "ok"
 
 
+def test_settings_sections_and_world_map():
+    lj = _luajit()
+    assert _run_lua(lj, Path(__file__).with_name("hub_settings.lua"), HUB) == "ok"
+
+
 def test_ledger_tab_is_built_in():
     toc = (HUB / "AmazingHub.toc").read_text("utf-8")
-    assert toc.rstrip().endswith("UI\\PackTweaks.lua\nUI\\LedgerPanel.lua")
-    for name in ("PackTweaks.lua", "LedgerPanel.lua"):
+    assert toc.rstrip().endswith("UI\\PackTweaks.lua\nUI\\LedgerPanel.lua\nUI\\SettingsPlus.lua")
+    for name in ("PackTweaks.lua", "LedgerPanel.lua", "SettingsPlus.lua"):
         assert (HUB / "UI" / name).read_bytes() == (ROOT / "tools" / "hub-extra" / name).read_bytes()
 
 
@@ -163,3 +168,10 @@ def test_hub_matches_the_script(tmp_path):
     have = {p.relative_to(HUB).as_posix(): p.read_bytes() for p in HUB.rglob("*") if p.is_file()}
     assert built.keys() == have.keys()
     assert [k for k in built if built[k] != have[k]] == []
+
+
+def test_classic_style_is_the_default():
+    style = (HUB / "Core" / "Style.lua").read_text("utf-8")
+    assert 'Style.DEFAULT = "forever"' in style and 'Style.ORDER = { "forever", "amazinghub" }' in style
+    assert 'name = "Classic"' in style and 'name = "Modern"' in style
+    assert 'Style.ALIASES = { classic = "forever", modern = "amazinghub" }' in style

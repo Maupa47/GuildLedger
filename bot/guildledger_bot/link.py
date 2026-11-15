@@ -1,4 +1,4 @@
-"""Discord link (docs/PACK_PLAN.md section 10): characters <-> Discord users. Pure database logic, no Discord.
+"""Discord link (docs/dev/PACK_PLAN.md section 10): characters <-> Discord users. Pure database logic, no Discord.
 
 Flow: /link gives the Discord user a one-time code -> in game `/gl link CODE` -> a collector records it ->
 upload -> `process()` checks it and opens a *confirmation* for that Discord user -> only the user's click
@@ -211,10 +211,6 @@ class Links:
     def whois(self, name: str) -> list[tuple[int, str]]:
         return [(r[0], r[1]) for r in self.db.execute(
             "SELECT discord_user_id, name FROM links WHERE lower(name)=lower(?)", (name,))]
-
-    def user_of(self, guild: str, guid: str) -> int | None:
-        r = self.db.execute("SELECT discord_user_id FROM links WHERE guild=? AND guid=?", (guild, guid)).fetchone()
-        return r[0] if r else None
 
     def status(self) -> dict[str, Any]:
         linked = self.db.execute("SELECT COUNT(*) FROM members m WHERE m.in_guild=1 AND EXISTS"

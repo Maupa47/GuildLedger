@@ -60,7 +60,6 @@ local function club()
     if ns.Chat and ns.Chat.Club then return ns.Chat.Club() end
 end
 
-M.splitUtf8 = Comms.SplitUtf8
 
 local function lineMessages(row)
     local payload = table.concat({ row.s, tostring(row.t), row.a or "", row.g or "", row.fd and "1" or "0",

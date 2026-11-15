@@ -121,7 +121,7 @@ class LedgerBot(dpy.Client):
                 await self.sync_roles(uid)
 
     async def sync_roles(self, user_id: int) -> None:
-        """Decision 5 (docs/PACK_PLAN.md): roles by guild rank, verified role, nickname. Off unless configured."""
+        """Decision 5 (docs/dev/PACK_PLAN.md): roles by guild rank, verified role, nickname. Off unless configured."""
         cfg = self.cfg
         if not cfg.server_id or not self._links:
             return

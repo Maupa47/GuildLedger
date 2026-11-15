@@ -2,7 +2,7 @@
 ## Title: |cffFFD700Amazing Hub|r |cff888888(Amazing Forever Guild Pack)|r
 ## Notes: Guild window for the Amazing guild: roster, professions and recipes, raids, trials.
 ## Author: Maupa
-## Version: 0.5.0
+## Version: 0.5.1
 ## SavedVariables: AmazingHubDB
 ## DefaultState: enabled
 ## IconTexture: Interface\AddOns\AmazingHub\Media\minimap-logo
@@ -178,3 +178,4 @@ UI\Features.lua
 # Amazing Forever Guild Pack (tools/hub-extra)
 UI\PackTweaks.lua
 UI\LedgerPanel.lua
+UI\SettingsPlus.lua

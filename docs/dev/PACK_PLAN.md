@@ -5,7 +5,7 @@ Revision 1, 2026-11-13. Extends `CLAUDE.md`; it does not replace it.
 Working names: package **Amazing**, hub folder **AmazingHub** (rename freely, see section 3).
 
 You (Claude Code) are extending the GuildLedger repository into one downloadable guild package.
-Read this whole file, then `CLAUDE.md`, the status file, `shared/schema.md` and `docs/API_FINDINGS.md`
+Read this whole file, then `CLAUDE.md`, the status file, `shared/schema.md` and `docs/dev/API_FINDINGS.md`
 before writing code. Sections 4 and 5 are hard constraints. Where this file and `CLAUDE.md` disagree,
 section 5 lists the only intended changes; everything else in `CLAUDE.md` still applies.
 
@@ -30,7 +30,7 @@ section 5 lists the only intended changes; everything else in `CLAUDE.md` still 
   `/gl map share off` (overrides rule 8 "opt-in" for the map; positions are still never stored or uploaded).
   Decision 4 (GuildOS courtesy) and 7 (hub chat behaviour) only matter with a fork.
 - **2026-11-14, decision 3 revised: fork GuildOS after all** (the admin wants its guild window: professions,
-  recipes, recipe browser, roster). Phase 8 audit: docs/HUB_AUDIT.md. Hub decisions: folder `AmazingHub`, title
+  recipes, recipe browser, roster). Phase 8 audit: docs/addon/HUB_AUDIT.md. Hub decisions: folder `AmazingHub`, title
   "Amazing Hub", slash `/amazing`; chat-posting features **off, officers can enable** (decision 7); the hub's own
   guild chat log, roster log and map are **off** - GuildLedger's are used (bridge in Phase 10); the admin contacts the
   GuildOS author before publishing (decision 4). Sections 7–8 (Phase 9 fork, Phase 10 bridge) apply again; pack
@@ -63,17 +63,17 @@ section 5 lists the only intended changes; everything else in `CLAUDE.md` still 
 | P | Publish 0.4.0 | 12 (Phase 14) |
 
 **Progress (2026-11-13):** C, R, M, L, A built and covered by tests (no in-game test yet; one combined test
-round, docs/INGAME_TESTS.md "Pack test round"). Decisions 2, 5, 6 answered on 2026-11-14 (see above); nicknames still open.
-Map dots are plain frames on the map canvas (see docs/API_FINDINGS.md "Map"), not `AcquirePin`.
+round, docs/dev/INGAME_TESTS.md "Pack test round"). Decisions 2, 5, 6 answered on 2026-11-14 (see above); nicknames still open.
+Map dots are plain frames on the map canvas (see docs/dev/API_FINDINGS.md "Map"), not `AcquirePin`.
 **Progress (2026-11-14):** Phase 9 built: `addon/AmazingHub` from `tools/rebrand-hub.py`, pack version 0.5.0, both
 folders in the pack zip, THIRD_PARTY.md. Section 2 modules are neutralised (guard at every way out), not deleted;
-RosterLog stays on (trials need it). Details and test status: docs/HUB_AUDIT.md section 8. Not tested in game.
+RosterLog stays on (trials need it). Details and test status: docs/addon/HUB_AUDIT.md section 8. Not tested in game.
 Hub round reported OK by the admin 2026-11-14.
 **Progress (2026-11-14, later):** Phase 10 built: `GuildLedger/API.lua` (global `GuildLedgerAPI`, apiVersion 1:
 Version, IsCollector, GetModules, GetStatus = the exact `/gl status` lines, GetMap / SetMapShare / SetMapPins
 (quiet), GetLink, NewerVersion) and the hub's **Ledger** tab (`tools/hub-extra/LedgerPanel.lua`, copied in by the
 rebrand script): status, map switches, update notice; `/amazing map` opens the world map. Not tested in game
-(docs/INGAME_TESTS.md "Bridge test round"). Deviation from section 8: the two map setters are the only
+(docs/dev/INGAME_TESTS.md "Bridge test round"). Deviation from section 8: the two map setters are the only
 state-changing calls (the plan asked for toggles); Link stays `/gl link CODE` (a code is typed, not toggled).
 
 ## 1. Goal
@@ -144,7 +144,7 @@ with no benefit for the user, and it makes pulling GuildOS updates impossible.
 ## 5. Rules (changes and additions to `CLAUDE.md` section 10)
 
 1. **Still do not invent WoW API.** Every function and event must be found in `/vendor-ref` (Blizzard
-   `forever` branch), in `docs/API_FINDINGS.md`, or in code that is proven to run on Forever. API names
+   `forever` branch), in `docs/dev/API_FINDINGS.md`, or in code that is proven to run on Forever. API names
    in this file marked "candidate" are leads to verify, not facts.
 2. **Addon messages are allowed**, only through GuildLedger's existing comms layer (CLAUDE.md 5.7:
    the send result decides, counters in `/gl status`). No module sends on its own.
@@ -163,13 +163,13 @@ with no benefit for the user, and it makes pulling GuildOS updates impossible.
    disk and never uploaded.
 9. **Message budget.** The guild has about 1000 members. Every new message type needs a written budget
    (who sends, how often, worst case per minute for the whole guild) in `shared/schema.md` before code.
-10. Stop after each phase, update `docs/INGAME_TESTS.md` and the status file, list what the human must
+10. Stop after each phase, update `docs/dev/INGAME_TESTS.md` and the status file, list what the human must
     verify, and wait.
 
 ## 6. Phase 8 — Audit (no code changes outside `/vendor-ref` and `/docs`)
 
 Clone GuildOS into `/vendor-ref/guildos` at a pinned commit (record the hash). Its README states one
-build serves TBC Anniversary (20506) and WoW: Forever (16001). Write `docs/HUB_AUDIT.md` with:
+build serves TBC Anniversary (20506) and WoW: Forever (16001). Write `docs/addon/HUB_AUDIT.md` with:
 
 1. Module list with a verdict each: keep, keep but off by default, remove. Mark TBC-only parts
    (attunement tables, TMB import, TBC consumable lists) and how the build tells the clients apart.
@@ -227,7 +227,7 @@ Purpose: see guild members who share their position on the world map.
 - Off by default (decision 6). `/gl map share on|off`, `/gl map pins on|off`, `/gl map status`.
 - Position source — candidates to verify in the map documentation in `/vendor-ref`:
   `C_Map.GetBestMapForUnit("player")`, `C_Map.GetPlayerMapPosition(mapID, "player")`. Record in
-  `docs/API_FINDINGS.md` what they return in instances, in cities and during lockdown, and whether any
+  `docs/dev/API_FINDINGS.md` what they return in instances, in cities and during lockdown, and whether any
   return is flagged secret. If the position is nil or secret, send nothing.
 - Never send inside instances, battlegrounds or during chat lockdown, and never while not in the guild.
 
@@ -254,7 +254,7 @@ Purpose: see guild members who share their position on the world map.
 
 Tests (lupa): encoding/decoding, throttles, watch expiry, pin expiry, unknown sender ignored, nothing
 sent when sharing is off, in an instance, or when position is nil/secret. In game: two accounts, steps
-in `docs/INGAME_TESTS.md`.
+in `docs/dev/INGAME_TESTS.md`.
 
 Acceptance: A shares, B opens the map → B sees A within 15 s; both close maps → counters show no
 `POS` after 45 s; sharing off → nothing sent; no taint error; no Lua error during a boss fight.

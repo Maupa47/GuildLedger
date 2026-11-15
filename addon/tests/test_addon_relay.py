@@ -191,7 +191,7 @@ def test_relayed_text_reaches_the_companion(tmp_path):
 
 def test_split_is_utf8_safe():
     g = Game()
-    split = g.W.ns.Relay.splitUtf8
+    split = g.W.ns.Comms.SplitUtf8
     s = "ä" * 150  # 300 bytes
     parts = list(split(s, 7).values())
     assert "".join(parts) == s and all(len(p.encode("latin-1", "surrogateescape")) <= 7 for p in parts)

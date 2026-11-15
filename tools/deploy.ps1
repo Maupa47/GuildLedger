@@ -9,13 +9,15 @@
       so the server continues exactly where your PC stopped: nothing is posted twice.
   Stop the bot on your PC first. Without -FirstTime the server keeps its config and data (update).
   -UpdateConfig sends only bot\config.toml (e.g. after adding a collector's webhook ID); data stays.
+  The server's SSH login comes from bot\config.toml, section [deploy], key ssh (git-ignored, so the address
+  never lands in the repository), or from -Server.
 .EXAMPLE
   .\tools\deploy.ps1 -FirstTime
   .\tools\deploy.ps1
   .\tools\deploy.ps1 -UpdateConfig
 #>
 param(
-    [string]$Server = "<server>",
+    [string]$Server = "",   # default: [deploy] ssh in bot\config.toml
     [switch]$FirstTime,
     [switch]$UpdateConfig,  # send bot\config.toml only (server values filled in); archive and data stay
     [switch]$DryRun    # only pack and list the files that would be sent; no connection to the server
@@ -90,6 +92,14 @@ try {
         }
     }
 
+    if (-not $Server) {
+        $cfgFile = Join-Path $root "bot\config.toml"
+        if (Test-Path $cfgFile) {
+            $m = [regex]::Match([IO.File]::ReadAllText($cfgFile), '(?ms)^\[deploy\].*?^\s*ssh\s*=\s*"([^"]+)"')
+            if ($m.Success) { $Server = $m.Groups[1].Value }
+        }
+    }
+    if (-not $Server) { throw 'no server: put  [deploy]  ssh = "user@your-server"  into bot\config.toml, or pass -Server' }
     Step "copying to $Server"
     ssh $Server "rm -rf ~/guildledger-deploy && mkdir -p ~/guildledger-deploy"
     if ($LASTEXITCODE -ne 0) { throw "ssh to $Server failed" }

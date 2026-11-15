@@ -73,6 +73,27 @@ def test_config_errors(tmp_path):
         load(tmp_path / "missing.toml")
 
 
+def test_config_example_is_valid_and_guides(tmp_path):
+    """config.example.toml: upload mode, settings in [general]; the placeholder path is refused clearly."""
+    from pathlib import Path
+
+    example = (Path(__file__).resolve().parents[1] / "config.example.toml").read_text("utf-8")
+    raw = tmp_path / "raw.toml"
+    raw.write_text(example, encoding="utf-8")
+    with pytest.raises(ConfigError, match="YOUR_ACCOUNT_FOLDER"):
+        load(raw)
+    filled = tmp_path / "config.toml"
+    filled.write_text(example.replace("YOUR_ACCOUNT_FOLDER", "ACC1"), encoding="utf-8")
+    cfg = load(filled)
+    assert cfg.mode == "upload" and cfg.timezone == "Europe/Zurich" and cfg.collector == "Your Character"
+    assert cfg.ingest_webhook == "" and str(cfg.sv_path).endswith("GuildLedger.lua")
+
+
+def test_config_old_top_level_layout_still_works(tmp_path):
+    cfg = load(write_config(tmp_path, tmp_path / "x.lua"))  # mode/timezone at the top (before 0.5.1)
+    assert cfg.mode == "direct" and cfg.timezone == "UTC"
+
+
 def test_config_repr_hides_webhooks(tmp_path, fixtures):
     cfg = load(write_config(tmp_path, tmp_path / "x.lua"))
     assert cfg.chat_webhook.endswith("secret-chat")

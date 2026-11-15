@@ -1,10 +1,12 @@
--- Map (docs/PACK_PLAN.md section 9): guild members who share their position, as dots on the world map.
+-- Map (docs/dev/PACK_PLAN.md section 9): guild members who share their position, as dots on the world map.
 -- Demand-driven, so an idle guild sends nothing (budget in shared/schema.md 5):
 --   V mapID        a viewer: "my world map shows this map" (while it is open, at most every 30 s)
 --   P mapID x y    a sharer: "I am here" (x, y 0..9999) - only while a V for their map or a parent map was
 --                  heard in the last 45 s, at most every 10 s, and only if moved or 30 s passed.
 -- Sharing is ON by default (decision 6, 2026-11-14); /gl map share off is remembered (opts.mapOptOut).
 -- Never in instances, during a boss-fight lock or outside the guild. Positions live in memory only.
+-- Look of the dots (0.5.1; /gl map shape|size|outline|colors, or the hub's Settings): opts.mapShape
+-- ("round" | "square"), opts.mapSize (pixels), opts.mapOutline (dark rim), opts.mapColors[CLASS] = "rrggbb".
 
 local _, ns = ...
 local C, S = ns.Compat, ns.Store
@@ -22,7 +24,10 @@ local MOVE_MIN = 30 -- in 0..9999 units: smaller moves are not worth a message
 local FADE_AFTER, DROP_AFTER = 60, 120 -- s: dots fade, then disappear
 local PARENT_DEPTH = 8
 local ROSTER_REFRESH = 600 -- s: viewers ask the game for the member list (for class colours) this often
-local DOT_SIZE = 10
+local SIZE_MIN, SIZE_MAX, SIZE_DEFAULT = 6, 24, 12
+local RIM = 2 -- px: the dark outline on each side
+-- A white disc. Blizzard's own guild window (Blizzard_Communities/ClubFinder.xml) shows this file as an icon.
+local ROUND = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 
 local watches = {} -- [mapID] = GetTime() of the last V heard
 local positions = {} -- [sender] = { map, x, y, at }
@@ -34,6 +39,7 @@ local pins = {} -- frames on the map canvas, reused
 local canvasOf -- canvas the pins belong to
 
 local function opts() return S.Opts() end
+M.SIZE_MIN, M.SIZE_MAX, M.SIZE_DEFAULT = SIZE_MIN, SIZE_MAX, SIZE_DEFAULT
 local function sharing() return opts().mapOptOut ~= true end
 
 local function club()
@@ -67,6 +73,42 @@ local function int(v, lo, hi)
     v = tonumber(v)
     if not v or v ~= math.floor(v) or v < lo or v > hi then return nil end
     return v
+end
+
+---------------------------------------------------------------------------------------------------
+-- Look of the dots
+---------------------------------------------------------------------------------------------------
+
+local function look()
+    local o = opts()
+    local size = tonumber(o.mapSize)
+    size = size and math.floor(size) or SIZE_DEFAULT
+    if size < SIZE_MIN or size > SIZE_MAX then size = SIZE_DEFAULT end
+    return o.mapShape == "square" and "square" or "round", size, o.mapOutline ~= false
+end
+
+local function hexColor(hex)
+    if type(hex) ~= "string" or not hex:match("^%x%x%x%x%x%x$") then return nil end
+    return tonumber(hex:sub(1, 2), 16) / 255, tonumber(hex:sub(3, 4), 16) / 255, tonumber(hex:sub(5, 6), 16) / 255
+end
+
+-- The player's colour for a class, else the game's class colour.
+local function colorOf(class)
+    local own = type(class) == "string" and type(opts().mapColors) == "table" and opts().mapColors[class]
+    local r, g, b = hexColor(own)
+    if r then return r, g, b end
+    return C.ClassColor(class)
+end
+M.colorOf = colorOf
+
+local function paint(tex, shape, r, g, b, a)
+    if shape == "round" then
+        tex:SetTexture(ROUND)
+        tex:SetVertexColor(r, g, b, a)
+    else
+        tex:SetColorTexture(r, g, b, a)
+        tex:SetVertexColor(1, 1, 1, 1)
+    end
 end
 
 Comms.Handle("V", function(_, text, me)
@@ -131,8 +173,10 @@ local function pinFor(i, canvas)
     local pin = pins[i]
     if pin and pin:GetParent() == canvas then return pin end
     pin = CreateFrame("Frame", nil, canvas)
+    pin.rim = pin:CreateTexture(nil, "ARTWORK")
+    pin.rim:SetAllPoints()
     pin.dot = pin:CreateTexture(nil, "OVERLAY")
-    pin.dot:SetAllPoints()
+    pin.dot:SetPoint("CENTER")
     pin:SetFrameStrata("HIGH")
     pin:EnableMouse(true)
     pin:SetScript("OnEnter", function(self)
@@ -166,6 +210,9 @@ local function draw(frame, view, now)
     local scale = frame.GetCanvasScale and frame:GetCanvasScale() or 1
     if C.IsSecret(scale) or type(scale) ~= "number" or scale <= 0 then scale = 1 end
     local w, h = canvas:GetWidth(), canvas:GetHeight()
+    local shape, size, outline = look()
+    local dot = size / scale
+    local full = outline and (size + 2 * RIM) / scale or dot
     local n = 0
     for sender, p in pairs(positions) do
         local age = now - p.at
@@ -175,9 +222,16 @@ local function draw(frame, view, now)
         if nx and known and not C.InGroupWith(sender) then
             n = n + 1
             local pin = pinFor(n, canvas)
-            local r, g, b = C.ClassColor(info and info.class)
-            pin.dot:SetColorTexture(r, g, b, 1)
-            pin:SetSize(DOT_SIZE / scale, DOT_SIZE / scale)
+            local r, g, b = colorOf(info and info.class)
+            paint(pin.dot, shape, r, g, b, 1)
+            pin.dot:SetSize(dot, dot)
+            pin:SetSize(full, full)
+            if outline then
+                paint(pin.rim, shape, 0, 0, 0, 0.85)
+                pin.rim:Show()
+            else
+                pin.rim:Hide()
+            end
             pin:ClearAllPoints()
             pin:SetPoint("CENTER", canvas, "TOPLEFT", nx * w, -ny * h)
             pin:SetAlpha(age > FADE_AFTER and 0.4 or 1)
@@ -229,8 +283,9 @@ function M.OnInit()
     C.Ticker(TICK, function() ns.Safe("Map.tick", tick) end)
 end
 
--- For tests and /gl status.
+-- For tests.
 function M.Positions() return positions end
+function M.Pins() return pins end
 
 -- Quiet setter (GuildLedgerAPI, the hub's Ledger tab): "share" or "pins", on = true/false.
 function M.Set(what, on)
@@ -239,10 +294,57 @@ function M.Set(what, on)
     elseif what == "pins" then o.mapPins = on and true or false end
 end
 
+-- Change the look of the dots: "shape" ("round"|"square"), "size" (number), "outline" (boolean),
+-- "color" (class file, then r, g, b 0..1; no r = the game's colour again), "reset" (everything back).
+-- Returns true when the value was accepted.
+function M.SetLook(what, a, r, g, b)
+    local o = opts()
+    if what == "shape" and (a == "round" or a == "square") then
+        o.mapShape = a
+    elseif what == "size" and tonumber(a) then
+        o.mapSize = math.max(SIZE_MIN, math.min(SIZE_MAX, math.floor(tonumber(a) + 0.5)))
+    elseif what == "outline" and type(a) == "boolean" then
+        o.mapOutline = a
+    elseif what == "color" and type(a) == "string" and a:match("^[A-Z]+$") then
+        if type(o.mapColors) ~= "table" then o.mapColors = {} end
+        local function byte(v) return math.max(0, math.min(255, math.floor((tonumber(v) or 0) * 255 + 0.5))) end
+        o.mapColors[a] = r and string.format("%02x%02x%02x", byte(r), byte(g), byte(b)) or nil
+        if next(o.mapColors) == nil then o.mapColors = nil end
+    elseif what == "reset" then
+        o.mapShape, o.mapSize, o.mapOutline, o.mapColors = nil, nil, nil, nil
+    else
+        return false
+    end
+    return true
+end
+
+-- Classes worth a colour choice: those in the guild, plus any the player already coloured.
+local function classes()
+    local seen, out = {}, {}
+    local function add(c)
+        if type(c) == "string" and c:match("^[A-Z]+$") and not seen[c] then seen[c] = true; out[#out + 1] = c end
+    end
+    for i = 1, C.RosterCount() do
+        local r = C.RosterRow(i)
+        if r then add(r.c) end
+    end
+    for c in pairs(type(opts().mapColors) == "table" and opts().mapColors or {}) do add(c) end
+    table.sort(out)
+    return out
+end
+
 function M.Settings()
     local o = opts()
+    local shape, size, outline = look()
+    local colors = {}
+    for _, class in ipairs(classes()) do
+        local r, g, b = colorOf(class)
+        local own = type(o.mapColors) == "table" and o.mapColors[class] ~= nil
+        colors[#colors + 1] = { class = class, r = r, g = g, b = b, custom = own }
+    end
     return { available = (C.HasMap and C.HasComm) and true or false, share = sharing(), pins = o.mapPins ~= false,
-        shown = stats.shown }
+        shown = stats.shown, shape = shape, size = size, outline = outline, sizeMin = SIZE_MIN, sizeMax = SIZE_MAX,
+        colors = colors }
 end
 
 function M.Command(what, value)
@@ -259,8 +361,28 @@ function M.Command(what, value)
         end
         return
     end
+    local done
+    if what == "shape" then
+        done = M.SetLook("shape", value)
+    elseif what == "size" then
+        done = M.SetLook("size", value)
+    elseif what == "outline" and (value == "on" or value == "off") then
+        done = M.SetLook("outline", value == "on")
+    elseif what == "colors" and value == "reset" then
+        o.mapColors = nil
+        done = true
+    elseif what == "reset" then
+        done = M.SetLook("reset")
+    end
+    if done then
+        local shape, size, outline = look()
+        ns.Print(string.format("map dots: %s, %d px, %s.", shape, size, outline and "with outline" or "no outline"))
+        return
+    end
     ns.Print("map commands: /gl map share on|off (show your position to guild members), /gl map pins on|off"
-        .. " (show theirs on your map)")
+        .. " (show theirs on your map), /gl map shape round|square, /gl map size " .. SIZE_MIN .. "-" .. SIZE_MAX
+        .. ", /gl map outline on|off, /gl map colors reset, /gl map reset. Colours per class: Amazing Hub,"
+        .. " Settings, World map.")
 end
 
 function M.Status()

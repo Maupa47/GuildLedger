@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: GuildLedger (Amazing Forever Guild Pack)
 ## Notes: Silent helper for your guild's chat log: keeps recent guild chat for your officers. No setup needed.
-## Version: 0.5.0
+## Version: 0.5.1
 ## SavedVariables: GuildLedgerDB
 Compat.lua
 Store.lua

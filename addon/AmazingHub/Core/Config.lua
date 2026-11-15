@@ -15,7 +15,7 @@ AmazingHub.ADDON_NAME        = "Amazing Hub"
 AmazingHub.NAMESPACE         = "AmazingHub"
 
 -- ── Version ───────────────────────────────────────────────────────
-AmazingHub.VERSION           = "0.5.0"  -- kept in sync with AmazingHub.toc by the release workflow
+AmazingHub.VERSION           = "0.5.1"  -- kept in sync with AmazingHub.toc by the release workflow
 AmazingHub.COMM_VERSION      = 1
 
 -- ── SavedVariables ────────────────────────────────────────────────

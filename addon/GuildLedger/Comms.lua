@@ -1,4 +1,4 @@
--- Comms (docs/PACK_PLAN.md correction 2): the one way GuildLedger talks to other players' GuildLedger.
+-- Comms (docs/dev/PACK_PLAN.md correction 2): the one way GuildLedger talks to other players' GuildLedger.
 -- Hidden addon messages on the GUILD channel with the prefix "GuildLedger" (CLAUDE.md 5.6/5.7).
 --
 -- Modules register a handler per message kind (the first character of the message) and queue messages

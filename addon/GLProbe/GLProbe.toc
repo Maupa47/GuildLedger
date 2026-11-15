@@ -1,6 +1,0 @@
-## Interface: 16001
-## Title: GLProbe
-## Notes: GuildLedger Phase 0 API probe. Throwaway; remove after Phase 0.
-## Version: 0.0.1
-## SavedVariables: GLProbeDB
-GLProbe.lua

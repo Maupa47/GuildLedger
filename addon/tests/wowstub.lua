@@ -73,7 +73,12 @@ local function widget(parent)
         if k == "CreateTexture" then return function(self) return widget(self) end end
         if k == "SetPoint" then return function(self, ...) self.points = { ... } end end
         if k == "SetScript" then return function(self, what, fn) self.scripts[what] = fn end end
-        if k == "SetColorTexture" then return function(self, r, g, b) self.color = { r, g, b } end end
+        if k == "SetColorTexture" then
+            return function(self, r, g, b, a) self.color = { r, g, b, a }; self.texture = false end
+        end
+        if k == "SetTexture" then return function(self, path) self.texture = path; self.color = false end end
+        if k == "SetVertexColor" then return function(self, r, g, b, a) self.vertex = { r, g, b, a } end end
+        if k == "SetSize" then return function(self, w, h) self.size = { w, h } end end
         if k == "SetAlpha" then return function(self, a) self.alpha = a end end
         return function() end
     end })

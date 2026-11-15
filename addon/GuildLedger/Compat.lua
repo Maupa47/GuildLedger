@@ -1,5 +1,5 @@
 -- Compat: every Blizzard API call goes through here, behind an existence check (CLAUDE.md 5.6).
--- All functions are documented for 1.60.1 (vendor-ref) or measured in Phase 0 (docs/API_FINDINGS.md).
+-- All functions are documented for 1.60.1 (vendor-ref) or measured in Phase 0 (docs/dev/API_FINDINGS.md).
 -- Rule: check secrets first, then bail out. Never compare, concatenate or index with a secret.
 
 local _, ns = ...
