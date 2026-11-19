@@ -202,7 +202,7 @@ Cost: one pass over up to ~1000 rows per snapshot; no per-row string building be
 
 ### 5.5 Slash commands
 
-`/gl status` (guild, rows spooled, unsaved rows, last sync, lockdown, feature flags), `/gl sync`, `/gl flush` (`ReloadUI()`), `/gl collector on|off`, `/gl officer on|off`, `/gl debug on|off`. Prefix output with `|cff33ff99GuildLedger|r:`.
+`/gl status` (guild, rows spooled, unsaved rows, last sync, lockdown, feature flags), `/gl sync`, `/gl flush` (`ReloadUI()`), `/gl collector on|off`, `/gl officer on|off`, `/gl messages on|off`, `/gl dev on|off`, `/gl debug on|off`. Prefix output with `|cff33ff99GuildLedger|r:`.
 `/gl status` is written for every player (2026-11-13): the first line has the prefix, then a gold heading per
 section (Guild chat, Member list, Sharing with other players, Saving, Settings) and one plain-language fact per
 indented line, no abbreviations or codes; timing only with debug on.
@@ -217,7 +217,12 @@ indented line, no abbreviations or codes; timing only with debug on.
   the `GUILD` channel with the prefix `GuildLedger`, only the kinds listed with a budget in `shared/schema.md` 5
   (relay H W N T G, map V P, link L Y A), held during lockdown (decisions 2026-11-13).
 - **Silent by default** (2026-11-13): nothing in chat unless the player types a `/gl` command; errors are
-  counted for `/gl status` and printed only with `/gl debug on`.
+  counted for `/gl status` and printed only with `/gl debug on`. Later unasked lines go through `ns.Notice`
+  (shown only with `/gl messages on`, opts.messages; 2026-11-15). Amazing Hub gates its own chat lines the same
+  way (tools/hub-extra/PackTweaks.lua, setting chatMessages). Reports of what is sent and received (relay rounds,
+  history found) go through `ns.Info`, shown only in developer mode (`/gl dev on`, opts.dev, or debug; 2026-11-17).
+  Exception wanted by the admin (2026-11-18): the login greeting with the guild's message of the day
+  (`Welcome.lua`, on by default, `/gl welcome off`).
 
 ### 5.7 Relay (`Relay.lua`): members fill collectors' text gaps (added 2026-11-13, schema 2)
 
@@ -237,7 +242,8 @@ Messages (fields separated by TAB; stored text never contains control characters
   versions send only `held`). Only a member's first hello after login makes a collector ask for gaps.
 - `N` stream ranges — collector: "who has text for these times?" `ranges` = `t1-t2,t3-t4,…` (unix s) built from
   its own text-less rows of the last 27 h (rows a few minutes apart form one range). Sent ~30 s after its history
-  sync, when a member says hello (at most every 2 min) and every 15 min while gaps remain.
+  sync, when a member says hello (at most every 2 min), every 15 min while gaps remain, and ~65 s after a round
+  that filled lines while gaps remain (members send at most 150 per round; 2026-11-17).
 - `T` id k/n chunk — member: one line, split into n chunks of ≤ 200 bytes (UTF-8 safe). Chunk 1 starts with
   `stream TAB t TAB author TAB guid TAB fd TAB`, then the text.
 - `G` id,id,… — collector: "have it"; every member deletes those lines.

@@ -655,6 +655,8 @@ function AmazingHub:CreateProfessionsPanel(parent, _win)
         else
             state.results = state.line and D.MemberRows(state.line) or {}
         end
+        local TS = AmazingHub.TableSort -- Amazing Hub: the chosen column and direction
+        if TS then TS.Apply("prof-" .. state.mode, state.results, TS.PROFESSIONS[state.mode]) end
         if resetScroll then
             scroll:SetVerticalScroll(0)
             if FauxScrollFrame_SetOffset then FauxScrollFrame_SetOffset(scroll, 0) end
@@ -714,6 +716,10 @@ function AmazingHub:CreateProfessionsPanel(parent, _win)
                 fs:SetPoint("LEFT", ROW_INSET + col.x, 0)
                 fs:SetWidth(col.w)
                 fs:SetText(HEADERS[state.mode][col.key])
+                if AmazingHub.TableSort then -- Amazing Hub: heading = sort button with an arrow
+                    AmazingHub.TableSort.Header(fs, "prof-" .. state.mode, col.key, HEADERS[state.mode][col.key],
+                        function() panel:Refresh() end, AmazingHub.TableSort.PROFESSIONS_NUMERIC[col.key])
+                end
             end
         end
         local listTop = TOP + TITLE_H + TOOLS_H + 4 + HEADER_H

@@ -34,6 +34,9 @@ class BotConfig:
     rank_roles: dict[str, int] = field(default_factory=dict)  # guild rank name -> Discord role ID
     set_nickname: bool = False  # nickname = highest-level linked character in the guild
     grace_days: int = 7  # roles stay this long after the last linked character left the guild
+    loot_webhook: str = field(default="", repr=False)  # [loot] #guild-loot channel (empty = no loot posts)
+    loot_hold: int = 600  # s: loot and points wait this long, so every collector's copy is merged first
+    loot_top: int = 10  # standings shown under a raid summary
 
 
 def load(path: str | Path) -> BotConfig:
@@ -73,6 +76,10 @@ def load(path: str | Path) -> BotConfig:
     cfg.rank_roles = {str(k): int(v) for k, v in (link.get("rank_roles", {}) or {}).items() if int(v or 0)}
     cfg.set_nickname = bool(link.get("set_nickname", False))
     cfg.grace_days = int(link.get("grace_days", cfg.grace_days))
+    loot_ = raw.get("loot", {}) or {}
+    cfg.loot_webhook = str(loot_.get("webhook", ""))
+    cfg.loot_hold = int(loot_.get("hold_seconds", cfg.loot_hold))
+    cfg.loot_top = int(loot_.get("standings_top", cfg.loot_top))
     storage = raw.get("storage", {}) or {}
     if "db_path" in storage:
         cfg.db_path = Path(storage["db_path"])

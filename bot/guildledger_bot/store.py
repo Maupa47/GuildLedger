@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from guildledger import loot
 from guildledger.store import ImportResult, Spool
 
 from . import ingest
@@ -26,6 +27,7 @@ class Outcome:
     status: str  # "ok", "rejected", "seen" (already processed)
     reason: str = ""
     result: ImportResult | None = None
+    loot_result: loot.LootResult | None = None
 
 
 class Archive(Spool):
@@ -46,6 +48,7 @@ class Archive(Spool):
             self._record(message_id, collector, 0, None, "rejected", str(e))
             return Outcome("rejected", str(e))
         total = ImportResult()
+        lres = loot.LootResult()
         for guild, rows in guilds.items():
             res = self.import_rows(guild, rows.name, rows.chat, rows.events, collector)
             if rows.roster is not None:
@@ -54,12 +57,15 @@ class Archive(Spool):
             if rows.links:
                 with self.db:
                     self.import_links(guild, rows.links, collector, res)
+            if rows.loot:
+                for kind in loot.ROW_TYPES:
+                    lres.add(loot.merge(self.db, guild, kind, [r for k, r in rows.loot if k == kind], collector))
             for k in ("chat_new", "chat_updated", "chat_merged", "chat_dup", "events_new", "events_dup",
                       "events_updated", "members_new", "links_new", "skipped"):
                 setattr(total, k, getattr(total, k) + getattr(res, k))
             total.guilds.append(guild)
         self._record(message_id, collector, header.rows, header.sha256, "ok", "")
-        return Outcome("ok", result=total)
+        return Outcome("ok", result=total, loot_result=lres)
 
     def _record(self, message_id: int, collector: str, rows: int, sha: str | None, status: str, reason: str):
         with self.db:

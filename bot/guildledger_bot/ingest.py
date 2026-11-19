@@ -9,6 +9,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from guildledger.loot import ROW_TYPES as LOOT_TYPES
+
 MAX_ATTACHMENT = 1024 * 1024  # companion files are <= 500 KB
 MAX_UNZIPPED = 32 * 1024 * 1024
 MAX_ROWS = 200_000
@@ -32,6 +34,7 @@ class GuildRows:
     events: list[dict[str, Any]] = field(default_factory=list)
     roster: tuple[int, list[dict[str, Any]]] | None = None
     links: list[dict[str, Any]] = field(default_factory=list)
+    loot: list[tuple[str, dict[str, Any]]] = field(default_factory=list)  # (type, row), shared/schema.md 7
 
 
 def parse_content(content: str) -> Header:
@@ -91,8 +94,10 @@ def decode(data: bytes, header: Header) -> dict[str, GuildRows]:
                 raise Rejected(f"line {n}: bad roster record")
             if g.roster is None or at > g.roster[0]:
                 g.roster = (at, members)
+        elif kind in LOOT_TYPES:
+            g.loot.append((kind, obj))
         else:
-            raise Rejected(f"line {n}: unknown type {kind!r}")
+            pass  # a newer companion's row type: counted, not used (never reject a whole upload for it)
         count += 1
         if count > MAX_ROWS:
             raise Rejected("too many rows")

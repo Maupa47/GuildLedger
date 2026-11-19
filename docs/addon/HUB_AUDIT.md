@@ -128,7 +128,7 @@ Not done: physically deleting the dead section 2 files; `.pkgmeta`; hiding the d
 - **Off by default** (0.5.1, admin's wish): Raids, Loot, Trials. `AmazingHub.OFF_BY_DEFAULT` in PackTweaks plus a
   rebrand patch in `IsFeatureEnabled`: a tab nobody set is off, also on installs that predate this; a player's
   tick in Settings → MODULES is saved and wins. The background trackers (raid, loot, trial) keep running.
-- **Settings** (`tools/hub-extra/SettingsPlus.lua`, 0.5.1): wraps upstream's `RefreshSettingsPanel` without patching
+- **Settings** (`tools/hub-extra/SettingsPlus.lua`, 0.5.2): wraps upstream's `RefreshSettingsPanel` without patching
   it. While upstream builds the page, its `UI:CreateHeaderText` calls are recorded; afterwards every recorded
   heading becomes a fold-out ("+"/"-", state in `settings.openSections`, all closed by default); a closed
   section's controls are hidden and everything below moves up by re-anchoring. On the General page a

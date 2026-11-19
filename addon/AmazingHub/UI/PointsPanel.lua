@@ -154,10 +154,13 @@ function AmazingHub:ShowPointsFrame()
         fs:SetPoint("LEFT", x, 0)
         return fs
     end
-    hcol(L["MEMBER"], 4)
-    hcol(L["CURRENT"], 250)
-    hcol(L["EARNED"], 330)
-    hcol(L["SPENT"], 410)
+    -- Amazing Hub: click a heading to sort, click again to flip (UI/TableSort.lua)
+    local sortHeads = {
+        { hcol(L["MEMBER"], 4), "name", L["MEMBER"] },
+        { hcol(L["CURRENT"], 250), "current", L["CURRENT"], true },
+        { hcol(L["EARNED"], 330), "earned", L["EARNED"], true },
+        { hcol(L["SPENT"], 410), "spent", L["SPENT"], true },
+    }
     local logHdr = UI:CreateHeaderText(f, L["HISTORY"], 9)
     logHdr:SetPoint("TOPLEFT", 500, listTop)
 
@@ -192,6 +195,10 @@ function AmazingHub:ShowPointsFrame()
         standChild:SetWidth(standHolder:GetWidth() - 12)
         clear(standChild)
         local list = AmazingHub.Points:GetStandings()
+        if AmazingHub.TableSort then -- Amazing Hub: the chosen column and direction
+            AmazingHub.TableSort.Headers("dkp", sortHeads, refresh)
+            AmazingHub.TableSort.Apply("dkp", list, AmazingHub.TableSort.POINTS)
+        end
         local y = 0
         for idx, s in ipairs(list) do
             local row = CreateFrame("Frame", nil, standChild)

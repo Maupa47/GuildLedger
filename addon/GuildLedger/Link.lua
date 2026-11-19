@@ -100,7 +100,7 @@ Comms.Handle("Y", function(_, text, me)
     if not p or code ~= p.code or p.acked then return end
     p.acked = true
     state().requested = true
-    ns.Print("a collector received your link code. Confirm it in Discord to finish linking.")
+    ns.Notice("a collector received your link code. Confirm it in Discord to finish linking.")
 end)
 
 ---------------------------------------------------------------------------------------------------

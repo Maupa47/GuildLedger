@@ -1,14 +1,18 @@
 ----------------------------------------------------------------------
 -- Amazing Hub - Settings: fold-out sections and the World map section
--- (Amazing Forever Guild Pack, 0.5.1; our own file, not upstream)
+-- (Amazing Forever Guild Pack, 0.5.2; our own file, not upstream)
 --
 -- Fold-out: every section heading on a Settings page (MODULES, CHAT, ...) becomes a "+"/"-" heading that
--- opens or closes its section. All closed by default; what a player opens is remembered
+-- opens or closes its section. Closed by default (on pages other than General the first one starts open); what a
+-- player opens or closes is remembered
 -- (settings.openSections). Done after upstream's RefreshSettingsPanel has laid the page out: the controls of
 -- a closed section are hidden and everything below moves up. Pages with a single section stay as they are.
 --
--- World map (Settings -> General): GuildLedger's map switches (moved here from the Ledger tab) and the look
--- of the guild-member dots: shape, size, outline, a colour per class. Read and written through GuildLedgerAPI.
+-- Chat messages (Settings -> General): one switch, off by default, for both addons' unprompted chat lines.
+--
+-- World map (Settings -> General): GuildLedger's map switches (moved here from the Ledger tab), who sees me
+-- (zone/continent/world viewers or my zone only), which members I see (anywhere / my continent / my zone), on
+-- which kinds of map, names next to the dots, and the look of the dots: shape, size, outline, colour per class. Read and written through GuildLedgerAPI.
 --
 -- Copied in by tools/rebrand-hub.py from tools/hub-extra/; edit it there.
 ----------------------------------------------------------------------
@@ -91,9 +95,15 @@ function Plus.Fold(content, headers)
         if y then list[#list + 1] = { fs = h.fs, text = h.text, top = y } end
     end
     table.sort(list, function(a, b) return a.top < b.top end)
+    -- The first section of the other pages (Loot: LOOT SYSTEM, where DKP is chosen) starts open; General's all closed.
+    local firstOpen = content.__settingsCat ~= nil and content.__settingsCat ~= "general"
     for i, s in ipairs(list) do
         s.bottom = list[i + 1] and list[i + 1].top or height
-        s.open = open[s.text] and true or false
+        if open[s.text] == nil then
+            s.open = firstOpen and i == 1
+        else
+            s.open = open[s.text] and true or false
+        end
         s.hide = s.open and 0 or math.max(0, s.bottom - s.top - HEADER_H)
     end
 
@@ -137,7 +147,7 @@ function Plus.Fold(content, headers)
         btn:SetScript("OnEnter", function() s.fs:SetTextColor(C.gold.r, C.gold.g, C.gold.b) end)
         btn:SetScript("OnLeave", function() s.fs:SetTextColor(C.label.r, C.label.g, C.label.b) end)
         btn:SetScript("OnClick", function()
-            open[s.text] = not s.open or nil
+            open[s.text] = not s.open -- false is remembered too (a first section the player closed stays closed)
             rebuild(content)
         end)
     end
@@ -174,6 +184,60 @@ function Plus.PickColor(r, g, b, onChange)
         cancelFunc = function() onChange(P:GetPreviousValues()) end,
     })
     return true
+end
+
+----------------------------------------------------------------------
+-- Chat messages section (0.5.3): one switch for both addons (PackTweaks.lua gates the hub's chat lines,
+-- GuildLedgerAPI.SetMessages GuildLedger's). Off by default.
+----------------------------------------------------------------------
+function Plus.BuildMessages(content, y, header)
+    local h = header("CHAT MESSAGES")
+    h:SetPoint("TOPLEFT", 0, -y)
+    y = y + 26
+    local box = UI:CreateCheckbox(content, "Show chat messages from the Amazing Forever Guild Pack", 18)
+    box:SetPoint("TOPLEFT", 4, -y)
+    box.checkbox:SetChecked(AmazingHub.ChatMessagesOn and AmazingHub:ChatMessagesOn() or false)
+    box.checkbox.onChanged = function(_, on)
+        on = on and true or false
+        AmazingHub:SetSetting("chatMessages", on)
+        local a = api()
+        if a then call(a.SetMessages, on) end
+    end
+    y = y + 28
+    local function hint(text)
+        local fs = UI:CreateText(content, text, 10, C.silver.r, C.silver.g, C.silver.b)
+        fs:SetPoint("TOPLEFT", 34, -y)
+        fs:SetJustifyH("LEFT")
+        fs:SetWidth(math.max(100, (content:GetWidth() or 400) - 58))
+        local hgt = fs.GetStringHeight and fs:GetStringHeight() or 0
+        if type(hgt) ~= "number" or hgt < 10 then hgt = 13 end
+        y = y + hgt + 12
+    end
+    hint("Off: nothing appears in chat by itself (the login line, sync notices, link confirmations)."
+        .. " The answers to commands you type and to your clicks always show.")
+
+    local a = api()
+    -- Login greeting (0.5.4): Maupa's sprite and the guild's message of the day (/gl welcome on|off).
+    if a and a.GetWelcome then
+        local hello = UI:CreateCheckbox(content, "Greeting and the guild's message of the day when I log in", 18)
+        hello:SetPoint("TOPLEFT", 4, -y)
+        hello.checkbox:SetChecked(call(a.GetWelcome) and true or false)
+        hello.checkbox.onChanged = function(_, on) call(a.SetWelcome, on and true or false) end
+        y = y + 28
+        hint("On by default. Only in your own chat window, once per login (not after /reload).")
+    end
+
+    -- Developer mode (0.5.4): GuildLedger's reports of what it sends and receives (/gl dev on|off).
+    if a and a.GetDevMode then
+        local dev = UI:CreateCheckbox(content, "Developer mode: show what GuildLedger sends and receives", 18)
+        dev:SetPoint("TOPLEFT", 4, -y)
+        dev.checkbox:SetChecked(call(a.GetDevMode) and true or false)
+        dev.checkbox.onChanged = function(_, on) call(a.SetDevMode, on and true or false) end
+        y = y + 28
+        hint("Chat history found after login, which collector asked for missing chat text, how many lines came"
+            .. " from which player, and how many are still missing. For testing; off by default.")
+    end
+    return y
 end
 
 -- Builds the section at `y`; returns the new y. `header(text)` makes a recorded section heading.
@@ -220,6 +284,72 @@ function Plus.BuildMap(content, y, header)
     pins.checkbox:SetChecked(m.pins and true or false)
     pins.checkbox.onChanged = function(_, on) call(a.SetMapPins, on and true or false) end
     y = y + 38
+
+    -- A row of choice buttons; the current one is highlighted. Returns the new y.
+    local function choices(label, list, current, onPick)
+        y = y + 4
+        text(label, 11, C.text, 4, false)
+        y = y - 4
+        local x = 150
+        for _, c in ipairs(list) do
+            local b = UI:CreateButton(content, c.text, c.w or 110, 22)
+            b:SetPoint("TOPLEFT", x, -y)
+            if current == c.id then
+                b:SetBaseColor(C.accent.r * 0.34, C.accent.g * 0.34, C.accent.b * 0.34, 0.95)
+                b.label:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
+            end
+            b:SetScript("OnClick", function() onPick(c.id); rebuild(content) end)
+            x = x + (c.w or 110) + 4
+        end
+        y = y + 32
+    end
+
+    -- Who sees me (only matters while sharing is on)
+    if m.share and m.shareScope then
+        choices("Who sees me", {
+            { id = "all", text = "Zone, continent, world", w = 160 },
+            { id = "zone", text = "Only my zone's map", w = 140 },
+        }, m.shareScope, function(id) set("shareScope", id) end)
+        text("\"Only my zone's map\": guild members see you only when they open the map of the zone you are in.",
+            10, C.silver, 34, 10)
+    end
+
+    -- What I see: which guild members, on which maps, with names or not
+    if m.near then
+        choices("Show members", {
+            { id = "any", text = "Anywhere", w = 100 },
+            { id = "continent", text = "On my continent", w = 130 },
+            { id = "zone", text = "In my zone", w = 100 },
+        }, m.near, function(id) set("near", id) end)
+        text("For example \"In my zone\": in Elwynn Forest you see only the guild members in Elwynn Forest,"
+            .. " whichever map you open.", 10, C.silver, 34, 10)
+    end
+    if m.views then
+        text("Show dots on", 11, C.text, 4, false)
+        local x = 150
+        for _, v in ipairs({ { id = "zone", text = "Zone maps" }, { id = "continent", text = "Continent maps" },
+                             { id = "world", text = "World map" } }) do
+            local cb = UI:CreateCheckbox(content, v.text, 18)
+            cb:SetPoint("TOPLEFT", x, -(y - 2))
+            cb.checkbox:SetChecked(m.views[v.id] and true or false)
+            cb.checkbox.onChanged = function(_, on) set("view", v.id, on and true or false) end
+            x = x + 140
+        end
+        y = y + 30
+        local names = UI:CreateCheckbox(content, "Names next to the dots (otherwise when you point at a dot)", 18)
+        names:SetPoint("TOPLEFT", 4, -y)
+        names.checkbox:SetChecked(m.names and true or false)
+        names.checkbox.onChanged = function(_, on) set("names", on and true or false) end
+        y = y + 30
+        if m.self ~= nil then
+            local me = UI:CreateCheckbox(content, "Show my own dot (off: only the game's arrow shows you)", 18)
+            me:SetPoint("TOPLEFT", 4, -y)
+            me.checkbox:SetChecked(m.self and true or false)
+            me.checkbox.onChanged = function(_, on) set("self", on and true or false) end
+            y = y + 30
+        end
+        y = y + 6
+    end
 
     -- Marker shape, with a preview of one dot as it looks on the map
     y = y + 4
@@ -341,7 +471,7 @@ function Plus.BuildMap(content, y, header)
         y = y + 10
     end
 
-    local reset = UI:CreateButton(content, "Reset marker look", 150, 22)
+    local reset = UI:CreateButton(content, "Reset map options", 150, 22)
     reset:SetPoint("TOPLEFT", 4, -y)
     reset:SetScript("OnClick", function() set("reset"); rebuild(content) end)
     local openMap = UI:CreateButton(content, "Open world map", 140, 22)
@@ -371,8 +501,10 @@ function AmazingHub:RefreshSettingsPanel(content, category)
 
     if content.__settingsCat == "general" then
         local okMap, errMap = pcall(function()
+            local function header(text) return record(UI, content, text, 12) end
             local y = (content:GetHeight() or 0) + 12
-            y = Plus.BuildMap(content, y, function(text) return record(UI, content, text, 12) end)
+            y = Plus.BuildMessages(content, y, header) + 4
+            y = Plus.BuildMap(content, y, header)
             content:SetHeight(math.max(1, y))
         end)
         if not okMap and AmazingHub.Debug then AmazingHub:Debug("World map settings: " .. tostring(errMap)) end

@@ -67,7 +67,7 @@ local menuFrame
 local function MinimapMenu_Init(_, level)
     local info = UIDropDownMenu_CreateInfo()
     info.isTitle = true; info.notCheckable = true
-    info.text = "|cffFFD700Guild|r |cffD4AC0DOS|r"
+    info.text = "|cffFFD700Amazing|r |cffD4AC0DHub|r"
     UIDropDownMenu_AddButton(info, level)
 
     -- An officer with people waiting: the list is one click away (the mock's tab 3).
@@ -171,7 +171,7 @@ function AmazingHub:CreateMinimapButton()
     btn:SetScript("OnEnter", function(self)
         ring:SetVertexColor(RingColor(true))
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:AddLine("|cffFFD700Guild|r |cffD4AC0DOS|r  |cff666666by Maupa|r")
+        GameTooltip:AddLine("|cffFFD700Amazing|r |cffD4AC0DHub|r  |cff666666by Maupa|r")
         GameTooltip:AddLine(L["Left-click: open"], 0.8, 0.8, 0.8)
         GameTooltip:AddLine(L["Right-click: menu"], 0.8, 0.8, 0.8)
         GameTooltip:AddLine(L["Drag: move button"], 0.5, 0.5, 0.5)

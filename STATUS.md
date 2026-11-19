@@ -1,20 +1,20 @@
 # Status
 
-Last updated: 2026-11-14. Keep this file current when something changes. Overview of the project: [README.md](README.md).
+Last updated: 2026-11-17. Keep this file current when something changes. Overview of the project: [README.md](README.md).
 
 ## What runs right now
 
 | | Where | State |
 |---|---|---|
 | **Part 1: addon pack** | | |
-| Admin PC | linked from the repo (`tools\install.ps1`) | v0.5.1 (GuildLedger + Amazing Hub), role collector |
-| Players | CurseForge "Amazing Forever Guild Pack" | 0.5.0 under review; 0.5.1 ready in `dist\` (not uploaded) |
+| Admin PC | linked from the repo (`tools\install.ps1`) | v0.5.4 (GuildLedger + Amazing Hub), role collector |
+| Players | CurseForge "Amazing Forever Guild Pack" | 0.5.2 released; 0.5.3 built (upload state: see the admin); 0.5.4 ready in `dist\` |
 | **Part 2: collection system** | | |
 | Bot | the VPS (`<server>` = `[deploy] ssh` in `bot\config.toml`), systemd `guildledger-bot` | updated 2026-11-14 18:19 (link + activity commands, `server_id` set); archive ~9 300 chat rows |
-| Collectors | the admin and two officers (`[collectors]` in `bot\config.toml`) | admin: up to date; the two officers: need the 0.5.1 collector zip (admin is checking with them) |
+| Collectors | the admin and two officers (`[collectors]` in `bot\config.toml`) | admin: up to date; the two officers: need the 0.5.4 collector zip (admin is checking with them) |
 | Backups | VPS, daily 04:30, 14 days | restore check passed 2026-11-12 |
 | Monitoring | `#gl-ops` | **off**: `[ops] webhook` empty (docs/collection/ADMIN.md section 5) |
-| Code | GitHub `Maupa47/GuildLedger` (private) | CI runs every test on push |
+| Code | GitHub `Maupa47/GuildLedger` (public) | CI runs every test on push |
 
 Discord can only be as current as the last `/reload` or logout of any collector (WoW writes addon data only
 then); the bot then holds chat 60 s before posting.
@@ -22,20 +22,33 @@ then); the bot then holds chat 60 s before posting.
 ## Next steps (in order)
 
 1. **Officers update** (both addon folders and the companion together; an old companion refuses the new data):
-   send them `dist\GuildLedger-collector-0.5.1.zip`. Their existing `config.toml` keeps working.
+   send them `dist\GuildLedger-collector-0.5.4.zip`. Their existing `config.toml` keeps working.
 2. **Discord roles:** `/roles verified …`, `/roles rank …`, `/roles show` (docs/collection/ADMIN.md section 2).
 3. **Monitoring:** `#gl-ops` webhook (ADMIN.md section 5).
 4. **In-game test rounds** (docs/dev/INGAME_TESTS.md): bridge round B1–B15 (alone: `/reload` is enough), pack
    round (relay, map, link, activity; needs a second player).
-5. **Publish 0.5.1 on CurseForge** (docs/addon/CURSEFORGE.md) after the tests and the GuildOS author's answer.
+5. **Upload 0.5.4 to CurseForge** (docs/addon/CURSEFORGE.md) after the tests and the GuildOS author's answer.
 6. Open decision: Discord nicknames (`set_nickname`). Later: delete the hub's unused upstream modules
    (docs/addon/HUB_AUDIT.md section 9).
 
 ## Done (newest first)
 
-- **0.5.1 (2026-11-14):** hub in the game's Classic look by default (Modern in Settings); Raids, Loot, Trials
-  tabs off by default (Settings → Modules); Settings sections fold out; World map section with the dot look
-  (shape, size, outline, class colours); zips with standard paths; docs sorted into addon / collection / dev; config examples
+- **Loot outside the game (2026-11-18, not deployed):** the companion also reads `AmazingHub.lua` (points log,
+  standings, loot history, wishlists, raid nights); the bot archives it, posts to a loot channel (`[loot] webhook`)
+  and answers `/dkp`, `/loot`, `/wishlist`, `/wish add|remove|list|export`; the hub's wishlist window imports the
+  `/wish export` line. Order: bot first (`deploy.ps1`), then the officers' new collector zip (an old bot refuses
+  the new upload files). Checks D1–D8 in docs/dev/INGAME_TESTS.md.
+- **0.5.4 (2026-11-17/18):** login greeting with the guild message of the day (`/gl welcome`), own map dot off by
+  default (`/gl map me`), sortable DKP and Professions columns, Settings → Loot opens on LOOT SYSTEM, wishlist import;
+  and from 2026-11-17: developer mode (`/gl dev`, Settings → Chat messages): readable relay reports (history
+  found, asked for, received from whom, still missing, complete); follow-up ask rounds ~65 s apart while lines keep
+  coming; `/gl status` shows the missing text and who filled it.
+- **0.5.3 (2026-11-15):** quiet chat by default with a Settings switch (`/gl messages`); map options: show
+  members anywhere / on my continent / in my zone, dots per kind of map, names, "who sees me: my zone only".
+- **0.5.2 (2026-11-15, on CurseForge):** Settings sections fold out; World map section with the dot look (shape, size,
+  outline, class colours), map switches moved there from the Ledger tab; zips with standard paths.
+- **0.5.1 (2026-11-14):** hub in the game's Classic look by default (Modern in Settings); Raids,
+  Loot, Trials tabs off by default (Settings → Modules); docs sorted into addon / collection / dev; config examples
   rewritten with where-to-find-it comments (companion: `[general]` section, old layout still read); dead code
   and the Phase 0 probe addon removed.
 - **Names and tabs:** nothing in game says GuildOS (hub = Amazing Hub, maker = Maupa; MIT notice kept in

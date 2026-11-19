@@ -138,6 +138,8 @@ def register_roles(bot: "LedgerBot") -> None:
 def register(bot: "LedgerBot") -> None:
     tree = bot.tree
     register_roles(bot)
+    from .lootcmds import register_loot  # here: lootcmds imports helpers from this module
+    register_loot(bot)
 
     async def reply(inter: dpy.Interaction, text: str, file: dpy.File | None = None) -> None:
         kw = {"ephemeral": True, "allowed_mentions": NO_MENTIONS}

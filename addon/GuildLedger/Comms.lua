@@ -30,10 +30,18 @@ M.stats = stats
 -- Helpers shared by the modules
 ---------------------------------------------------------------------------------------------------
 
+-- Is `sender` (as CHAT_MSG_ADDON gives it, maybe with "-Realm") the player called `name`? Whole names only, never
+-- split. A surname may come with a hyphen where the game allows no space ("First-Last-Realm" for "First Last"),
+-- so both spellings count.
+function M.SameName(sender, name)
+    if type(sender) ~= "string" or type(name) ~= "string" or name == "" then return false end
+    if sender == name or sender:sub(1, #name + 1) == name .. "-" then return true end
+    local hyphen = name:gsub(" ", "-")
+    return hyphen ~= name and (sender == hyphen or sender:sub(1, #hyphen + 1) == hyphen .. "-")
+end
+
 function M.IsSelf(sender)
-    local me = C.PlayerName()
-    if not me or type(sender) ~= "string" then return false end
-    return sender == me or sender:sub(1, #me + 1) == me .. "-"
+    return M.SameName(sender, C.PlayerName())
 end
 
 -- Split s into pieces of at most max bytes without cutting a UTF-8 character.

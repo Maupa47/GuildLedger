@@ -5,8 +5,14 @@
 --                  heard in the last 45 s, at most every 10 s, and only if moved or 30 s passed.
 -- Sharing is ON by default (decision 6, 2026-11-14); /gl map share off is remembered (opts.mapOptOut).
 -- Never in instances, during a boss-fight lock or outside the guild. Positions live in memory only.
--- Look of the dots (0.5.1; /gl map shape|size|outline|colors, or the hub's Settings): opts.mapShape
+-- Look of the dots (0.5.2; /gl map shape|size|outline|colors, or the hub's Settings): opts.mapShape
 -- ("round" | "square"), opts.mapSize (pixels), opts.mapOutline (dark rim), opts.mapColors[CLASS] = "rrggbb".
+-- When and where (0.5.3; /gl map views|near|names|share zone, or the hub's Settings), all on the player's own PC,
+-- the messages stay the same:
+--   opts.mapViews[kind] = false   no dots (and no V sent) while the world map shows a "zone", "continent" or "world"
+--   opts.mapNear = "zone"|"continent"   only guild members in my zone / on my continent (nil: anywhere)
+--   opts.mapNames = true          names next to the dots (otherwise only in the tooltip)
+--   opts.mapShareScope = "zone"   I answer only viewers looking at my zone's map, not at continent or world maps
 
 local _, ns = ...
 local C, S = ns.Compat, ns.Store
@@ -37,6 +43,7 @@ local stats = { sentP = 0, sentV = 0, shown = 0 }
 local rosterInfo, rosterAt = {}, -1e9 -- [name] = { level, class }
 local pins = {} -- frames on the map canvas, reused
 local canvasOf -- canvas the pins belong to
+local levels = {} -- [mapID] = { zone = id, continent = id, kind = "zone"|"continent"|"world" } (maps never change)
 
 local function opts() return S.Opts() end
 M.SIZE_MIN, M.SIZE_MAX, M.SIZE_DEFAULT = SIZE_MIN, SIZE_MAX, SIZE_DEFAULT
@@ -57,13 +64,62 @@ local function parents(mapID)
     return chain
 end
 
+-- Map type -> "world" | "continent" | "zone" (dungeons, cities and other small maps count as zone level).
+local function kindOf(mapType)
+    if mapType == 0 or mapType == 1 then return "world" end
+    if mapType == 2 then return "continent" end
+    return "zone"
+end
+
+-- The zone and continent a map belongs to, and what kind of map it is itself.
+local function level(mapID)
+    if not mapID then return nil end
+    local l = levels[mapID]
+    if l then return l end
+    l = {}
+    local id = mapID
+    for _ = 1, PARENT_DEPTH + 1 do
+        local parent, _, t = C.MapInfo(id)
+        if id == mapID then l.kind = kindOf(t) end
+        if t == 3 and not l.zone then l.zone = id end
+        if t == 2 and not l.continent then l.continent = id end
+        if not parent or parent == 0 or parent == id then break end
+        id = parent
+    end
+    l.zone = l.zone or mapID
+    levels[mapID] = l
+    return l
+end
+M.level = level
+
+-- A V for my map or a map above it; with mapShareScope "zone" only up to my zone's map, so viewers of a
+-- continent or the whole world do not see me.
 local function watched(mapID, now)
+    local zoneOnly = opts().mapShareScope == "zone"
+    local top = zoneOnly and level(mapID).zone
     for _, id in ipairs(parents(mapID)) do
         if watches[id] and now - watches[id] <= WATCH_TTL then return true end
+        if zoneOnly and id == top then break end
     end
     return false
 end
 M.watched = watched
+
+local function viewOn(kind)
+    local v = opts().mapViews
+    return not (type(v) == "table" and v[kind] == false)
+end
+
+-- Is a sharer on this map near enough for the player's mapNear choice?
+local function near(map)
+    local want = opts().mapNear
+    if want ~= "zone" and want ~= "continent" then return true end
+    local mine = C.PlayerMap()
+    if not mine then return false end -- where am I? unknown (an instance): show nobody
+    local a, b = level(map), level(mine)
+    if want == "zone" then return a.zone == b.zone end
+    return a.continent ~= nil and a.continent == b.continent
+end
 
 ---------------------------------------------------------------------------------------------------
 -- Receiving
@@ -160,7 +216,7 @@ local function memberInfo(sender)
         end
     end
     for name, info in pairs(rosterInfo) do -- the sender may carry "-Realm"; never split names, compare whole
-        if sender == name or sender:sub(1, #name + 1) == name .. "-" then return info, name end
+        if Comms.SameName(sender, name) then return info, name end
     end
     return nil
 end
@@ -177,6 +233,7 @@ local function pinFor(i, canvas)
     pin.rim:SetAllPoints()
     pin.dot = pin:CreateTexture(nil, "OVERLAY")
     pin.dot:SetPoint("CENTER")
+    pin.tag = false -- the name label, made on first use
     pin:SetFrameStrata("HIGH")
     pin:EnableMouse(true)
     pin:SetScript("OnEnter", function(self)
@@ -190,6 +247,30 @@ local function pinFor(i, canvas)
     pin:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     pins[i] = pin
     return pin
+end
+
+-- The name next to a dot: a child frame at scale 1/canvas scale, so the text keeps its normal size when the
+-- map is zoomed. Needs the game's small font (Blizzard's guild window uses GameFontHighlightSmall).
+local function label(pin, text, scale)
+    if not text then
+        if pin.tag then pin.tag:Hide() end
+        return
+    end
+    local font = GameFontHighlightSmall
+    if not font then return end
+    if not pin.tag then
+        pin.tag = CreateFrame("Frame", nil, pin)
+        pin.tag:SetSize(1, 1)
+        pin.tag:SetPoint("LEFT", pin, "RIGHT")
+        pin.tag.text = pin.tag:CreateFontString(nil, "OVERLAY")
+        pin.tag.text:SetFontObject(font)
+        pin.tag.text:SetPoint("LEFT", pin.tag, "LEFT", 2, 0)
+        pin.tag.text:SetShadowColor(0, 0, 0, 1)
+        pin.tag.text:SetShadowOffset(1, -1)
+    end
+    pin.tag:SetScale(1 / scale)
+    pin.tag.text:SetText(text)
+    pin.tag:Show()
 end
 
 -- Position of a sharer's point on the displayed map (0..1), or nil when it is not on that map.
@@ -214,34 +295,46 @@ local function draw(frame, view, now)
     local dot = size / scale
     local full = outline and (size + 2 * RIM) / scale or dot
     local n = 0
+    local function put(nx, ny, info, title, age, where)
+        n = n + 1
+        local pin = pinFor(n, canvas)
+        local r, g, b = colorOf(info and info.class)
+        paint(pin.dot, shape, r, g, b, 1)
+        pin.dot:SetSize(dot, dot)
+        pin:SetSize(full, full)
+        if outline then
+            paint(pin.rim, shape, 0, 0, 0, 0.85)
+            pin.rim:Show()
+        else
+            pin.rim:Hide()
+        end
+        pin:ClearAllPoints()
+        pin:SetPoint("CENTER", canvas, "TOPLEFT", nx * w, -ny * h)
+        pin:SetAlpha(age > FADE_AFTER and 0.4 or 1)
+        label(pin, opts().mapNames and title or nil, scale)
+        pin.info = { name = title, detail = info and info.level and ("level " .. info.level) or nil, where = where }
+        pin:Show()
+    end
     for sender, p in pairs(positions) do
         local age = now - p.at
         local nx, ny = project(p, view)
         local info, name = memberInfo(sender)
         local known = info ~= nil or next(rosterInfo) == nil -- with a loaded member list, only guild members
-        if nx and known and not C.InGroupWith(sender) then
-            n = n + 1
-            local pin = pinFor(n, canvas)
-            local r, g, b = colorOf(info and info.class)
-            paint(pin.dot, shape, r, g, b, 1)
-            pin.dot:SetSize(dot, dot)
-            pin:SetSize(full, full)
-            if outline then
-                paint(pin.rim, shape, 0, 0, 0, 0.85)
-                pin.rim:Show()
-            else
-                pin.rim:Hide()
-            end
-            pin:ClearAllPoints()
-            pin:SetPoint("CENTER", canvas, "TOPLEFT", nx * w, -ny * h)
-            pin:SetAlpha(age > FADE_AFTER and 0.4 or 1)
+        if nx and known and not Comms.IsSelf(sender) and not C.InGroupWith(sender) and near(p.map) then
             local _, zone = C.MapInfo(p.map)
-            pin.info = {
-                name = name or sender,
-                detail = info and info.level and ("level " .. info.level) or nil,
-                where = (zone or "?") .. ", " .. math.floor(age) .. " s ago",
-            }
-            pin:Show()
+            put(nx, ny, info, name or sender, age, (zone or "?") .. ", " .. math.floor(age) .. " s ago")
+        end
+    end
+    -- My own dot: off by default (the game's arrow already shows me); drawn from my own position, not a message.
+    if opts().mapSelf then
+        local map = C.PlayerMap()
+        local fx, fy
+        if map then fx, fy = C.PlayerMapPos(map) end
+        if fx then
+            local nx, ny = project({ map = map, x = math.floor(fx * 9999 + 0.5), y = math.floor(fy * 9999 + 0.5) },
+                view)
+            local me = C.PlayerName()
+            if nx and me then put(nx, ny, (memberInfo(me)), me, 0, "you") end
         end
     end
     hideFrom(n + 1)
@@ -250,7 +343,7 @@ end
 
 local function view(now)
     local frame, map = C.OpenWorldMap()
-    if not frame or not opts().mapPins then
+    if not frame or not opts().mapPins or not viewOn(level(map).kind) then
         hideFrom(1)
         stats.shown = 0
         return
@@ -296,6 +389,8 @@ end
 
 -- Change the look of the dots: "shape" ("round"|"square"), "size" (number), "outline" (boolean),
 -- "color" (class file, then r, g, b 0..1; no r = the game's colour again), "reset" (everything back).
+-- When and where: "view" (kind "zone"|"continent"|"world", then true/false), "near" ("any"|"zone"|"continent"),
+-- "names" (boolean), "shareScope" ("all"|"zone").
 -- Returns true when the value was accepted.
 function M.SetLook(what, a, r, g, b)
     local o = opts()
@@ -310,8 +405,21 @@ function M.SetLook(what, a, r, g, b)
         local function byte(v) return math.max(0, math.min(255, math.floor((tonumber(v) or 0) * 255 + 0.5))) end
         o.mapColors[a] = r and string.format("%02x%02x%02x", byte(r), byte(g), byte(b)) or nil
         if next(o.mapColors) == nil then o.mapColors = nil end
+    elseif what == "view" and (a == "zone" or a == "continent" or a == "world") and type(r) == "boolean" then
+        if type(o.mapViews) ~= "table" then o.mapViews = {} end
+        if r then o.mapViews[a] = nil else o.mapViews[a] = false end
+        if next(o.mapViews) == nil then o.mapViews = nil end
+    elseif what == "near" and (a == "any" or a == "zone" or a == "continent") then
+        o.mapNear = a ~= "any" and a or nil
+    elseif what == "names" and type(a) == "boolean" then
+        o.mapNames = a or nil
+    elseif what == "shareScope" and (a == "all" or a == "zone") then
+        o.mapShareScope = a == "zone" and "zone" or nil
+    elseif what == "self" and type(a) == "boolean" then
+        o.mapSelf = a or nil
     elseif what == "reset" then
         o.mapShape, o.mapSize, o.mapOutline, o.mapColors = nil, nil, nil, nil
+        o.mapViews, o.mapNear, o.mapNames, o.mapShareScope, o.mapSelf = nil, nil, nil, nil, nil
     else
         return false
     end
@@ -344,11 +452,22 @@ function M.Settings()
     end
     return { available = (C.HasMap and C.HasComm) and true or false, share = sharing(), pins = o.mapPins ~= false,
         shown = stats.shown, shape = shape, size = size, outline = outline, sizeMin = SIZE_MIN, sizeMax = SIZE_MAX,
-        colors = colors }
+        colors = colors,
+        views = { zone = viewOn("zone"), continent = viewOn("continent"), world = viewOn("world") },
+        near = o.mapNear or "any", names = o.mapNames == true, shareScope = o.mapShareScope or "all",
+        self = o.mapSelf == true }
 end
 
 function M.Command(what, value)
     local o = opts()
+    if what == "share" and value == "zone" then
+        M.Set("share", true)
+        M.SetLook("shareScope", "zone")
+        ns.Print("map: your position is shared only with guild members who look at the map of your zone (not"
+            .. " continent or world maps). /gl map share on: also continent and world maps.")
+        return
+    end
+    if what == "share" and value == "on" then M.SetLook("shareScope", "all") end
     if (what == "share" or what == "pins") and (value == "on" or value == "off") then
         M.Set(what, value == "on")
         if what == "share" then
@@ -373,16 +492,39 @@ function M.Command(what, value)
         done = true
     elseif what == "reset" then
         done = M.SetLook("reset")
+    elseif what == "near" then
+        if M.SetLook("near", value) then
+            ns.Print(value == "any" and "map: guild members are shown wherever they are."
+                or ("map: only guild members in your " .. value .. " are shown."))
+            return
+        end
+    elseif what == "names" and (value == "on" or value == "off") then
+        M.SetLook("names", value == "on")
+        ns.Print("map: names next to the dots " .. value .. ".")
+        return
+    elseif what == "me" and (value == "on" or value == "off") then
+        M.SetLook("self", value == "on")
+        ns.Print("map: your own dot " .. (value == "on" and "shown." or "hidden (the game's arrow shows you)."))
+        return
+    elseif what == "zone" or what == "continent" or what == "world" then
+        if value == "on" or value == "off" then
+            M.SetLook("view", what, value == "on")
+            ns.Print("map: dots on " .. what .. " maps " .. value .. ".")
+            return
+        end
     end
     if done then
         local shape, size, outline = look()
         ns.Print(string.format("map dots: %s, %d px, %s.", shape, size, outline and "with outline" or "no outline"))
         return
     end
-    ns.Print("map commands: /gl map share on|off (show your position to guild members), /gl map pins on|off"
-        .. " (show theirs on your map), /gl map shape round|square, /gl map size " .. SIZE_MIN .. "-" .. SIZE_MAX
-        .. ", /gl map outline on|off, /gl map colors reset, /gl map reset. Colours per class: Amazing Hub,"
-        .. " Settings, World map.")
+    ns.Print("map commands: /gl map share on|zone|off (show your position: to everyone looking at your zone,"
+        .. " continent or world map | only to those looking at your zone | nobody), /gl map pins on|off (show"
+        .. " theirs on your map), /gl map near any|continent|zone (only those near you), /gl map zone|continent|"
+        .. "world on|off (dots on that kind of map), /gl map names on|off, /gl map me on|off (your own dot),"
+        .. " /gl map shape round|square,"
+        .. " /gl map size " .. SIZE_MIN .. "-" .. SIZE_MAX .. ", /gl map outline on|off, /gl map colors reset,"
+        .. " /gl map reset. Colours per class: Amazing Hub, Settings, World map.")
 end
 
 function M.Status()
@@ -395,7 +537,19 @@ function M.Status()
     ns.Line("Your position: " .. (sharing() and "|cff33ff33shared|r - only while a guild member looks at the map"
         .. " of your zone, never in instances or boss fights (/gl map share off stops it)."
         or "not shared (/gl map share on to share it)."))
+    if sharing() and o.mapShareScope == "zone" then
+        ns.Line("Who sees you: only guild members who open the map of your zone.")
+    end
     ns.Line("Guild members on your map: " .. (o.mapPins and "shown" or "hidden") .. ". Shown right now: "
         .. stats.shown .. ".")
+    if o.mapPins then
+        local kinds = {}
+        for _, k in ipairs({ "zone", "continent", "world" }) do
+            if viewOn(k) then kinds[#kinds + 1] = k end
+        end
+        local where = ({ zone = "in your zone", continent = "on your continent" })[o.mapNear] or "anywhere"
+        ns.Line(string.format("Showing members %s, on %s maps%s.", where,
+            #kinds > 0 and table.concat(kinds, ", ") or "no", o.mapNames and ", with names" or ""))
+    end
     if sharing() then ns.Line(string.format("Position messages sent since login: %d.", stats.sentP)) end
 end

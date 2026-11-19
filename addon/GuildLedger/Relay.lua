@@ -38,6 +38,9 @@ local NEED_ROUND = 10 -- s: needs from one asker this close together are one rou
 local NEED_ANSWER_GAP = 60 -- s: a new round from the same asker is answered at most this often
 local HEARD_TTL = 3600
 local FOREIGN_QUIET = 5 -- s: someone else is answering while their lines keep coming
+local ROUND_MIN = 25 -- s: a collector's ask round lasts at least this (answers start after 2-8 s, + waiting)
+local ROUND_QUIET = 20 -- s without a new line: the round is over, report it
+local FOLLOW_UP = NEED_ANSWER_GAP + 5 -- s after a round that filled lines while gaps remain: ask again
 
 local heard = {} -- [id] = GetTime(): somebody already sent or confirmed this line
 local queued = {} -- [id] = GetTime(): one of our own answers is waiting in the queue
@@ -50,7 +53,10 @@ local roundAt = {} -- [asker] = GetTime() when their current need round started
 local whoAnsweredAt, whoAskedAt = -1e9, -1e9
 local lastForeignText = -1e9 -- GetTime() of the last line another player sent
 local helloSent = false
-local stats = { answered = 0, relayed = 0, rejected = 0, lastNeed = nil }
+local stats = { answered = 0, relayed = 0, rejected = 0, lastNeed = nil, from = {}, lastGot = nil, lastFrom = nil }
+-- Collector: the current ask round { at, missing, quiet, got, from = { [sender] = n }, last }; nil between rounds.
+local round
+local lastMissing -- text-less lines after the last reported round (rounds that change nothing stay quiet)
 
 ---------------------------------------------------------------------------------------------------
 -- Helpers
@@ -104,7 +110,18 @@ M.older = older
 -- Member side: answer a need with own lines
 ---------------------------------------------------------------------------------------------------
 
-local function queueLine(row)
+-- ans = { asker, n, sent, skipped }: one answer to one need; reported (developer mode) when all of it is done.
+local function answerDone(ans)
+    if ans.sent + ans.skipped < ans.n then return end
+    if ans.sent > 0 then
+        ns.Info(string.format("Sent %d missing chat line(s) to %s%s.", ans.sent, ans.asker, ans.skipped > 0
+            and string.format(" (%d more were already sent by another player)", ans.skipped) or ""))
+    else
+        ns.Info(string.format("Another player already sent %s the %d line(s) you had.", ans.asker, ans.n))
+    end
+end
+
+local function queueLine(row, ans)
     local id = row.id
     queued[id] = C.Clock()
     Comms.Queue({
@@ -114,8 +131,14 @@ local function queueLine(row)
             queued[id] = nil
             heard[id] = C.Clock()
             stats.answered = stats.answered + 1
+            ans.sent = ans.sent + 1
+            answerDone(ans)
         end,
-        onDrop = function() queued[id] = nil end,
+        onDrop = function()
+            queued[id] = nil
+            ans.skipped = ans.skipped + 1
+            answerDone(ans)
+        end,
     })
 end
 
@@ -154,9 +177,21 @@ local function onNeed(sender, text, me)
             C.After(FOREIGN_QUIET, function() ns.Safe("Relay.answer", answer) end)
             return
         end
+        local todo = {}
         for _, row in ipairs(rows) do
-            if not heard[row.id] and not queued[row.id] then queueLine(row) end
+            if not heard[row.id] and not queued[row.id] then todo[#todo + 1] = row end
         end
+        local ans = { asker = sender, n = #todo, sent = 0, skipped = 0 }
+        if #todo == 0 then
+            ns.Info(string.format("%s asked for missing chat; another player already sent the %d line(s) you had.",
+                sender, #rows))
+            return
+        end
+        local parts = 0
+        for _, row in ipairs(todo) do parts = parts + #M.lineMessages(row) end
+        ns.Info(string.format("%s asked for missing chat; sending %d line(s) you have (takes about %d s).", sender,
+            #todo, parts + Comms.Waiting()))
+        for _, row in ipairs(todo) do queueLine(row, ans) end
     end
     C.After(math.random(ANSWER_MIN, ANSWER_MAX), function() ns.Safe("Relay.answer", answer) end)
 end
@@ -165,17 +200,27 @@ end
 -- Collector side: ask for gaps, accept checked lines, confirm
 ---------------------------------------------------------------------------------------------------
 
--- "N" messages for this collector's text-less rows of the last NEED_WINDOW, newest ranges first.
-local function buildNeeds(now)
+-- This collector's text-less rows of the last NEED_WINDOW: { [stream] = { t, ... } }, count, oldest, newest.
+local function gaps(now)
     local cid, letters = club()
-    if not cid then return {} end
-    local byStream = {}
+    local byStream, n, lo, hi = {}, 0, nil, nil
+    if not cid then return byStream, 0 end
     for _, row in ipairs(S.Guild(cid).chat) do
         if not row.m and row.src == "meta" and row.a ~= "?" and row.t >= now - NEED_WINDOW and letters[row.s] then
             byStream[row.s] = byStream[row.s] or {}
             table.insert(byStream[row.s], row.t)
+            n = n + 1
+            if not lo or row.t < lo then lo = row.t end
+            if not hi or row.t > hi then hi = row.t end
         end
     end
+    return byStream, n, lo, hi
+end
+M.gaps = gaps
+
+-- "N" messages for this collector's text-less rows of the last NEED_WINDOW, newest ranges first.
+local function buildNeeds(now)
+    local byStream = gaps(now)
     local ranges = {}
     for s, ts in pairs(byStream) do
         table.sort(ts)
@@ -206,18 +251,93 @@ local function buildNeeds(now)
 end
 M.buildNeeds = buildNeeds
 
+local scheduleNeeds
+
+local function span(lo, hi)
+    if not lo then return "" end
+    return lo == hi and (" (" .. ns.When(lo) .. ")") or string.format(" (%s to %s)", ns.When(lo), ns.When(hi))
+end
+
+local function whoGave(from)
+    local list = {}
+    for who, n in pairs(from) do list[#list + 1] = { who = who, n = n } end
+    table.sort(list, function(a, b) if a.n ~= b.n then return a.n > b.n end return a.who < b.who end)
+    for i, e in ipairs(list) do list[i] = string.format("%d from %s", e.n, e.who) end
+    return table.concat(list, ", ")
+end
+
+-- The round is over (nothing arrived for ROUND_QUIET s): say what came from whom and what is still missing;
+-- ask again soon if it brought lines (members send at most ANSWER_CAP per round) and gaps remain.
+local function finishRound()
+    local r = round
+    round = nil
+    if not r then return end
+    local _, left, lo, hi = gaps(C.Now())
+    if r.got > 0 then
+        ns.Info(string.format("Received the text of %d missing line(s): %s.", r.got, whoGave(r.from)))
+    elseif r.asked and not r.quiet then
+        ns.Info("Nobody online had text for the missing lines.")
+    end
+    if r.got > 0 or not r.quiet or left ~= lastMissing then
+        if left == 0 then
+            ns.Info("Complete: every guild chat line of the last 27 hours has its text now.")
+        elseif r.got > 0 then
+            ns.Info(string.format("Still without text: %d line(s)%s. Asking again in about %d s.", left,
+                span(lo, hi), FOLLOW_UP))
+        else
+            ns.Info(string.format("Still without text: %d line(s)%s. No player online has them (nobody with"
+                .. " GuildLedger was online then, or they are offline now). Asked again when a player logs in"
+                .. " and every 15 minutes.", left, span(lo, hi)))
+        end
+    end
+    lastMissing = left
+    if r.got > 0 and left > 0 then scheduleNeeds(FOLLOW_UP) end
+end
+
+local function watchRound(r)
+    if round ~= r then return end
+    local now = C.Clock()
+    if now - r.at >= ROUND_MIN and now - math.max(r.last, lastForeignText) >= ROUND_QUIET then
+        finishRound()
+    else
+        C.After(5, function() ns.Safe("Relay.round", watchRound, r) end)
+    end
+end
+
+-- asked = false: lines that arrived outside a round (late answers, or another collector asked).
+local function startRound(asked, missing, lo, hi)
+    if round then finishRound() end
+    local now = C.Clock()
+    round = { at = now, last = now, got = 0, from = {}, asked = asked, missing = missing,
+        quiet = missing == lastMissing }
+    if asked and not round.quiet then
+        ns.Info(string.format("Asking the players online for the text of %d missing line(s)%s.", missing,
+            span(lo, hi)))
+    end
+    C.After(5, function() ns.Safe("Relay.round", watchRound, round) end)
+end
+
 local function sendNeeds()
     needScheduled = false
     if not S.IsCollector() or not club() then return end
-    local msgs = buildNeeds(C.Now())
+    local now = C.Now()
+    local msgs = buildNeeds(now)
     lastNeed = C.Clock()
-    if #msgs == 0 then return end
-    stats.lastNeed = C.Now()
+    if #msgs == 0 then
+        if lastMissing and lastMissing > 0 then
+            ns.Info("Complete: every guild chat line of the last 27 hours has its text now.")
+        end
+        lastMissing = 0
+        return
+    end
+    stats.lastNeed = now
+    local _, missing, lo, hi = gaps(now)
     ns.Debug(string.format("relay: asking for text gaps (%d message(s))", #msgs))
     for _, m in ipairs(msgs) do Comms.Send(m, Comms.NORMAL) end
+    startRound(true, missing, lo, hi)
 end
 
-local function scheduleNeeds(delay)
+scheduleNeeds = function(delay)
     if needScheduled or not S.IsCollector() then return end
     needScheduled = true
     C.After(delay, function() ns.Safe("Relay.need", sendNeeds) end)
@@ -247,6 +367,12 @@ local function accept(sender, id, payload)
     if row.a == "?" and a ~= "" then row.a = a end
     S.unsaved = S.unsaved + 1
     stats.relayed = stats.relayed + 1
+    stats.from[sender] = (stats.from[sender] or 0) + 1
+    stats.lastGot, stats.lastFrom = C.Now(), sender
+    if not round then startRound(false) end
+    round.got = round.got + 1
+    round.from[sender] = (round.from[sender] or 0) + 1
+    round.last = C.Clock()
     pendingAck[#pendingAck + 1] = id
 end
 
@@ -434,10 +560,17 @@ function M.Status()
         return
     end
     if S.IsCollector() then
-        ns.Line(string.format("Lines filled in by members since login: %d%s.", stats.relayed,
+        local _, left, lo, hi = gaps(C.Now())
+        if left == 0 then
+            ns.Line("Missing text: none - every guild chat line of the last 27 hours has its text.")
+        else
+            ns.Line(string.format("Missing text: %d line(s) of the last 27 hours%s.", left, span(lo, hi)))
+        end
+        ns.Line(string.format("Lines filled in by other players since login: %d%s%s.", stats.relayed,
+            stats.relayed > 0 and (" - " .. whoGave(stats.from)) or "",
             stats.rejected > 0 and (" (" .. stats.rejected .. " refused because they did not match)") or ""))
-        ns.Line("Last asked members for missing lines: "
-            .. (stats.lastNeed and date("%H:%M", stats.lastNeed) or "not yet") .. ".")
+        ns.Line("Last asked for missing lines: " .. (stats.lastNeed and date("%H:%M", stats.lastNeed) or "not yet")
+            .. (round and " (answers are still coming in)" or "") .. ".")
     else
         ns.Line(string.format("Lines given to collectors since login: %d.", stats.answered))
     end

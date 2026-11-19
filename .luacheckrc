@@ -11,6 +11,6 @@ read_globals = {
     "CreateFrame", "DEFAULT_CHAT_FRAME", "GetServerTime", "GetTime",
     "GetNumGuildMembers", "GetGuildRosterInfo", "QueryGuildEventLog", "GetNumGuildEvents", "GetGuildEventInfo",
     "issecretvalue", "ReloadUI", "debugprofilestop", "date", "time", "UnitName",
-    "C_Map", "IsInInstance", "UnitInParty", "UnitInRaid", "RAID_CLASS_COLORS", "WorldMapFrame", "GameTooltip",
+    "C_Map", "IsInInstance", "UnitInParty", "UnitInRaid", "RAID_CLASS_COLORS", "WorldMapFrame", "GameTooltip", "GameFontHighlightSmall",
     "ERR_GUILD_JOIN_S", "ERR_GUILD_LEAVE_S", "ERR_GUILD_REMOVE_SS", "ERR_GUILD_PROMOTE_SSS", "ERR_GUILD_DEMOTE_SSS",
 }

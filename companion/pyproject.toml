@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "guildledger"
-version = "0.5.1"
+version = "0.5.4"
 description = "GuildLedger companion: reads the GuildLedger SavedVariables file and archives/posts it"
 requires-python = ">=3.11"
 dependencies = []  # stdlib only; optional: tzdata on Windows for IANA time zones

@@ -35,6 +35,27 @@ def test_code_reaches_a_collector_is_acknowledged_and_stops_resending():
     assert "reached a collector" in mem.slash("status")
 
 
+def _chat(game):
+    return "\n".join(str(v) for v in game.W.printed.values())
+
+
+def test_the_later_confirmation_is_quiet_unless_messages_are_on():
+    guild = link_guild()
+    mem = guild.g(MEM)
+    mem.slash(f"link {CODE}")  # resets the chat log; the answer to the command itself always shows
+    guild.run(5)
+    assert "collector received your link code" not in _chat(mem)  # default: nothing unasked in chat
+    assert "Chat messages: |cff888888off|r" in mem.slash("status")
+    assert "on" in mem.slash("messages on")
+    assert mem.L.globals().GuildLedgerAPI.GetMessages() is True
+    mem.L.globals().GuildLedgerAPI.SetMessages(False)
+    assert mem.L.globals().GuildLedgerAPI.GetMessages() is False
+    mem.slash("messages on")
+    mem.L.execute("GuildLedgerDB.link.pending.acked = false")
+    guild.run(200)  # re-sent, acknowledged again
+    assert "collector received your link code" in _chat(mem)
+
+
 def test_without_a_collector_the_code_is_resent_until_it_expires():
     guild = Guild([(MEM, "member")])
     guild.run(30)

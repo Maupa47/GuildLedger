@@ -267,7 +267,9 @@ def test_addon_is_silent_in_chat_without_commands():
     g.say(ALIA, "hello")
     g.L.execute("W.ns.Safe('test', function() error('boom') end)")  # an internal error
     g.run(30)
-    assert list(g.W.printed.values()) == []  # nothing in chat
+    greeting = [m for m in g.W.printed.values() if "Maupa's sprite" in m]  # the one wanted line (admin, 2026-11-18)
+    assert len(greeting) == 1
+    assert [m for m in g.W.printed.values() if m not in greeting] == []  # nothing else in chat
     assert g.errors == 1 and "Problems: 1 error(s)" in g.slash("status")
 
 
@@ -289,3 +291,75 @@ def test_hello_from_old_version_is_understood():
     g.run(40)
     out = "\n".join(g.W.printed.values())
     assert "Old Timer-Forever - version 0.2.1" in out and "(outdated)" in out and "keeps 42 line(s)" in out
+
+
+def out_of(game):
+    return "\n".join(str(v) for v in game.W.printed.values())
+
+
+def test_developer_mode_reports_history_asks_who_gave_what_and_completion():
+    guild = gap_scenario(members=(MEM,), lines=6)
+    coll, mem = guild.g(COLL), guild.g(MEM)
+    coll.slash("dev on")
+    mem.slash("dev on")
+    coll.W.printed, mem.W.printed = coll.L.table(), mem.L.table()
+    guild.run(150)
+    c, m = out_of(coll), out_of(mem)
+    assert "Guild chat: 6 message(s) found in the server history that you had not seen yet" in c
+    assert "Asking the players online for the text of 6 missing line(s)" in c
+    assert f"Received the text of 6 missing line(s): 6 from {MEM}-Forever." in c
+    assert "Complete: every guild chat line of the last 27 hours has its text now." in c
+    assert f"{COLL}-Forever asked for missing chat; sending 6 line(s) you have" in m
+    assert f"Sent 6 missing chat line(s) to {COLL}-Forever." in m
+    status = coll.slash("status")
+    assert "Missing text: none" in status and f"6 from {MEM}-Forever" in status
+    assert "Developer mode: |cff33ff33on|r" in status
+    for g in (coll, mem):
+        assert g.errors == 0, g.last_error()
+
+
+def test_developer_mode_is_off_by_default_and_reports_stay_out_of_chat():
+    guild = gap_scenario(lines=3)
+    coll = guild.g(COLL)
+    coll.W.printed = coll.L.table()
+    guild.run(150)
+    assert len([r for r in guild.texts(COLL) if r.get("rb")]) == 3
+    assert [m for m in out_of(coll).splitlines() if "Maupa's sprite" not in m] == []  # only the greeting
+    api = coll.L.globals().GuildLedgerAPI
+    assert api.GetDevMode() is False
+    api.SetDevMode(True)
+    assert api.GetDevMode() is True and coll.W.ns.Store.Opts().dev is True
+
+
+def test_more_than_one_answer_worth_is_fetched_in_follow_up_rounds():
+    guild = gap_scenario(lines=170)  # a member sends at most 150 lines per request
+    coll = guild.g(COLL)
+    coll.slash("dev on")
+    coll.W.printed = coll.L.table()
+    guild.run(250)
+    assert len([r for r in guild.texts(COLL) if r.get("rb")]) == 150
+    assert "Still without text: 20 line(s)" in out_of(coll) and "Asking again in about" in out_of(coll)
+    guild.run(150)
+    assert len([r for r in guild.texts(COLL) if r.get("rb")]) == 170
+    assert "Complete: every guild chat line" in out_of(coll)
+    assert coll.errors == 0, coll.last_error()
+
+
+def test_gaps_nobody_has_are_reported_once_not_every_round():
+    guild = Guild([(COLL, "collector"), (MEM, "member")])
+    guild.run(40)
+    guild.logout(COLL)
+    guild.logout(MEM)  # nobody with GuildLedger hears these
+    guild.say(ALIA, "lost 1")
+    guild.say(BRAM, "lost 2")
+    guild.run(30)
+    guild.login(COLL)
+    coll = guild.g(COLL)
+    coll.slash("dev on")
+    coll.W.printed = coll.L.table()
+    guild.run(120)
+    assert "Still without text: 2 line(s)" in out_of(coll) and "No player online has them" in out_of(coll)
+    coll.W.printed = coll.L.table()
+    guild.run(1900)  # two more 15-minute rounds: nothing changed, nothing said
+    assert "Still without text" not in out_of(coll)
+    assert "Missing text: 2 line(s)" in coll.slash("status")

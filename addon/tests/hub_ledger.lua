@@ -66,7 +66,38 @@ function CreateFrame(kind) local f = frame(); f.kind = kind; boxesMade[#boxesMad
 -- PackTweaks: the hidden tabs
 local hiddenDefs = { achievements = {}, alliance = {}, recruitment = {}, web = {}, journal = {} }
 function UI:GetFeature(id) return hiddenDefs[id] end
+local chat, clock, hubSettings = {}, 100, {}
+function AmazingHub:Print(msg) chat[#chat + 1] = msg end
+function AmazingHub:GetSetting(k) return hubSettings[k] end
+function AmazingHub:SetSetting(k, v) hubSettings[k] = v end
+AmazingHub.Logger = { debug = false }
+function GetTime() return clock end
+local typed
+SlashCmdList = { AMAZINGHUB = function(msg) typed = msg; AmazingHub:Print("answer to " .. msg) end }
 dofile(ADDON .. "/UI/PackTweaks.lua")
+
+-- Chat messages: quiet by default; answers to commands and clicks always show
+AmazingHub:Print("v0.5.3 by Maupa loaded")
+check(#chat == 0, "nothing in chat by itself (the login line is hidden)")
+SlashCmdList.AMAZINGHUB("help")
+check(typed == "help" and chat[1] == "answer to help", "the answer to a typed command shows")
+clock = clock + 5
+AmazingHub:Print("synced with someone")
+check(#chat == 1, "a later message nobody asked for stays hidden")
+local btn = UI:CreateButton(nil, "Apply")
+check(btn.hooks.OnMouseDown, "hub buttons count clicks")
+btn.hooks.OnMouseDown()
+AmazingHub:Print("Raids enabled.")
+check(chat[2] == "Raids enabled.", "the answer to a click shows")
+clock = clock + 5
+hubSettings.chatMessages = true
+AmazingHub:Print("synced with someone")
+check(chat[3] == "synced with someone", "with chat messages on, everything shows")
+hubSettings.chatMessages = nil
+AmazingHub.Logger.debug = true
+AmazingHub:Print("debug line")
+check(chat[4] == "debug line", "with /amazing debug on, everything shows")
+AmazingHub.Logger.debug = false
 for _, id in ipairs({ "achievements", "alliance", "recruitment", "web" }) do
   check(hiddenDefs[id].condition and hiddenDefs[id].condition() == false, id .. " tab is hidden")
 end

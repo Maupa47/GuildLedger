@@ -334,14 +334,14 @@ folders). Character screen → AddOns: both listed, none "out of date". BugSack 
 
 Result 2026-11-14: the admin ran the hub round and reported "it works, tested all features".
 
-## Bridge test round (v0.5.1: Ledger tab, Classic look, tabs) — run when ready
+## Bridge test round (v0.5.4: Ledger tab, Classic look, tabs, Settings, map dots) — run when ready
 
 Setup: the admin PC is repo-linked, so just `/reload` (no new folders this time). Testers: the new
-`dist\Amazing-Forever-Guild-Pack-0.5.1.zip` (both folders replaced).
+`dist\Amazing-Forever-Guild-Pack-0.5.4.zip` (both folders replaced).
 
 | # | What | Expected |
 |---|---|---|
-| B1 | `/amazing`, click the **Ledger** tab | "GUILDLEDGER 0.5.1", the WORLD MAP switches, and a STATUS block with the same lines as `/gl status` |
+| B1 | `/amazing`, click the **Ledger** tab | "GUILDLEDGER 0.5.4", the DISCORD LINK box and a STATUS block with the same lines as `/gl status` |
 | B2 | stay on the tab for 15 s while guild chat happens | the status numbers update by themselves (every 5 s) |
 | B3 | untick "Show my position…", then type `/gl status` | no chat line when clicking; `/gl status` says "Your position: not shared"; tick again → "shared" |
 | B4 | untick "Show guild members on my world map", open the world map near a sharing member | no dots; tick again → dots return |
@@ -349,7 +349,7 @@ Setup: the admin PC is repo-linked, so just `/reload` (no new folders this time)
 | B6 | hub Settings tab | no "Show guildmates in your zone on the minimap" switch any more |
 | B7 | disable GuildLedger in the AddOns list, log in, open the Ledger tab | "GuildLedger is not running" with instructions; no Lua error; hub otherwise works |
 | B8 | re-enable GuildLedger, disable Amazing Hub | GuildLedger works as before (`/gl status`, relay, map) |
-| B9 | update notice: only testable once a newer version (0.5.1+) exists; until then the Ledger tab must show **no** "Update available" line | no notice |
+| B9 | update notice: only testable once a newer version (0.5.5+) exists; until then the Ledger tab must show **no** "Update available" line | no notice |
 | B10 | Ledger tab → DISCORD LINK: type `nope`, press Enter | red "that is not a link code…"; no chat line |
 | B11 | Discord `/link` → type the code in the box → Link | green "link code sent…"; box empties; after a collector's `/reload` the confirm DM arrives (as L1) |
 | B12 | look at the tab bar, the minimap menu and Settings | no Achievements, Alliance, Recruitment or Web; Journal still there |
@@ -364,4 +364,64 @@ Setup: the admin PC is repo-linked, so just `/reload` (no new folders this time)
 | B21 | Square, size 18, outline off; *Open world map* (a guild member must share, see the pack round) | dots are squares, larger, no rim; Round + outline on: round dots with a dark rim |
 | B22 | click a class, pick red, OK; right-click it | the class's dots turn red (button marked `*`); right-click: back to the game's colour. *Cancel* in the picker restores the old colour |
 | B23 | Ledger tab | no map switches any more; the intro line points to Settings, World map |
-| B24 | unzip `dist\Amazing-Forever-Guild-Pack-0.5.1.zip` with 7-Zip or *Extract All* to a test folder | exactly two folders, `GuildLedger` and `AmazingHub`, each with its `.toc` directly inside |
+| B25 | `/reload` (0.5.3) | no "[Amazing Hub] … loaded" line or other pack line in chat |
+| B26 | `/amazing help`; click a module checkbox in Settings | the help and the "enabled/disabled" line still appear |
+| B27 | Settings → General → **+ CHAT MESSAGES** → tick "Show chat messages…", `/reload` | the login line appears again; `/gl status` → Settings shows "Chat messages: on" |
+| B28 | (needs a second player sharing) Settings → World map → Show members **In my zone**; the other player in another zone, open the world map of Azeroth | their dot disappears; **Anywhere** brings it back |
+| B29 | untick **Continent maps**, open your continent's map | no dots there; the zone map still shows them |
+| B30 | tick **Names next to the dots** | each dot has the player's name beside it, normal text size also when zoomed in |
+| B31 | the *other* player: Who sees me → **Only my zone's map**; you open the continent map, then their zone's map | not shown on the continent map; shown on their zone's map within ~15 s |
+| B32 | Settings → General → **+ CHAT MESSAGES** | a second switch "Developer mode: show what GuildLedger sends and receives", off; tick it (= `/gl dev on`) |
+| B33 | collector, developer mode on, after some time offline while guild chat happened: log in | light-blue lines: "Guild chat: N message(s) found in the server history…", ~30 s later "Asking the players online for the text of N missing line(s) (… to …)" |
+| B34 | same, with a member online who saw that chat | "Received the text of N missing line(s): N from <member>." then "Complete: …" or "Still without text: N line(s) (… to …)" with what happens next |
+| B35 | the member (developer mode on) | "<collector> asked for missing chat; sending N line(s)…", then "Sent N missing chat line(s) to <collector>." |
+| B36 | collector: `/gl status` → Sharing with other players | "Missing text: …" (none, or a count with times) and "Lines filled in by other players since login: N - N from <member>" |
+| B37 | developer mode off (default), `/reload` | none of the light-blue lines appear |
+| B38 | log out and in (not `/reload`) | ~8 s after login: pink "Maupa's sprite wishes you a wonderful journey…", then "The guild message of the day is: …" (if one is set); `/reload` shows neither |
+| B39 | Settings → General → CHAT MESSAGES: untick "Greeting and the guild's message of the day…", log out and in | no greeting; `/gl status` → Settings shows "Login greeting: off" |
+| B40 | share your position, open the world map with another sharer around | no dot on yourself; Settings → World map → tick "Show my own dot" → a dot under your arrow (tooltip "you") |
+| B41 | officer: Settings → **Loot** | LOOT SYSTEM is open; pick "DKP / Points" → a **DKP** tab appears |
+| B42 | DKP tab: click CURRENT, again, then MEMBER | largest first with a down arrow, then smallest first (up arrow), then by name |
+| B43 | Professions tab, pick a profession, both views: click each heading twice | sorts by that column, then the other way; the choice is still there after `/reload` |
+| B44 | two players with this pack, both with Settings → General → Chat → "Annotate guild chat" on. Player A (an alt linked to a main) types `Floy` in "What others see in the brackets for my lines", presses Enter, writes in /g | player B sees `[level] (Floy)` instead of `(alt of …)`; with "Short tag" on: `[Floy]`. A ticks "Show no tag at all" → B sees only `[level]`; A empties the box and unticks → `(alt of …)` again. Changes reach B within a few seconds |
+| B24 | unzip `dist\Amazing-Forever-Guild-Pack-0.5.4.zip` with 7-Zip or *Extract All* to a test folder | exactly two folders, `GuildLedger` and `AmazingHub`, each with its `.toc` directly inside |
+
+## Damage meter probe (GLMeterProbe, temporary) — 2026-11-17
+
+Question: what does the game's own damage meter (`C_DamageMeter`) give an addon? Are player names and amounts
+readable after a fight (or secret)? Does `ENCOUNTER_END` give the boss? The answer decides whether a guild damage
+meter for Discord can be built (feature request 2026-11-17).
+
+Setup: the folder `GLMeterProbe` is linked into AddOns (`.\tools\install.ps1`). It sends nothing and prints only
+one line after each fight. Remove it after the test (`.\tools\install.ps1 -Remove` removes all links, or delete
+the `GLMeterProbe` link in the AddOns folder).
+
+| # | What | Expected / paste |
+|---|---|---|
+| M1 | log in, AddOns list: enable **GLMeterProbe**; type `/glmeter` | "meter available: true …; functions: N" (paste the line) |
+| M2 | open the game's own damage meter once (if Forever has one in the UI / Edit Mode) and make sure it is switched on | — |
+| M3 | solo: fight any mob or a target dummy until out of combat | a line "after fight: 1 source(s), names readable 1, amounts readable 1 - <you> <number>" |
+| M4 | in a **group** (dungeon or raid, others need no addon), fight trash | "after fight: N source(s), names readable …, amounts readable …" — the key question: are the other players' names and numbers readable? |
+| M5 | kill a dungeon or raid **boss** | an extra line "boss end: …" |
+| M6 | `/reload` (writes the file) and tell Claude | Claude reads `GLMeterProbe.lua` from your SavedVariables folder itself |
+
+Result: (pending)
+
+## Loot outside the game (bot + companion, 2026-11-18) — run when ready
+
+Needs: the bot updated (`.\tools\deploy.ps1`, a normal update), `[loot] webhook` set for `#guild-loot`
+(docs/collection/ADMIN.md section 2, "Loot channel"), a collector with the new companion, and an officer who uses
+Amazing Hub's loot tools (Settings → Modules: Raids and Loot; Settings → Loot → loot system **DKP / Points**).
+
+| # | What | Expected |
+|---|---|---|
+| D1 | officer, in game: DKP tab → give a player +5 (any reason), `/reload` | companion window: `imported AmazingHub.lua: loot: points +1, standings …`; then `uploaded …` |
+| D2 | Discord: `/dkp` | the standings, as in game; `/dkp character:<that player>` shows their points |
+| D3 | `#guild-loot` after ~10 minutes | one line `💰 +5 <reason> by <officer>: <player>` |
+| D4 | a raid with master loot: award one item, finish the raid (leave the instance), `/reload` | `#guild-loot`: `🎁 <player> got [<item>] (<raid>)`, and ~10 min after the raid ended one embed "Raid: <name>" with bosses, attendance, loot, standings |
+| D5 | two officers with companions both `/reload` after the same raid | every line and the raid summary appear **once** |
+| D6 | a member adds items to their wishlist in game; a collector `/reload`s; Discord `/wishlist character:<member>` | the same items in the same order |
+| D7 | Discord: `/wish add item:<item ID or Wowhead link>`, then `/wish export` | "Added …"; a line `GLW1:<your character>:<id>,…` to copy (pasting it in game needs the addon import, not built yet) |
+| D8 | `/wish add` for someone else's character (not an officer) | refused: "not one of your linked characters" |
+
+Result: (pending)

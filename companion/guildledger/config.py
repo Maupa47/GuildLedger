@@ -26,6 +26,8 @@ class Config:
     roster_webhook: str = field(default="", repr=False)
     ingest_webhook: str = field(default="", repr=False)
     meta: str = "summary"  # direct mode: chat rows without text -> "summary" | "lines" | "skip"
+    loot: bool = True  # also read Amazing Hub's AmazingHub.lua (points, loot, wishlists, raids)
+    hub_sv_path: Path | None = None  # default: AmazingHub.lua next to sv_path
     poll_seconds: float = 2.0
     stable_seconds: float = 1.0
 
@@ -36,6 +38,12 @@ class Config:
     @property
     def logs_dir(self) -> Path:
         return self.data_dir / "logs"
+
+    @property
+    def hub_path(self) -> Path | None:
+        if self.hub_sv_path:
+            return self.hub_sv_path
+        return self.sv_path.with_name("AmazingHub.lua") if self.sv_path else None
 
     def tz(self) -> tzinfo | None:
         return resolve_tz(self.timezone)
@@ -63,7 +71,7 @@ def load(path: str | Path | None) -> Config:
 
     base = path.resolve().parent
     cfg = Config(data_dir=base)
-    # mode / timezone / data_dir: in [general] since 0.5.1; at the top level in older config files.
+    # mode / timezone / data_dir: in [general] since 0.5.2; at the top level in older config files.
     general = raw.get("general", {}) or {}
 
     def opt(key: str):
@@ -90,6 +98,10 @@ def load(path: str | Path | None) -> Config:
         raise ConfigError(f'[direct] meta must be "summary", "lines" or "skip", not {cfg.meta!r}')
     upload = raw.get("upload", {}) or {}
     cfg.ingest_webhook = str(upload.get("ingest_webhook", ""))
+    loot_ = raw.get("loot", {}) or {}
+    cfg.loot = bool(loot_.get("enabled", cfg.loot))
+    if loot_.get("hub_sv_path"):
+        cfg.hub_sv_path = Path(loot_["hub_sv_path"])
     watch = raw.get("watch", {}) or {}
     cfg.poll_seconds = float(watch.get("poll_seconds", cfg.poll_seconds))
     cfg.stable_seconds = float(watch.get("stable_seconds", cfg.stable_seconds))

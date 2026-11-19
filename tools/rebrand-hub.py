@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PINNED = "80883a096cdf9fa1366fb1a248e99b4462d74a21"  # GuildOS 1.20.1, audited in docs/addon/HUB_AUDIT.md
-HUB_VERSION = "0.5.1"
+HUB_VERSION = "0.5.4"
 
 # What is not copied (not part of the addon, or replaced by our own files).
 SKIP_DIRS = {".git", ".github", "docs", "__pycache__"}
@@ -38,6 +38,7 @@ RENAMES = [
     (re.compile(r"Chehul \(danielcosta42\)"), "Maupa"),
     (re.compile(r"GuildOS"), "AmazingHub"),          # global table, GuildOSDB, GuildOSInbox, media paths
     (re.compile(r"GUILDOS"), "AMAZINGHUB"),          # comms prefix, SlashCmdList key, bindings
+    (re.compile(r"\|cffFFD700Guild\|r \|cffD4AC0DOS\|r"), "|cffFFD700Amazing|r |cffD4AC0DHub|r"),  # two-colour logo
     (re.compile(r"Guild OS"), "Amazing Hub"),        # what players read
     (re.compile(r"GUILD OS"), "AMAZING HUB"),
     (re.compile(r"Guild-OS"), "Amazing Hub"),
@@ -49,7 +50,7 @@ RENAMES = [
     (re.compile(r"Chehul"), "Maupa"),
     (re.compile(r"chehul"), "maupa"),
 ]
-OLD_NAMES = re.compile(r"guild[ -]?os|chehul|danielcosta", re.I)  # must not survive outside the credit spots
+OLD_NAMES = re.compile(r"guild[ -]?os|guild\|r \|c[0-9a-f]{8}os\|r|chehul|danielcosta", re.I)  # must not survive outside the credit spots
 
 # Patches on the renamed text: (file, old, new, why). Each old string must occur exactly once.
 PATCHES: list[tuple[str, str, str, str]] = [
@@ -271,6 +272,105 @@ PATCHES: list[tuple[str, str, str, str]] = [
     # --- 5. Slash command: /amazing and /amazinghub ----------------------------------------------------------------
     ("Core/Commands.lua", "SLASH_AMAZINGHUB2 = \"/amazing\"", "SLASH_AMAZINGHUB2 = \"/amazinghub\"",
      "second slash alias"),
+    # --- 6. Small wishes (0.5.4) -------------------------------------------------------------------------------------
+    ("Modules/RecipeTracker.lua",
+     "        for _, c in ipairs(sorted) do\n"
+     "            local cc = c.class and AmazingHub.ClassColors[c.class] or C.white\n",
+     "        for i, c in ipairs(sorted) do\n"
+     "            -- Amazing Hub: at most 5 names (online first); the rest is counted (full list: Professions tab)\n"
+     "            if i > 5 then\n"
+     "                tooltip:AddLine(string.format(\"  +%d more (/amazing, Professions)\", #sorted - 5), 0.6, 0.6, 0.6)\n"
+     "                break\n"
+     "            end\n"
+     "            local cc = c.class and AmazingHub.ClassColors[c.class] or C.white\n",
+     "crafter lists on item tooltips: 5 names at most"),
+    # Wishlist import from Discord (0.5.4, tools/hub-extra/WishImport.lua): a button in the title bar.
+    ("UI/FeaturePanels.lua",
+     "        AmazingHub:Print(L[\"[Wishlist] Sent to the guild.\"])\n"
+     "    end)\n"
+     "\n"
+     "    AmazingHub.WishlistFrame = f\n",
+     "        AmazingHub:Print(L[\"[Wishlist] Sent to the guild.\"])\n"
+     "    end)\n"
+     "    if AmazingHub.WishImport then -- Amazing Hub: paste the line from the bot's /wish export\n"
+     "        local importBtn = UI:CreateButton(f, \"Import from Discord\", 130, 22)\n"
+     "        importBtn:SetPoint(\"TOPRIGHT\", f, \"TOPRIGHT\", -130, -9) -- title bar, left of the item counter\n"
+     "        importBtn:SetScript(\"OnClick\", function() AmazingHub.WishImport.ShowPopup() end)\n"
+     "    end\n"
+     "\n"
+     "    AmazingHub.WishlistFrame = f\n",
+     "wishlist window: Import from Discord"),
+    # Sortable columns (0.5.4, tools/hub-extra/TableSort.lua): DKP standings and the two Professions tables.
+    ("UI/PointsPanel.lua",
+     "    hcol(L[\"MEMBER\"], 4)\n"
+     "    hcol(L[\"CURRENT\"], 250)\n"
+     "    hcol(L[\"EARNED\"], 330)\n"
+     "    hcol(L[\"SPENT\"], 410)\n",
+     "    -- Amazing Hub: click a heading to sort, click again to flip (UI/TableSort.lua)\n"
+     "    local sortHeads = {\n"
+     "        { hcol(L[\"MEMBER\"], 4), \"name\", L[\"MEMBER\"] },\n"
+     "        { hcol(L[\"CURRENT\"], 250), \"current\", L[\"CURRENT\"], true },\n"
+     "        { hcol(L[\"EARNED\"], 330), \"earned\", L[\"EARNED\"], true },\n"
+     "        { hcol(L[\"SPENT\"], 410), \"spent\", L[\"SPENT\"], true },\n"
+     "    }\n",
+     "DKP standings headings are sort buttons"),
+    ("UI/PointsPanel.lua",
+     "        local list = AmazingHub.Points:GetStandings()\n",
+     "        local list = AmazingHub.Points:GetStandings()\n"
+     "        if AmazingHub.TableSort then -- Amazing Hub: the chosen column and direction\n"
+     "            AmazingHub.TableSort.Headers(\"dkp\", sortHeads, refresh)\n"
+     "            AmazingHub.TableSort.Apply(\"dkp\", list, AmazingHub.TableSort.POINTS)\n"
+     "        end\n",
+     "DKP standings sorted by the chosen column"),
+    ("UI/ProfessionsPanel.lua",
+     "            state.results = state.line and D.MemberRows(state.line) or {}\n"
+     "        end\n",
+     "            state.results = state.line and D.MemberRows(state.line) or {}\n"
+     "        end\n"
+     "        local TS = AmazingHub.TableSort -- Amazing Hub: the chosen column and direction\n"
+     "        if TS then TS.Apply(\"prof-\" .. state.mode, state.results, TS.PROFESSIONS[state.mode]) end\n",
+     "Professions tables sorted by the chosen column"),
+    ("UI/ProfessionsPanel.lua",
+     "                fs:SetText(HEADERS[state.mode][col.key])\n",
+     "                fs:SetText(HEADERS[state.mode][col.key])\n"
+     "                if AmazingHub.TableSort then -- Amazing Hub: heading = sort button with an arrow\n"
+     "                    AmazingHub.TableSort.Header(fs, \"prof-\" .. state.mode, col.key, HEADERS[state.mode][col.key],\n"
+     "                        function() panel:Refresh() end, AmazingHub.TableSort.PROFESSIONS_NUMERIC[col.key])\n"
+     "                end\n",
+     "Professions headings are sort buttons"),
+    # Own chat tag (0.5.4, tools/hub-extra/ChatTag.lua): the player picks what others see in the brackets.
+    ("Modules/DataCollector.lua",
+     "        addonVersion = AmazingHub.VERSION,\n",
+     "        addonVersion = AmazingHub.VERSION,\n"
+     "        -- Amazing Hub: the tag others show in front of my guild lines (UI/ChatTag.lua); always sent, so\n"
+     "        -- clearing it reaches the receivers' key-by-key merge too\n"
+     "        chatTag = AmazingHub.ChatTag and (AmazingHub.ChatTag.Mine()) or nil,\n"
+     "        chatTagOff = AmazingHub.ChatTag and AmazingHub.ChatTag.Off(),\n",
+     "own chat tag travels with the player's data"),
+    ("Modules/ChatTweaks.lua",
+     "            shortTag  = (cfg.altShort",
+     "            own       = AmazingHub.ChatTag and cached.fullKey and AmazingHub.ChatTag.For(cached.fullKey), -- Amazing Hub\n"
+     "            shortTag  = (cfg.altShort",
+     "chat lines: the author's own tag"),
+    ("Modules/ChatTweaks.lua",
+     "    if cfg.altTag and cfg.altShort then\n",
+     "    if cfg.altTag and info.own ~= nil then -- Amazing Hub: the author's own tag (text) or none (false)\n"
+     "        if info.own then\n"
+     "            parts[#parts + 1] = \"|cff888888\" .. (cfg.altShort and \"[\" .. info.own .. \"]\" or \"(\" .. info.own .. \")\") .. \"|r\"\n"
+     "        end\n"
+     "    elseif cfg.altTag and cfg.altShort then\n",
+     "chat prefix: the author's own tag replaces the alt tag"),
+    ("UI/FeaturePanels.lua",
+     "            AmazingHub.db.chatTweaks.altShort = checked and true or false\n"
+     "        end\n"
+     "    end\n"
+     "    yOff = yOff + 26\n",
+     "            AmazingHub.db.chatTweaks.altShort = checked and true or false\n"
+     "        end\n"
+     "    end\n"
+     "    yOff = yOff + 26\n"
+     "    if AmazingHub.ChatTag then yOff = AmazingHub.ChatTag.BuildSettings(content, yOff) end -- Amazing Hub\n",
+     "Settings: what others see in the brackets"),
 ]
 
 # Patches whose anchor occurs a known number of times: (file, old, new, why, times).
@@ -281,7 +381,7 @@ PATCHES_ALL: list[tuple[str, str, str, str, int]] = [
 ]
 
 # Our own hub files: (file in tools/hub-extra, folder in the hub). Appended to the TOC in this order.
-EXTRAS = [("PackTweaks.lua", "UI"), ("LedgerPanel.lua", "UI"), ("SettingsPlus.lua", "UI")]
+EXTRAS = [("PackTweaks.lua", "UI"), ("TableSort.lua", "UI"), ("ChatTag.lua", "UI"), ("WishImport.lua", "UI"), ("LedgerPanel.lua", "UI"), ("SettingsPlus.lua", "UI")]
 
 # Files that call the chat globals directly get guarded file-locals in front, so no code path sends past the guard.
 # (Replacing the globals themselves would taint Blizzard's chat frame; file-locals touch only this addon.)
@@ -308,7 +408,7 @@ def shadow(rel: str, text: str) -> str:
 
 TOC_HEADER =f"""## Interface: 16001
 ## Title: |cffFFD700Amazing Hub|r |cff888888(Amazing Forever Guild Pack)|r
-## Notes: Guild window for the Amazing guild: roster, professions and recipes, raids, trials.
+## Notes: Guild window for the Amazing guild: roster, professions and recipes, calendar, guild members on the map.
 ## Author: Maupa
 ## Version: {HUB_VERSION}
 ## SavedVariables: AmazingHubDB

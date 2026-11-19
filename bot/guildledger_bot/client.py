@@ -20,7 +20,7 @@ from . import commands, ingest
 from .link import Links
 from .config import BotConfig
 from .ops import Ops
-from .post import make_poster, post_once
+from .post import make_loot_poster, make_poster, post_loot_once, post_once
 from .store import Archive, Outcome
 
 log = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ class LedgerBot(dpy.Client):
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="archive")
         self._archive: Archive | None = None
         self._poster = None
+        self._loot_poster = None
         self._ops: Ops | None = None
         self._links: Links | None = None
         self.tree = app_commands.CommandTree(self)
@@ -57,6 +58,7 @@ class LedgerBot(dpy.Client):
             from guildledger import discord as gl_discord
             self._archive = Archive(self.cfg.db_path)
             self._poster = make_poster(self._archive, self.cfg)
+            self._loot_poster = make_loot_poster(self._archive, self.cfg)
             hook = gl_discord.Webhook(self.cfg.ops_webhook, "ops") if self.cfg.ops_webhook else None
             self._ops = Ops(self._archive, hook, self.cfg.timezone, self.cfg.report_hour,
                             self.cfg.alert_after_hours)
@@ -82,6 +84,7 @@ class LedgerBot(dpy.Client):
         await self.backfill()  # every (re)connect: whatever arrived while the bot was away
         if self.once:
             await self._db(post_once, self._archive, self.cfg, self._poster)
+            await self._db(post_loot_once, self._archive, self.cfg, self._loot_poster)
             await self.close()
             return
         if self._post_task is None:
@@ -91,6 +94,7 @@ class LedgerBot(dpy.Client):
         while not self.is_closed():
             try:
                 await self._db(post_once, self._archive, self.cfg, self._poster)
+                await self._db(post_loot_once, self._archive, self.cfg, self._loot_poster)
                 await self._db(self._ops.tick)
                 await self._link_round()
             except Exception:  # noqa: BLE001 - keep the loop alive; the next round retries
@@ -213,7 +217,8 @@ class LedgerBot(dpy.Client):
             return
         try:
             if out.status == "ok":
-                log.info("upload %s from %s: %s", msg.id, collector, out.result.summary())
+                log.info("upload %s from %s: %s%s", msg.id, collector, out.result.summary(),
+                         f"; {out.loot_result.summary()}" if out.loot_result and out.loot_result.changed else "")
                 await msg.add_reaction(OK)
             else:
                 log.warning("upload %s from %s rejected: %s", msg.id, collector, out.reason)

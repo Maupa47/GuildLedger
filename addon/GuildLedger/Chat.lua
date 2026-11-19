@@ -214,6 +214,7 @@ end)
 ---------------------------------------------------------------------------------------------------
 
 local syncStream
+local STREAM_NAMES = { g = "Guild chat", o = "Officer chat", d = "Discord chat", x = "Other chat" }
 local REQUEST_TIMEOUT = 15 -- s without CLUB_MESSAGE_HISTORY_RECEIVED
 local REQUEST_RETRIES = 2 -- then: the server has nothing older (Phase 2: it just stays silent)
 local histEvents = 0
@@ -226,6 +227,14 @@ local function finishSync(sid, note)
     sync[sid] = nil
     lastSync, lastSyncNote = C.Now(), note
     ns.Debug("sync " .. tostring(streams[sid]) .. " done: " .. note)
+    local where = STREAM_NAMES[streams[sid]] or "chat"
+    if st and st.added > 0 then
+        ns.Info(string.format("%s: %d message(s) found in the server history that you had not seen yet"
+            .. " (%s to %s). Their text is asked from other players.", where, st.added, ns.When(st.lo),
+            ns.When(st.hi)))
+    elseif st then
+        ns.Info(where .. ": no messages missed, nothing new in the server history.")
+    end
     if ns.RelaySynced then ns.Safe("Relay.synced", ns.RelaySynced) end
 end
 
@@ -308,7 +317,11 @@ local function syncStep(sid)
                 end
                 if row.t >= floor and (not ce or S.Newer(row.epoch, row.pos, ce, cp)) then
                     row.s, row.src, row.epoch, row.pos = letter, "meta", nil, nil
-                    if store(row) == "new" then st.added = st.added + 1 end
+                    if store(row) == "new" then
+                        st.added = st.added + 1
+                        if not st.lo or row.t < st.lo then st.lo = row.t end
+                        if not st.hi or row.t > st.hi then st.hi = row.t end
+                    end
                 end
             end
         end

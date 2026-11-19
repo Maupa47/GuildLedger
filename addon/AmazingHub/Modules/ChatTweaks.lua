@@ -68,7 +68,11 @@ function ChatTweaks:_BuildPrefix(info, cfg)
     if cfg.level and info.level and info.level > 0 then
         parts[#parts + 1] = "[" .. info.level .. "]"
     end
-    if cfg.altTag and cfg.altShort then
+    if cfg.altTag and info.own ~= nil then -- Amazing Hub: the author's own tag (text) or none (false)
+        if info.own then
+            parts[#parts + 1] = "|cff888888" .. (cfg.altShort and "[" .. info.own .. "]" or "(" .. info.own .. ")") .. "|r"
+        end
+    elseif cfg.altTag and cfg.altShort then
         if info.shortTag then parts[#parts + 1] = "|cff888888" .. info.shortTag .. "|r" end
     elseif cfg.altTag and info.altTag then
         parts[#parts + 1] = "|cff888888(" .. info.altTag .. ")|r"
@@ -90,6 +94,7 @@ function ChatTweaks:_MakeFilter()
             classFile = cached.classFile,
             level     = cached.level,
             altTag    = (AmazingHub.GetAltTag and cached.fullKey) and AmazingHub:GetAltTag(cached.fullKey) or nil,
+            own       = AmazingHub.ChatTag and cached.fullKey and AmazingHub.ChatTag.For(cached.fullKey), -- Amazing Hub
             shortTag  = (cfg.altShort and AmazingHub.AltRoster and cached.fullKey) and AmazingHub.AltRoster:ShortTag(cached.fullKey) or nil,
         }
         local prefix = ChatTweaks:_BuildPrefix(info, cfg)

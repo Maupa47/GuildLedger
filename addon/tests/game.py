@@ -14,7 +14,7 @@ from guildledger.svparse import parse  # noqa: E402
 
 ADDON_DIR = (ROOT / "addon" / "GuildLedger").as_posix()
 STUB = (Path(__file__).parent / "wowstub.lua").as_posix()
-FILES = ["Compat.lua", "Store.lua", "Core.lua", "Comms.lua", "Chat.lua", "Roster.lua", "Relay.lua", "Map.lua", "Link.lua", "API.lua"]  # TOC order
+FILES = ["Compat.lua", "Store.lua", "Core.lua", "Comms.lua", "Chat.lua", "Roster.lua", "Relay.lua", "Map.lua", "Link.lua", "Kudos.lua", "Welcome.lua", "API.lua"]  # TOC order
 
 ALIA = ("Alia Testwood", "Player-1111-0000AAAA")
 BRAM = ("Bram Exampleson", "Player-1111-0000BBBB")
@@ -42,16 +42,16 @@ class Game:
         self.W.downloaded[1] = min(history, 100)  # the client holds ~100 after login
         self.load()
 
-    def load(self):
+    def load(self, reload=False):
         self.W.loadAddon(ADDON_DIR, self.L.table_from(FILES), "GuildLedger")
-        self.W.login()
+        self.W.login(reload)
 
     def reload(self):
         sv = self.sv_text()
         self.W.unload()
         self.L.execute("GuildLedgerDB = nil")
         self.L.execute(sv)  # what WoW reads back from disk
-        self.load()
+        self.load(reload=True)
 
     def offline(self, seconds, change=None):
         """Log out, let `change()` happen in the guild while away, log back in after `seconds`."""

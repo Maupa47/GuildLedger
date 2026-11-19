@@ -335,7 +335,9 @@ function C.MapInfo(mapID)
     if type(info) ~= "table" or IsSecret(info) then return nil end
     local parent = not IsSecret(info.parentMapID) and info.parentMapID or nil
     local name = not IsSecret(info.name) and type(info.name) == "string" and info.name or nil
-    return parent, name
+    -- Enum.UIMapType (MapConstantsDocumentation): 0 Cosmic, 1 World, 2 Continent, 3 Zone, 4 Dungeon, 5 Micro, 6 Orphan
+    local kind = not IsSecret(info.mapType) and type(info.mapType) == "number" and info.mapType or nil
+    return parent, name, kind
 end
 
 -- Where mapID lies on topMapID: minX, maxX, minY, maxY (0..1 of the top map), or nil.

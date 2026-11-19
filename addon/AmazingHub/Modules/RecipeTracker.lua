@@ -694,7 +694,12 @@ function RecipeTracker:HookTooltips()
 
         tooltip:AddLine(" ")
         tooltip:AddLine(label or L["Crafted by:"], C.accent.r, C.accent.g, C.accent.b)
-        for _, c in ipairs(sorted) do
+        for i, c in ipairs(sorted) do
+            -- Amazing Hub: at most 5 names (online first); the rest is counted (full list: Professions tab)
+            if i > 5 then
+                tooltip:AddLine(string.format("  +%d more (/amazing, Professions)", #sorted - 5), 0.6, 0.6, 0.6)
+                break
+            end
             local cc = c.class and AmazingHub.ClassColors[c.class] or C.white
             local status = onlineSet[c.playerName] and L[" |cff00ff00(online)|r"] or L[" |cff666666(offline)|r"]
             tooltip:AddDoubleLine("  " .. c.playerName .. status, c.profName and L[c.profName] or "", cc.r, cc.g, cc.b, 0.6, 0.6, 0.6)

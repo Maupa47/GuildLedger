@@ -1,0 +1,6 @@
+## Interface: 16001
+## Title: GLMeterProbe
+## Notes: Temporary test addon: what the game's damage meter shows addons after a fight. Remove after the test.
+## Version: 0.1.0
+## SavedVariables: GLMeterProbeDB
+GLMeterProbe.lua

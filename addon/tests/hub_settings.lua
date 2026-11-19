@@ -123,7 +123,8 @@ local function y(o) local _, _, _, _, yy = o:GetPoint(1); return -yy end
 -- ── Without GuildLedger: the World map section says what is missing ────────
 GuildLedgerAPI = nil
 AmazingHub:RefreshSettingsPanel(content)
-check(current("+  MY PROFILE") and current("+  MODULES") and current("+  CHAT") and current("+  WORLD MAP"),
+check(current("+  MY PROFILE") and current("+  MODULES") and current("+  CHAT") and current("+  CHAT MESSAGES")
+  and current("+  WORLD MAP"),
   "every section heading is closed by default (+), the World map section included")
 check(not current("MODULES option") and not current("CHAT hint"), "a closed section's controls are hidden")
 check(current("Settings"), "the page title above the first section stays")
@@ -144,7 +145,7 @@ check(y(current("-  MODULES")) == 64 and y(current("MODULES option")) == 88 and 
   "an open section keeps its height and the rest follows")
 headingButton(current("-  MODULES")).scripts.OnClick()
 check(current("+  MODULES") and not current("MODULES option"), "and closes again")
-settings.openSections = { ["WORLD MAP"] = true }
+settings.openSections = { ["WORLD MAP"] = true, ["CHAT MESSAGES"] = true }
 AmazingHub:RefreshSettingsPanel(content)
 local ok = false
 for _, o in ipairs(made) do
@@ -160,14 +161,21 @@ GuildLedgerAPI = {
   apiVersion = 1,
   GetMap = function()
     return { available = true, share = true, pins = false, shape = "round", size = 12, outline = true,
-      sizeMin = 6, sizeMax = 24,
+      sizeMin = 6, sizeMax = 24, near = "any", names = false, shareScope = "all", self = false,
+      views = { zone = true, continent = true, world = false },
       colors = { { class = "MAGE", r = 0.25, g = 0.78, b = 0.92, custom = false },
                  { class = "WARRIOR", r = 0.78, g = 0.61, b = 0.43, custom = true } } }
   end,
   SetMapShare = function(on) calls[#calls + 1] = "share " .. tostring(on) end,
   SetMapPins = function(on) calls[#calls + 1] = "pins " .. tostring(on) end,
+  SetMessages = function(on) calls[#calls + 1] = "messages " .. tostring(on) end,
+  GetDevMode = function() return false end,
+  GetWelcome = function() return true end,
+  SetWelcome = function(on) calls[#calls + 1] = "welcome " .. tostring(on) end,
+  SetDevMode = function(on) calls[#calls + 1] = "dev " .. tostring(on) end,
   SetMapLook = function(what, a, r, g, b)
-    calls[#calls + 1] = table.concat({ what, tostring(a), r and string.format("%.1f %.1f %.1f", r, g, b) or "" }, " ")
+    local rest = type(r) == "number" and string.format("%.1f %.1f %.1f", r, g, b) or (r ~= nil and tostring(r) or "")
+    calls[#calls + 1] = table.concat({ what, tostring(a), rest }, " ")
     return true
   end,
 }
@@ -190,6 +198,27 @@ pins.checkbox.onChanged(nil, true)
 local function button(text)
   for _, o in ipairs(made) do if o.shown and o.kind == "Button" and o.text == text then return o end end
 end
+local msgs = box("Show chat messages from the Amazing Forever Guild Pack")
+check(msgs and msgs.checkbox.checked == false, "a chat-messages switch, off by default")
+msgs.checkbox.onChanged(nil, true)
+check(settings.chatMessages == true and calls[#calls] == "messages true", "it switches the hub and GuildLedger together")
+msgs.checkbox.onChanged(nil, false)
+check(settings.chatMessages == false and calls[#calls] == "messages false", "and off again")
+local hello = box("Greeting and the guild's message of the day when I log in")
+check(hello and hello.checkbox.checked == true, "a login-greeting switch, on by default")
+hello.checkbox.onChanged(nil, false)
+check(calls[#calls] == "welcome false", "the greeting switch writes through GuildLedgerAPI")
+local own = box("Show my own dot (off: only the game's arrow shows you)")
+check(own and own.checkbox.checked == false, "an own-dot switch, off by default")
+own.checkbox.onChanged(nil, true)
+check(calls[#calls] == "self true ", "the own-dot switch writes through SetMapLook")
+local dev = box("Developer mode: show what GuildLedger sends and receives")
+check(dev and dev.checkbox.checked == false, "a developer-mode switch, off by default")
+dev.checkbox.onChanged(nil, true)
+check(calls[#calls] == "dev true", "developer mode writes through GuildLedgerAPI")
+calls = {}
+share.checkbox.onChanged(nil, false)
+pins.checkbox.onChanged(nil, true)
 button("Square").scripts.OnClick()
 check(calls[1] == "share false" and calls[2] == "pins true" and calls[3] == "shape square ",
   "switches and shape write through GuildLedgerAPI: " .. table.concat(calls, ", "))
@@ -218,7 +247,19 @@ picked.cancelFunc()
 check(calls[#calls] == "color MAGE 0.3 0.8 0.9", "cancel puts the old colour back")
 warrior.scripts.OnClick(warrior, "RightButton")
 check(calls[#calls] == "color WARRIOR ", "right-click: back to the game's colour")
-button("Reset marker look").scripts.OnClick()
+-- when and where
+button("In my zone").scripts.OnClick()
+check(calls[#calls] == "near zone ", "show only members in my zone")
+button("Only my zone's map").scripts.OnClick()
+check(calls[#calls] == "shareScope zone ", "only viewers of my zone see me")
+local continentBox, worldBox = box("Continent maps"), box("World map")
+check(continentBox and continentBox.checkbox.checked == true and worldBox.checkbox.checked == false,
+  "one switch per kind of map, showing the current choice")
+continentBox.checkbox.onChanged(nil, false)
+check(calls[#calls] == "view continent false", "no dots on continent maps")
+box("Names next to the dots (otherwise when you point at a dot)").checkbox.onChanged(nil, true)
+check(calls[#calls] == "names true ", "names next to the dots")
+button("Reset map options").scripts.OnClick()
 check(calls[#calls] == "reset nil ", "reset")
 button("Open world map").scripts.OnClick()
 check(mapOpened == 1, "open the world map from Settings")

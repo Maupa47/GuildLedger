@@ -48,6 +48,14 @@ roster_webhook = ""
 # Chat lines whose text was not captured: "summary" (one line per stretch), "lines" (each one), "skip".
 meta = "summary"
 
+[loot]
+# Amazing Hub's loot data (DKP/points, loot history, wishlists, raid attendance) for the bot's #guild-loot channel
+# and the /dkp /loot /wishlist commands. Read from AmazingHub.lua in the same SavedVariables folder as sv_path.
+# Needs mode = "upload". Set enabled = false to send no loot data.
+enabled = true
+# Only if AmazingHub.lua is somewhere else (normally leave this commented out):
+# hub_sv_path = 'C:\...\SavedVariables\AmazingHub.lua'
+
 [watch]
 poll_seconds = 2
 stable_seconds = 1

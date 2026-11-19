@@ -24,6 +24,23 @@ function ns.Print(msg)
     if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(PREFIX .. msg) end
 end
 
+-- A message nobody asked for right now (e.g. a collector confirming a link code later): shown only with
+-- /gl messages on (opts.messages, default off; also Amazing Hub's Settings -> CHAT MESSAGES).
+function ns.Notice(msg)
+    if ns.Store.Opts().messages or ns.Store.Opts().debug then ns.Print(msg) end
+end
+
+-- Developer mode (/gl dev on, opts.dev; also Amazing Hub's Settings -> CHAT MESSAGES): readable reports of what
+-- GuildLedger sends and receives (history found, missing text asked for, lines received from whom, what is still
+-- missing). Also shown while /gl debug is on. Off by default.
+function ns.Info(msg)
+    local o = ns.Store.Opts()
+    if o.dev or o.debug then ns.Print("|cff7fbfff" .. msg .. "|r") end
+end
+
+-- "Mon 13:05": a time in the last few days.
+function ns.When(ts) return ts and date("%a %H:%M", ts) or "?" end
+
 -- /gl status layout: a gold heading per section, then indented lines, one fact per line.
 function ns.Head(text)
     if capture then capture[#capture + 1] = { kind = "head", text = text } return end
@@ -195,15 +212,18 @@ local function status()
         end
     end
     ns.Head("Settings")
-    ns.Line(string.format("Collector: %s - Officer chat: %s - Debug messages: %s", onOff(o.collector),
-        onOff(o.officer), onOff(o.debug)))
+    ns.Line(string.format("Collector: %s - Officer chat: %s - Chat messages: %s - Login greeting: %s"
+        .. " - Developer mode: %s - Debug messages: %s", onOff(o.collector), onOff(o.officer), onOff(o.messages),
+        onOff(o.welcome ~= false), onOff(o.dev), onOff(o.debug)))
 end
 
 ns.StatusReport = status -- GuildLedgerAPI.GetStatus captures exactly these lines
 
 local function usage()
     ns.Print("commands: /gl status, /gl who, /gl link CODE, /gl map (world-map dots), /gl sync, /gl flush,"
-        .. " /gl collector on|off, /gl officer on|off, /gl debug on|off")
+        .. " /gl collector on|off, /gl officer on|off, /gl messages on|off, /gl welcome on|off (login greeting),"
+        .. " /gl dev on|off (what is sent and"
+        .. " received), /gl debug on|off")
 end
 
 SLASH_GUILDLEDGER1 = "/gl"
@@ -232,7 +252,9 @@ SlashCmdList.GUILDLEDGER = function(msg)
     elseif cmd == "flush" then
         ns.Store.MarkSaved()
         C.Reload()
-    elseif (cmd == "officer" or cmd == "debug" or cmd == "collector") and (arg == "on" or arg == "off") then
+    elseif (cmd == "officer" or cmd == "debug" or cmd == "collector" or cmd == "messages" or cmd == "dev"
+        or cmd == "welcome")
+        and (arg == "on" or arg == "off") then
         o[cmd] = arg == "on"
         ns.Print(cmd .. " " .. onOff(o[cmd]))
         if cmd == "collector" then

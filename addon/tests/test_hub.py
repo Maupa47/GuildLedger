@@ -75,8 +75,9 @@ def test_settings_sections_and_world_map():
 
 def test_ledger_tab_is_built_in():
     toc = (HUB / "AmazingHub.toc").read_text("utf-8")
-    assert toc.rstrip().endswith("UI\\PackTweaks.lua\nUI\\LedgerPanel.lua\nUI\\SettingsPlus.lua")
-    for name in ("PackTweaks.lua", "LedgerPanel.lua", "SettingsPlus.lua"):
+    assert toc.rstrip().endswith(
+        "UI\\PackTweaks.lua\nUI\\TableSort.lua\nUI\\ChatTag.lua\nUI\\WishImport.lua\nUI\\LedgerPanel.lua\nUI\\SettingsPlus.lua")
+    for name in ("PackTweaks.lua", "TableSort.lua", "ChatTag.lua", "WishImport.lua", "LedgerPanel.lua", "SettingsPlus.lua"):
         assert (HUB / "UI" / name).read_bytes() == (ROOT / "tools" / "hub-extra" / name).read_bytes()
 
 
@@ -175,3 +176,125 @@ def test_classic_style_is_the_default():
     assert 'Style.DEFAULT = "forever"' in style and 'Style.ORDER = { "forever", "amazinghub" }' in style
     assert 'name = "Classic"' in style and 'name = "Modern"' in style
     assert 'Style.ALIASES = { classic = "forever", modern = "amazinghub" }' in style
+
+
+def test_table_sort_flips_and_keeps_the_table_order_until_a_heading_is_clicked():
+    lj = _luajit()
+    lua = lj.LuaRuntime()
+    lua.execute("""
+        local settings = {}
+        AmazingHub = { GetSetting = function(_, k) return settings[k] end, SetSetting = function(_, k, v) settings[k] = v end }
+        function CreateFrame()
+            return { SetAllPoints = function() end, SetScript = function(self, _, fn) self.click = fn end }
+        end
+    """)
+    lua.execute((HUB / "UI" / "TableSort.lua").read_text("utf-8"))
+    out = lua.eval("""(function()
+        local T = AmazingHub.TableSort
+        local function names(l) local o = {} for i, r in ipairs(l) do o[i] = r.name end return table.concat(o, ",") end
+        local function rows() return { { name = "Cora", current = 5 }, { name = "alia", current = 50 },
+            { name = "Bram" }, { name = "Dax", current = 50 } } end
+        local res = {}
+        res[#res + 1] = names(T.Apply("dkp", rows(), T.POINTS))           -- nothing chosen: as given
+        local fs = { text = "", GetParent = function() return {} end, SetText = function(self, t) self.text = t end }
+        local redraws = 0
+        T.Header(fs, "dkp", "current", "CURRENT", function() redraws = redraws + 1 end, true)
+        fs.amzSortButton.click()
+        res[#res + 1] = names(T.Apply("dkp", rows(), T.POINTS))           -- largest first, empty last, ties stable
+        fs.amzSortButton.click()
+        res[#res + 1] = names(T.Apply("dkp", rows(), T.POINTS))           -- flipped
+        T.Toggle("dkp", "name")
+        res[#res + 1] = names(T.Apply("dkp", rows(), T.POINTS))           -- text, case-insensitive
+        T.Header(fs, "dkp", "name", "MEMBER", function() end)
+        res[#res + 1] = tostring(redraws) .. "|" .. fs.text
+        return table.concat(res, " ; ")
+    end)()""")
+    assert out.split(" ; ") == [
+        "Cora,alia,Bram,Dax",
+        "alia,Dax,Cora,Bram",
+        "Cora,alia,Dax,Bram",
+        "alia,Bram,Cora,Dax",
+        "2|MEMBER |TInterface\\BUTTONS\\Arrow-Up-Up:12:12|t",
+    ]
+
+
+def test_wishlist_import_takes_the_bots_export_line():
+    sys.path[:0] = [str(ROOT / "bot"), str(ROOT / "companion")]
+    import sqlite3
+
+    from guildledger_bot.loot import wish_export
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute("CREATE TABLE wishes (guild TEXT, member TEXT, name TEXT, item_id INT, offspec INT, added_at INT)")
+    for i, (item, os_) in enumerate([(19019, 0), (17076, 1), (19019, 0)]):
+        db.execute("INSERT INTO wishes VALUES ('G', 'testa collector', 'Testa Collector', ?, ?, ?)", (item, os_, i))
+    line = wish_export(db, "G", "Testa Collector")
+    assert line == "GLW1:Testa Collector:19019,17076o,19019"
+
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        added, prints, later = {}, {}, {}
+        local mine = { { itemId = 18832 } }
+        AmazingHub = { UI = {}, Colors = {}, Print = function(_, m) prints[#prints + 1] = m end,
+            Compat = { PlayerName = function() return "Testa Collector" end },
+            Wishlist = {
+                GetMyList = function() return mine end,
+                ItemFacts = function(_, id) if id ~= 17076 or #later > 0 then return "Item " .. id, "|Hitem:" .. id .. "|h" end end,
+                AddToWishlist = function(_, id, link, os) added[#added + 1] = id .. (os and "o" or "") .. "=" .. link
+                    mine[#mine + 1] = { itemId = id } end } }
+        C_Timer = { After = function(_, fn) later[#later + 1] = fn end }
+    """)
+    lua.execute((HUB / "UI" / "WishImport.lua").read_text("utf-8"))
+    g = lua.globals()
+    ok, msg = g.AmazingHub.WishImport.Import(line)
+    assert ok is True and "1 new, 0 already" in msg and "rest follows" in msg  # 17076 not cached yet
+    lua.execute("later[1]()")  # the game knows it now
+    assert list(g.added.values()) == ["19019=|Hitem:19019|h", "17076o=|Hitem:17076|h"]
+    ok, msg = g.AmazingHub.WishImport.Import("GLW1:Someone Else:19019")
+    assert ok is False and "Someone Else" in msg
+    ok, msg = g.AmazingHub.WishImport.Import("GLW1:Testa Collector:12x")
+    assert ok is False and "damaged" in msg
+    ok, msg = g.AmazingHub.WishImport.Import("GLW1:Testa-Collector:18832, 19019")  # hyphenated name, spaces
+    assert ok is True and "0 new, 2 already" in msg
+
+
+def test_own_chat_tag_replaces_the_alt_tag_for_everyone_who_reads_it():
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        local settings = {}
+        sent = 0
+        AmazingHub = { UI = {}, Colors = {},
+            GetSetting = function(_, k) return settings[k] end, SetSetting = function(_, k, v) settings[k] = v end,
+            GetPlayerKey = function(_, n) return n end,
+            Compat = { PlayerName = function() return "Testa Collector" end },
+            CommSystem = { BroadcastMyData = function(_, force) if force then sent = sent + 1 end end },
+            db = { members = { ["Sha Rer"] = { chatTag = "|cffff0000Da|Hitem:1|h(mti)|h", chatTagOff = false },
+                               ["Old Hub"] = { name = "Old Hub" },
+                               ["Quiet One"] = { chatTag = "Q", chatTagOff = true } } } }
+    """)
+    lua.execute((HUB / "UI" / "ChatTag.lua").read_text("utf-8"))
+    lua.execute((HUB / "Modules" / "ChatTweaks.lua").read_text("utf-8"))
+    T = lua.globals().AmazingHub.ChatTag
+    assert T.Clean("  [Floy]  ") == "Floy"
+    assert T.Clean("ÄÖÜäöüßéèàçñ€abcdef") == "ÄÖÜäöüßéèàçñ€abc"  # 16 characters, no cut inside a letter
+    assert T.Clean("|cffff0000Da|Hitem:1|h(mti)|h") == "cffff0000Da Hite"  # 16 characters
+    assert T.For("Testa Collector") is None  # nothing chosen: the usual alt tag
+    assert T.Set("Floy", False) is True and lua.eval("sent") == 1
+    assert T.Set("Floy", False) is False and lua.eval("sent") == 1  # unchanged: nothing sent
+    assert T.For("Testa Collector") == "Floy"
+    assert "|" not in T.For("Sha Rer")
+    assert T.For("Old Hub") is None and T.For("Quiet One") is False and T.For("Nobody") is None
+    out = lua.eval("""(function()
+        local CT = AmazingHub.ChatTweaks
+        local long = { level = true, altTag = true }
+        local short = { level = true, altTag = true, altShort = true }
+        local alt = { level = 11, altTag = "alt of Floyd Mainchar", shortTag = "[Floyd Mainchar]" }
+        local function with(own) local i = {} for k, v in pairs(alt) do i[k] = v end i.own = own return i end
+        return table.concat({ CT:_BuildPrefix(with("Floy"), long), CT:_BuildPrefix(with("Floy"), short),
+            CT:_BuildPrefix(with(false), long), CT:_BuildPrefix(with(nil), long),
+            CT:_BuildPrefix(with("Floy"), { level = true, altTag = false }) }, " ; ")
+    end)()""")
+    assert out.split(" ; ") == [
+        "[11] |cff888888(Floy)|r", "[11] |cff888888[Floy]|r", "[11]",
+        "[11] |cff888888(alt of Floyd Mainchar)|r", "[11]",
+    ]

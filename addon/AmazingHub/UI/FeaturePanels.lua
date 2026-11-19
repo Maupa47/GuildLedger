@@ -2368,6 +2368,7 @@ function AmazingHub:RefreshSettingsPanel(content, category)
         end
     end
     yOff = yOff + 26
+    if AmazingHub.ChatTag then yOff = AmazingHub.ChatTag.BuildSettings(content, yOff) end -- Amazing Hub
 
     --------------------------------------------------------------------
     -- MENTIONS & ALERTS (issue #59): what /amazing mentions and /amazing avail notify set.
@@ -4008,6 +4009,11 @@ local function BuildWishlistFrame()
         if AmazingHub.Wishlist then AmazingHub.Wishlist:BroadcastMyWishlist(true) end
         AmazingHub:Print(L["[Wishlist] Sent to the guild."])
     end)
+    if AmazingHub.WishImport then -- Amazing Hub: paste the line from the bot's /wish export
+        local importBtn = UI:CreateButton(f, "Import from Discord", 130, 22)
+        importBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -130, -9) -- title bar, left of the item counter
+        importBtn:SetScript("OnClick", function() AmazingHub.WishImport.ShowPopup() end)
+    end
 
     AmazingHub.WishlistFrame = f
     return f

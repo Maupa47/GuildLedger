@@ -30,8 +30,15 @@ Commands (all optional):
 | `/gl who` | Everyone online with GuildLedger: role, version, how much they shared |
 | `/gl map share off` / `on` | Stop / resume showing your position to guild members on the world map (never in instances or boss fights, never saved) |
 | `/gl map pins off` / `on` | Hide / show other members' dots on your world map |
+| `/gl map near any` / `continent` / `zone` | Show only guild members on your continent / in your zone |
+| `/gl map zone` / `continent` / `world on` / `off`, `/gl map names on` / `off` | On which kinds of map dots appear; names next to the dots |
+| `/gl map share zone` | Only guild members who open the map of *your zone* see you (not on continent or world maps) |
 | `/gl map shape round` / `square`, `/gl map size 6-24`, `/gl map outline on` / `off`, `/gl map reset` | The look of the dots (colours per class: in the hub's Settings) |
 | `/gl link CODE` | Link your characters to your Discord account (see below) |
+| `/gl messages on` / `off` | Show / hide chat messages nobody asked for (off by default; also in the hub's Settings) |
+| `/gl welcome off` / `on` | Login greeting and the guild's message of the day (on by default; also in the hub's Settings) |
+| `/gl map me on` / `off` | Your own dot on the world map (off by default: the game's arrow shows you) |
+| `/gl dev on` / `off` | Developer mode: reports in chat of what GuildLedger sends and receives (missing chat text asked for, lines received from whom, what is still missing). Off by default; also in the hub's Settings |
 
 **Discord link (opt-in):** in your guild's Discord type `/link`; the bot answers with an 8-character code. Type
 that code in game with `/gl link CODE` (or into the box in the hub's Ledger tab). When an officer's collector is
@@ -46,7 +53,8 @@ A guild window with:
 - **Professions**: every member's professions and known recipes, and who can craft an item (`/amazing craft <item>`)
 - **Guild**: calendar, activity, polls
 - **Ledger**: what GuildLedger is doing and the Discord link box
-- **Settings**: every section folds open and closed; *World map* has the map switches and the look of the guild
+- **Settings**: every section folds open and closed; *Chat messages* switches the pack's chat lines on (off by
+  default: the pack stays quiet, only answers to your own commands and clicks show); *World map* has the map switches and the look of the guild
   members' dots: round or square, size, outline, a colour per class
 - **Raids, Loot, Trials**: off by default; tick them in *Settings → Modules* if your guild uses them
 

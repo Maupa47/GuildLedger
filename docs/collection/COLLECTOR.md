@@ -56,6 +56,10 @@ second window says "already running" and closes.
 
 ## Questions
 
+- **Loot data:** the companion also sends Amazing Hub's DKP/points, loot history, wishlists and raid attendance
+  (from `AmazingHub.lua` next to `GuildLedger.lua`) so the bot can show them in Discord (`/dkp`, `/loot`,
+  `/wishlist`). Nothing to set up. To send none: in `config.toml` add `[loot]` and `enabled = false`.
+
 - **Officer chat:** off by default. `/gl officer on` also collects officer chat; ask the admin first (it ends
   up in the officer log channel).
 - **During boss fights** the game hides chat from addons. Lines written then are logged as "message written,

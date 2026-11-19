@@ -51,6 +51,18 @@ every_seconds = 30
 # since = 1794355200
 
 
+[loot]
+# Optional. Amazing Hub's loot data from the collectors (DKP/points, loot history, wishlists, raid attendance).
+# FILL IN to switch posting on: webhook URL of a #guild-loot channel (Edit Channel -> Integrations -> Webhooks ->
+# New Webhook -> Copy Webhook URL). The bot posts there: items handed out, points changes, and one summary per
+# raid night (bosses, attendance, loot, standings). Empty = archived and /dkp /loot /wishlist work, no posts.
+webhook = ""
+# Wait this long before posting, so every collector's copy is merged first (seconds).
+hold_seconds = 600
+# How many players the standings under a raid summary show.
+standings_top = 10
+
+
 [ops]
 # Optional monitoring. Webhook URL of a private #gl-ops channel: daily report (chat lines, share with text,
 # gaps, uploads per collector) and warnings (no upload for alert_after_hours, rejected uploads). Empty = off.

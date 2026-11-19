@@ -170,3 +170,116 @@ def test_sharing_is_on_by_default_and_an_old_automatic_off_does_not_count():
     guild.g(SHARER).slash("map share off")
     guild.g(SHARER).reload()  # the choice is remembered
     assert "not shared" in guild.g(SHARER).slash("status")
+
+
+# ── When and where (0.5.3) ──────────────────────────────────────────────────────────────────────────
+# Stub world: Elwynn Forest 1429 (zone) in Eastern Kingdoms 1415 (continent), Durotar 1411 in Kalimdor 1414,
+# both under Azeroth 947 (world).
+
+def _guild_with_viewer_on(view_map, sharer_at=1429):
+    guild = map_guild()
+    view = guild.g(VIEWER)
+    view.W.addMember(SHARER, "Player-1-SHARER")
+    guild.g(SHARER).L.execute(f"W.where.map = {sharer_at}")
+    view.L.execute(f"WorldMapFrame.map = {view_map}; WorldMapFrame.open = true")
+    return guild, view
+
+
+def test_near_me_filters_by_zone_and_continent():
+    # viewer stands in Elwynn (1429) and looks at the world map; the sharer is in Durotar, on another continent
+    for near, shown in (("any", 1), ("continent", 0), ("zone", 0)):
+        guild, view = _guild_with_viewer_on(947, sharer_at=1411)
+        view.slash(f"map near {near}")
+        guild.run(15)
+        assert f"Shown right now: {shown}" in view.slash("status"), near
+    # same zone: shown with every choice
+    for near in ("any", "continent", "zone"):
+        guild, view = _guild_with_viewer_on(947, sharer_at=1429)
+        view.slash(f"map near {near}")
+        guild.run(15)
+        assert "Shown right now: 1" in view.slash("status"), near
+
+
+def test_dots_only_on_the_chosen_kinds_of_map():
+    guild, view = _guild_with_viewer_on(1415)  # a continent map
+    view.slash("map continent off")
+    guild.run(30)
+    assert sent(guild, VIEWER, "V") == [] and "Shown right now: 0" in view.slash("status")  # nothing asked
+    view.L.execute("WorldMapFrame.map = 1429")  # the zone map: shown
+    guild.run(15)
+    assert "Shown right now: 1" in view.slash("status")
+    m = view.L.globals().GuildLedgerAPI.GetMap()
+    assert m.views.continent is False and m.views.zone is True and m.views.world is True
+    view.slash("map continent on")
+    assert view.L.globals().GuildLedgerAPI.GetMap().views.continent is True
+
+
+def test_names_next_to_the_dots():
+    guild, view = _guild_with_viewer_on(1429)
+    guild.run(15)
+    pin = shown_pin(view)
+    assert pin.tag is False or not pin.tag.shown  # off by default: name only in the tooltip
+    view.slash("map names on")
+    guild.run(2)
+    pin = shown_pin(view)
+    assert pin.tag.shown and pin.tag.text.text == SHARER and pin.tag.scale == 1
+
+
+def test_share_only_with_viewers_of_my_zone():
+    guild, view = _guild_with_viewer_on(1415)  # the viewer looks at the continent
+    assert "only with guild members who look at the map of your zone" in guild.g(SHARER).slash("map share zone")
+    guild.run(30)
+    assert sent(guild, SHARER, "P") == []
+    view.L.execute("WorldMapFrame.map = 1429")  # now at the sharer's zone
+    guild.run(30)
+    assert len(sent(guild, SHARER, "P")) >= 1
+    assert guild.g(SHARER).L.globals().GuildLedgerAPI.GetMap().shareScope == "zone"
+    guild.g(SHARER).slash("map share on")  # back to everyone
+    assert guild.g(SHARER).L.globals().GuildLedgerAPI.GetMap().shareScope == "all"
+
+
+def test_reset_puts_the_when_and_where_back():
+    guild, view = _guild_with_viewer_on(1429)
+    for cmd in ("map near zone", "map world off", "map names on", "map share zone"):
+        view.slash(cmd)
+    view.slash("map reset")
+    m = view.L.globals().GuildLedgerAPI.GetMap()
+    assert (m.near, m.names, m.shareScope, m.views.world) == ("any", False, "all", True)
+
+
+def shown(game):
+    return [p for p in game.W.ns.Map.Pins().values() if p.shown]
+
+
+def test_own_dot_is_hidden_by_default_and_can_be_switched_on():
+    guild = map_guild()
+    view = guild.g(VIEWER)
+    view.L.execute("WorldMapFrame.open = true")
+    guild.run(15)
+    them = f"{SHARER}-Forever"  # no member list loaded here: shown by the sender name
+    assert [p.info.name for p in shown(view)] == [them]  # the sharer, never myself
+    view.slash("map me on")
+    guild.run(2)
+    names = sorted(p.info.name for p in shown(view))
+    assert names == sorted([them, VIEWER])  # my own dot, from my own position
+    me = [p for p in shown(view) if p.info.name == VIEWER][0]
+    assert me.info.where == "you"
+    assert view.L.globals().GuildLedgerAPI.GetMap().self is True
+    view.slash("map me off")
+    guild.run(2)
+    assert [p.info.name for p in shown(view)] == [them]
+    assert view.errors == 0, view.last_error()
+
+
+def test_my_own_position_message_with_a_hyphenated_surname_is_not_a_dot():
+    guild = map_guild()
+    view = guild.g(VIEWER)
+    view.L.execute("WorldMapFrame.open = true")
+    guild.run(2)
+    me = "Vie-Wer-Forever"  # how the game may spell "Vie Wer" (a surname) in addon messages
+    view.W.fire("CHAT_MSG_ADDON", "GuildLedger", "P\t1429\t5000\t5000", "GUILD", me, "", 0, 0, me, 0)
+    guild.run(2)
+    assert view.W.ns.Map.Positions()[me] is None
+    comms = view.W.ns.Comms
+    assert comms.SameName("Sha-Rer-Forever", "Sha Rer") and comms.SameName("Sha Rer", "Sha Rer")
+    assert not comms.SameName("Sha Rerx-Forever", "Sha Rer") and not comms.SameName("Sha", "Sha Rer")

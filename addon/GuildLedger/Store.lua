@@ -5,7 +5,7 @@ local _, ns = ...
 local S = {}
 ns.Store = S
 
-S.VERSION = "0.5.1"
+S.VERSION = "0.5.4"
 S.SCHEMA = 3
 S.MAX_LINKS = 500 -- collector: link requests kept until the companion uploads them (ring buffer)
 S.MEMBER_MAX = 2000 -- member role: lines kept for collectors (CLAUDE.md 5.7)

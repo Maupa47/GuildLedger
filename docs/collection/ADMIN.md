@@ -41,8 +41,25 @@ into git, chat or screenshots.
    `/roles rank rank:<guild rank> role:<Discord role>` for each rank, `/roles show` to check, `/roles sync`
    to apply now.
 
-Slash commands: `/link`, `/unlink`, `/chars`, `/whois`, `/seen`, `/joined`, `/activity`; officers (Manage
-Roles): `/linkstatus`, `/inactive`, `/roles`.
+Slash commands: `/link`, `/unlink`, `/chars`, `/whois`, `/seen`, `/joined`, `/activity`, `/dkp`, `/loot`,
+`/wishlist`, `/wish add|remove|export|list`; officers (Manage Roles): `/linkstatus`, `/inactive`, `/roles`, and
+`/wish` for anyone's characters (members only for their own linked ones).
+
+### Loot channel (optional, Amazing Hub's DKP, loot, wishlists, raids)
+
+The collectors' companions also send Amazing Hub's loot data (from `AmazingHub.lua`, no setting needed on their
+side). Without a loot channel it is only archived and the commands above work. To get posts:
+1. Create a channel `#guild-loot` (officers, or the whole guild if you want the standings public), then
+   *Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL*.
+2. In `bot\config.toml` under `[loot]`: `webhook = "<that URL>"`. Then `.\tools\deploy.ps1 -UpdateConfig`.
+3. The bot then posts there: each item handed out (`🎁 Name got [Item] (Raid)`), each points change (one line per
+   award, e.g. `+10 Boss kill: Ragnaros by <officer>: <names>`), and after every raid night one summary (bosses
+   killed, attendance, loot, top 10 standings). Rows wait `hold_seconds` (10 minutes) so every collector's copy is
+   merged first. Rows from before the bot's first start are archived, not posted.
+
+The data exists only if officers use Amazing Hub's loot tools in game (Settings → Modules: Raids, Loot; Settings →
+Loot → loot system "DKP / Points" for points). `/wish add` stores wishes in the bot; `/wish export` gives the
+player a line to paste into the game.
 
 ## 3. Adding an officer as a collector
 

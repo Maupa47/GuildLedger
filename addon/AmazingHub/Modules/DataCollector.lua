@@ -718,6 +718,10 @@ function DataCollector:GetBroadcastData()
         absent = myData.absent,
         stats = myData.stats,
         addonVersion = AmazingHub.VERSION,
+        -- Amazing Hub: the tag others show in front of my guild lines (UI/ChatTag.lua); always sent, so
+        -- clearing it reaches the receivers' key-by-key merge too
+        chatTag = AmazingHub.ChatTag and (AmazingHub.ChatTag.Mine()) or nil,
+        chatTagOff = AmazingHub.ChatTag and AmazingHub.ChatTag.Off(),
     }
 
     -- Serialize gear with just essential info

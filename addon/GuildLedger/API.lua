@@ -56,6 +56,18 @@ function API.SetMapLook(what, a, r, g, b)
     return ns.Map.SetLook(what, a, r, g, b) and true or false
 end
 
+-- Chat messages nobody asked for right now (same as /gl messages on|off). Default off.
+function API.GetMessages() return ready() and ns.Store.Opts().messages == true or false end
+function API.SetMessages(on) if ready() then ns.Store.Opts().messages = on and true or false end end
+
+-- Login greeting and the guild's message of the day (same as /gl welcome on|off). Default on.
+function API.GetWelcome() return ready() and ns.Store.Opts().welcome ~= false or false end
+function API.SetWelcome(on) if ready() then ns.Store.Opts().welcome = on and true or false end end
+
+-- Developer mode: readable reports of what is sent and received (same as /gl dev on|off). Default off.
+function API.GetDevMode() return ready() and ns.Store.Opts().dev == true or false end
+function API.SetDevMode(on) if ready() then ns.Store.Opts().dev = on and true or false end end
+
 -- { requested, code?, sentAt?, acked?, expired? }
 function API.GetLink()
     if not ready() or not ns.Link then return { requested = false } end

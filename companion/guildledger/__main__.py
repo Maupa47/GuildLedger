@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import config as config_mod
 from . import discord
+from . import loot
 from .direct import Poster
 from .export import export
 from .lock import InstanceLock
@@ -33,8 +34,21 @@ def _open(cfg: config_mod.Config, db: str | None) -> Spool:
     return Spool(db or cfg.db_path)
 
 
+def import_hub_file(spool: Spool, path: Path, collector: str, data: dict | None = None) -> loot.LootResult:
+    """Amazing Hub's AmazingHub.lua: points, loot history, wishlists, raids (shared/schema.md 7)."""
+    if data is None:
+        data = parse_file(str(path))
+    seen = int(path.stat().st_mtime)
+    res = loot.import_hub(spool.db, data, spool.guild_names(), collector, seen)
+    if res.changed:
+        log.info("imported %s: %s", path.name, res.summary())
+    return res
+
+
 def import_file(spool: Spool, cfg: config_mod.Config, path: Path, collector: str, do_export: bool = True):
     data = parse_file(str(path))
+    if "AmazingHubDB" in data and "GuildLedgerDB" not in data:
+        return import_hub_file(spool, path, collector, data)
     res = spool.import_sv(data, collector)
     log.info("imported %s: %s", path.name, res.summary())
     if do_export and res.min_ts is not None:
@@ -187,6 +201,23 @@ def _signature(path: Path):
     return (st.st_mtime_ns, st.st_size)
 
 
+def _import_hub_if_changed(spool: Spool, cfg: config_mod.Config, hub: Path | None, hub_seen):
+    """Import AmazingHub.lua when it changed (WoW writes it together with GuildLedger.lua). Never fatal."""
+    if hub is None:
+        return hub_seen
+    sig = _signature(hub)
+    if sig is None or sig == hub_seen:
+        return hub_seen
+    time.sleep(cfg.stable_seconds)
+    if _signature(hub) != sig:
+        return hub_seen
+    try:
+        import_hub_file(spool, hub, cfg.collector)
+    except (SVParseError, OSError, UnicodeError) as e:
+        log.warning("could not read %s (%s); loot data skipped until it changes", hub.name, e)
+    return sig
+
+
 def cmd_watch(args, cfg) -> int:
     if not cfg.sv_path:
         log.error("sv_path is not set in the config")
@@ -198,6 +229,8 @@ def cmd_watch(args, cfg) -> int:
         return 1
     log.info("watching %s (collector %s, mode %s)", path, cfg.collector, cfg.mode)
     seen = None
+    hub = cfg.hub_path if cfg.loot else None
+    hub_seen = None
     direct = not args.no_post  # post (mode "direct") or upload (mode "upload")
     transport = getattr(args, "transport", None)
     next_post = 0.0
@@ -221,12 +254,16 @@ def cmd_watch(args, cfg) -> int:
                             else:
                                 log.error("giving up on this version of %s: %s", path.name, e)
                     seen = sig
+                    hub_seen = _import_hub_if_changed(spool, cfg, hub, hub_seen)
                     if direct:
                         send_now(spool, cfg, args.post_backlog, transport)
                         next_post = time.monotonic() + POST_EVERY
                     if args.once:
                         return 0
                     continue
+            elif hub is not None and _signature(hub) not in (None, hub_seen):
+                hub_seen = _import_hub_if_changed(spool, cfg, hub, hub_seen)
+                continue
             elif sig is None and args.once:
                 log.error("file not found: %s", path)
                 return 1

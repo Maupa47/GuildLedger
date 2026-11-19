@@ -120,7 +120,7 @@ dropped), held during a boss-fight lock or a throttle. Every message ≤ 255 byt
 |---|---|---|---|---|
 | `H` hello | everyone | 20 s after login, then every 15 min; once per answered `W` | NORMAL | 1 000 / 900 s ≈ 1.1 msg/s (67/min) |
 | `W` who | whoever types `/gl who` | at most once per 60 s per asker | NORMAL | 1 per asker; answers: each player at most one `H` per 5 min, spread over 30 s → ≤ 1 000 `H` in 30 s (≈ 33/s) once per 5 min |
-| `N` need | collectors | ~30 s after their history sync, on a member's first hello (≥ 2 min apart), every 15 min while gaps remain; ≤ 3 messages per round | NORMAL | with 5 collectors: ≤ 15 per 2 min |
+| `N` need | collectors | ~30 s after their history sync, on a member's first hello (≥ 2 min apart), every 15 min while gaps remain, 65 s after a round that filled lines while gaps remain (stops after a round that filled none); ≤ 3 messages per round | NORMAL | with 5 collectors: ≤ 15 per 2 min |
 | `T` line | members (and collectors) holding asked lines | after a `N`, 2–8 s delay, ≤ 150 lines per round, 1–3 messages per line; others back off while one answers | BULK | ≤ 450 per round, paced 1/s by the answering client |
 | `G` got | collectors | every 5 s while lines arrived, ≤ 6 ids per message | NORMAL | ≤ 1 per 6 relayed lines |
 | `V` map watch | players with the world map open (pins on) | on opening/changing the map, then every 30 s while open | HIGH | 1 per 30 s per viewer; 200 viewers ≈ 7/s |
@@ -143,3 +143,45 @@ linked_at, via_collector)`, `link_blocks(discord_user_id, guild, guid)`, `link_c
 guid, name, tag, code, via_collector, created_at, status open|confirmed|rejected|expired, notified 0|1|2)`,
 `link_user_state(discord_user_id, out_since)`. Only a confirmation by the Discord user creates a `links` row; "Not me"
 adds a block.
+
+## 7. Loot outside the game (Amazing Hub's data, 2026-11-18)
+
+Source: Amazing Hub's own SavedVariables file `AmazingHub.lua` (global `AmazingHubDB`, written by the game together
+with `GuildLedger.lua`). The companion reads it from the same folder as `sv_path` (override: `[loot] hub_sv_path`;
+off: `[loot] enabled = false`). GuildLedger's own rows and `schema` are unchanged; nothing in the addon changes.
+
+**Where the hub keeps it** (`AmazingHubDB["<Guild>-<Realm>"]`; keys starting with `_` and `_noguild-…` are skipped;
+the guild is matched to GuildLedger's club by name, or the only guild in the spool):
+
+| Hub data | Fields read |
+|---|---|
+| `points` (guild pool) and `cores[<core>].points` (a raid core's own pool) | `mode` (dkp/epgp/council); `standings[<key>] = {name, class, current, earned, spent}`; `log[i] = {ts, key, name, delta, reason, author, kind}` (newest first, ≤ 500; the hub's own `op` IDs are not kept in the log) |
+| `lootHistory[i]` (master-loot awards, newest first, ≤ 500) | `itemLink, itemName, quality, player, playerKey, timestamp, raid` (item ID from the link) |
+| `guildWishlists[<lower name>]` (every member's synced list) | `name, class, wishlist[i] = {itemId, itemLink, order, isOffspec}` |
+| `raidTracker.sessions[<startTime>]` | `instanceID, name, size, startTime, endTime, isGuildRaid, encounters[i] = {id, name, startTime, endTime, success}, players[<key>] = true` |
+
+**Upload rows** (same file format as section 4, own files `…-loot.jsonl.gz`, counted in `rowcount`):
+
+| `type` | Keys | ID / merge rule |
+|---|---|---|
+| `points` | `id, pool ("" = guild, else core name), t, member, name, delta, kind, reason, by` | `id = pool\|t\|member\|delta\|kind\|author\|sha1(reason)[:8]` (identical on every officer's client: the hub syncs the entries); insert-if-absent |
+| `standing` | `pool, member, name, class, cur, earned, spent, mode, seen` | key `(pool, member)`; a row with a newer `seen` (mtime of the collector's AmazingHub.lua) replaces it |
+| `loot` | `id, t, member, name, item, item_name, link, q, raid` | `id = member\|item\|floor(t/300)`; also the same member+item within ±300 s is the same award (each officer's client stamps it on arrival) |
+| `wishlist` | `member, name, class, items: [{item, name, ord, off}], seen` | key `member`; newer `seen` replaces the whole list |
+| `raid` | `id, inst, name, start, end, size, guild_raid, bosses: [{id, name, ok, t}], players: [key…]` | `id = inst\|start`; a raid with the same instance and name starting within ±2 h is the same night: bosses and players are united, `end` grows |
+
+`member` is the character name in lower case (whole name, never split). The companion re-uploads a standing or
+wishlist only when its values changed, a raid when it grew. Since 0.5.4 the bot ignores row types it does not know
+(counted, not rejected); **older bots reject a loot file** (only that file: loot travels in files of its own), so
+deploy the bot first.
+
+**Tables** (spool and archive, created by `guildledger.loot.ensure`): `points(guild, id, ts_utc, pool, member, name,
+delta, kind, reason, author, first_collector, uploaded, posted)`, `standings(guild, pool, member, name, class,
+current, earned, spent, mode, seen_at, uploaded)`, `loot(guild, id, ts_utc, member, name, item_id, item_name,
+item_link, quality, raid, first_collector, uploaded, posted)`, `wishlists(guild, member, name, class, items JSON,
+seen_at, uploaded)`, `raids(guild, id, instance_id, name, start_ts, end_ts, size, guild_raid, bosses JSON, players
+JSON, first_collector, uploaded, posted)`; bot only in use: `wishes(guild, member, name, item_id, item_name, offspec,
+added_by, added_at)` — wishes entered in Discord.
+
+**Discord → game wishlist string** (`/wish export`): `GLW1:<character>:<itemID>[o],<itemID>[o],…` (`o` = off spec;
+oldest first). The game side needs an import that accepts this line (Amazing Hub has no wishlist import yet).

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+from . import loot
 from .svparse import as_dict, as_list
 
 log = logging.getLogger(__name__)
@@ -103,6 +104,7 @@ class Spool:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(_DDL)
+        loot.ensure(self.db)  # Amazing Hub's loot data (shared/schema.md 7)
         self._migrate()
 
     def _migrate(self) -> None:

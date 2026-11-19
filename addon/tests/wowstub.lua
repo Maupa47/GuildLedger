@@ -71,6 +71,9 @@ local function widget(parent)
         if k == "Hide" then return function(self) self.shown = false end end
         if k == "IsShown" then return function(self) return self.shown end end
         if k == "CreateTexture" then return function(self) return widget(self) end end
+        if k == "CreateFontString" then return function(self) return widget(self) end end
+        if k == "SetText" then return function(self, t) self.text = t end end
+        if k == "SetScale" then return function(self, v) self.scale = v end end
         if k == "SetPoint" then return function(self, ...) self.points = { ... } end end
         if k == "SetScript" then return function(self, what, fn) self.scripts[what] = fn end end
         if k == "SetColorTexture" then
@@ -84,6 +87,7 @@ local function widget(parent)
     end })
 end
 W.widget = widget
+GameFontHighlightSmall = {} -- a font object (only passed to SetFontObject)
 
 function CreateFrame(_, _, parent)
     if parent then return widget(parent) end
@@ -97,7 +101,8 @@ end
 
 -- World map: zone 1429 inside continent 1415; W.where = { map, x, y } is the player's position.
 W.mapParents = { [1429] = 1415, [1411] = 1414, [1415] = 947, [1414] = 947 }
-W.mapRects = { ["1429>1415"] = { 0.4, 0.6, 0.6, 0.8 } }
+W.mapRects = { ["1429>1415"] = { 0.4, 0.6, 0.6, 0.8 }, ["1429>947"] = { 0.6, 0.7, 0.6, 0.7 },
+    ["1411>947"] = { 0.1, 0.2, 0.4, 0.5 } }
 W.where = { map = 1429, x = 0.5, y = 0.25 }
 W.instance = false
 C_Map = {}
@@ -106,7 +111,11 @@ function C_Map.GetPlayerMapPosition(map)
     if not W.where or W.where.map ~= map then return nil end
     return { GetXY = function() return W.where.x, W.where.y end }
 end
-function C_Map.GetMapInfo(id) return { mapID = id, name = "Map " .. id, parentMapID = W.mapParents[id] or 0 } end
+-- Enum.UIMapType: 1 World (Azeroth 947), 2 Continent (1415 Eastern Kingdoms, 1414 Kalimdor), 3 Zone (1429, 1411)
+W.mapTypes = { [947] = 1, [1415] = 2, [1414] = 2, [1429] = 3, [1411] = 3 }
+function C_Map.GetMapInfo(id)
+    return { mapID = id, name = "Map " .. id, parentMapID = W.mapParents[id] or 0, mapType = W.mapTypes[id] or 3 }
+end
 function C_Map.GetMapRectOnMap(id, top)
     local r = W.mapRects[id .. ">" .. top]
     if r then return r[1], r[2], r[3], r[4] end
@@ -414,8 +423,8 @@ function W.logout()
     W.rosterLoaded = false
 end
 
-function W.login()
-    W.fire("PLAYER_ENTERING_WORLD", true, false)
+function W.login(reload)
+    W.fire("PLAYER_ENTERING_WORLD", not reload, reload and true or false) -- isInitialLogin, isReloadingUi
     W.fire("INITIAL_CLUBS_LOADED")
 end
 

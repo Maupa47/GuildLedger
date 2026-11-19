@@ -90,7 +90,7 @@ def test_config_example_is_valid_and_guides(tmp_path):
 
 
 def test_config_old_top_level_layout_still_works(tmp_path):
-    cfg = load(write_config(tmp_path, tmp_path / "x.lua"))  # mode/timezone at the top (before 0.5.1)
+    cfg = load(write_config(tmp_path, tmp_path / "x.lua"))  # mode/timezone at the top (before 0.5.2)
     assert cfg.mode == "direct" and cfg.timezone == "UTC"
 
 
