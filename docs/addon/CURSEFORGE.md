@@ -96,6 +96,14 @@ Made by **Maupa**. Amazing Hub is based on the MIT-licensed guild addon *GuildOS
 Licence: MIT (see `LICENSE.txt` and `AmazingHub/THIRD_PARTY.md`).
 ```
 
+## Changelog for 0.6.0
+
+```
+- Settings → Collector (officers): one switch, "I am a collector (I run the GuildLedger companion on this PC)",
+  with a "Reload now" button after a change. Replaces typing /gl collector on|off. Players change nothing.
+- Everything from 0.5.4 (below) is included.
+```
+
 ## Changelog for 0.5.4
 
 ```
