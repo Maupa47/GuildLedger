@@ -25,6 +25,15 @@ def make_wow(root, accounts=("ACC1",), flavor="_forever_"):
 
 # ------------------------------------------------------------------------------------------- detect
 
+@pytest.fixture(autouse=True)
+def no_real_wow(monkeypatch, tmp_path):
+    """The search looks only at the test's folders, never at a WoW installed on this machine (its drives,
+    the Windows registry, the home folder)."""
+    monkeypatch.setattr(detect, "_registry_roots", lambda: [])
+    monkeypatch.setattr(detect.string, "ascii_uppercase", "")  # Windows: no drive letters to scan
+    monkeypatch.setattr(detect.Path, "home", classmethod(lambda cls: tmp_path / "no-home"))
+
+
 def test_finds_every_account_of_a_wow_folder(tmp_path):
     wow, files = make_wow(tmp_path, ("ACC1", "12345678#1"))
     (wow / "_forever_" / "WTF" / "Account" / "ACC1" / "SavedVariables" / "GuildLedger.lua.bak").write_text("x")
