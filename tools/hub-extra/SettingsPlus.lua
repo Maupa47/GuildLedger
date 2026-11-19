@@ -240,6 +240,54 @@ function Plus.BuildMessages(content, y, header)
     return y
 end
 
+----------------------------------------------------------------------
+-- Collector section (0.6.0): the officer's role switch (/gl collector on|off), saved for the whole WoW
+-- account. Takes effect after /reload; the button does that.
+----------------------------------------------------------------------
+function Plus.BuildCollector(content, y, header)
+    local a = api()
+    if not (a and a.GetCollector and a.SetCollector) then return y end
+    local h = header("COLLECTOR (OFFICERS)")
+    h:SetPoint("TOPLEFT", 0, -y)
+    y = y + 26
+    local function hint(text)
+        local fs = UI:CreateText(content, text, 10, C.silver.r, C.silver.g, C.silver.b)
+        fs:SetPoint("TOPLEFT", 34, -y)
+        fs:SetJustifyH("LEFT")
+        fs:SetWidth(math.max(100, (content:GetWidth() or 400) - 58))
+        local hgt = fs.GetStringHeight and fs:GetStringHeight() or 0
+        if type(hgt) ~= "number" or hgt < 10 then hgt = 13 end
+        y = y + hgt + 12
+        return fs
+    end
+    local want, active = call(a.GetCollector)
+    local box = UI:CreateCheckbox(content, "I am a collector (I run the GuildLedger companion on this PC)", 18)
+    box:SetPoint("TOPLEFT", 4, -y)
+    box.checkbox:SetChecked(want and true or false)
+    y = y + 28
+    hint("Only for officers the guild's GuildLedger admin has set up. On: also reads the guild chat history,"
+        .. " tracks joins, leaves and kicks, and asks members for lines it missed. Counts for every character"
+        .. " on this WoW account.")
+    local reload = UI:CreateButton(content, "Reload now", 110, 22)
+    reload:SetPoint("TOPLEFT", 34, -y)
+    reload:SetScript("OnClick", function() if ReloadUI then ReloadUI() end end)
+    local note = UI:CreateText(content, "The change takes effect after a reload.", 10, C.silver.r, C.silver.g,
+        C.silver.b)
+    note:SetPoint("LEFT", reload, "RIGHT", 10, 0)
+    y = y + 30
+    local function pending(w) -- the button only while the switch differs from the running role
+        local show = (w and true or false) ~= (active and true or false)
+        if show then reload:Show() note:Show() else reload:Hide() note:Hide() end
+    end
+    pending(want)
+    box.checkbox.onChanged = function(_, on)
+        on = on and true or false
+        call(a.SetCollector, on)
+        pending(on)
+    end
+    return y
+end
+
 -- Builds the section at `y`; returns the new y. `header(text)` makes a recorded section heading.
 function Plus.BuildMap(content, y, header)
     local a = api()
@@ -504,7 +552,8 @@ function AmazingHub:RefreshSettingsPanel(content, category)
             local function header(text) return record(UI, content, text, 12) end
             local y = (content:GetHeight() or 0) + 12
             y = Plus.BuildMessages(content, y, header) + 4
-            y = Plus.BuildMap(content, y, header)
+            y = Plus.BuildMap(content, y, header) + 4
+            y = Plus.BuildCollector(content, y, header)
             content:SetHeight(math.max(1, y))
         end)
         if not okMap and AmazingHub.Debug then AmazingHub:Debug("World map settings: " .. tostring(errMap)) end

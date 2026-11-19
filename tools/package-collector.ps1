@@ -7,10 +7,9 @@
       AmazingHub\   (built by tools\rebrand-hub.py, without its test scripts; THIRD_PARTY.md)
       No programs, no settings, no data.
 
-  GuildLedger-collector-<v>.zip        for an officer who collects (docs\collection\COLLECTOR.md); never public:
+  GuildLedger-collector-<v>.zip        for an officer who collects (companion\COLLECTOR.md); for setting one up by hand:
       GuildLedger\, AmazingHub\   the same addon folders
-      companion\                  the program (code only), starters, config.example.toml (no secrets)
-      COLLECTOR.md                the officer's step-by-step guide
+      companion\                  the program (code only), starters, config.example.toml, COLLECTOR.md (no secrets)
       Send the officer this zip, and separately and privately their own #gl-ingest webhook URL.
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\tools\package-collector.ps1
@@ -68,10 +67,9 @@ $compDst = Join-Path $stage "companion"
 New-Item -ItemType Directory -Force (Join-Path $compDst "guildledger") | Out-Null
 Get-ChildItem (Join-Path $root "companion\guildledger") -File -Filter *.py |
     Copy-Item -Destination (Join-Path $compDst "guildledger")
-foreach ($f in "start-companion.cmd", "autostart-on.cmd", "autostart-off.cmd", "config.example.toml") {
+foreach ($f in "start-companion.cmd", "autostart-on.cmd", "autostart-off.cmd", "config.example.toml", "COLLECTOR.md") {
     Copy-Item (Join-Path $root "companion\$f") $compDst
 }
-Copy-Item (Join-Path $root "docs\collection\COLLECTOR.md") $stage
 
 $collZip = Join-Path $dist "GuildLedger-collector-$version.zip"
 New-Zip $collZip @(Get-ChildItem $stage | ForEach-Object FullName)

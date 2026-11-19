@@ -6,20 +6,34 @@
     python -m guildledger stats
     python -m guildledger post [--post-backlog]      (mode = "direct")
     python -m guildledger upload                       (mode = "upload")
+    python -m guildledger update                       (officer folder: install the newest companion)
+    python -m guildledger package [--out dist]         (admin: build the public update package)
+
+Without sv_path in the config, watch finds every GuildLedger.lua itself (detect.py): all WoW accounts on this PC.
 """
 
 from __future__ import annotations
 
 import argparse
+import gzip
+import hashlib
+import json
 import logging
+import os
+import subprocess
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
+from . import __version__
 from . import config as config_mod
+from . import detect
 from . import discord
 from . import loot
+from . import package as package_mod
+from . import update as update_mod
+from . import upload as upload_mod
 from .direct import Poster
 from .export import export
 from .lock import InstanceLock
@@ -218,56 +232,203 @@ def _import_hub_if_changed(spool: Spool, cfg: config_mod.Config, hub: Path | Non
     return sig
 
 
+REDETECT_EVERY = 60  # s: look again for data files (a first /reload, an alt on a second WoW account)
+UPDATE_EVERY = 6 * 3600  # s: while running, only tell that an update exists (it installs at the next start)
+
+
+def _load_state(cfg: config_mod.Config) -> dict:
+    try:
+        data = json.loads(cfg.state_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_state(cfg: config_mod.Config, state: dict) -> None:
+    try:
+        cfg.state_path.write_text(json.dumps(state, indent=1), encoding="utf-8")
+    except OSError as e:
+        log.debug("could not save %s: %s", cfg.state_path.name, e)
+
+
+def _targets(cfg: config_mod.Config, state: dict) -> list[Path]:
+    """The data files to watch: the one from the config, else every GuildLedger.lua that can be found."""
+    if cfg.sv_path:
+        return [cfg.sv_path]
+    extra = [Path(p) for p in (cfg.wow_dir, state.get("wow_dir")) if p]
+    return detect.find_sv_files(extra)
+
+
+def _ask_wow_dir(cfg: config_mod.Config, state: dict) -> None:
+    """Nothing found in the usual places: ask once where WoW is (only in a window somebody can type in)."""
+    if state.get("wow_dir_asked") or not sys.stdin or not sys.stdin.isatty():
+        return
+    state["wow_dir_asked"] = True
+    print("\nI could not find your World of Warcraft folder in the usual places.")
+    print(r"Paste its path here (for example D:\Spiele\World of Warcraft) and press Enter,")
+    print("or just press Enter if GuildLedger has never run in the game on this PC yet:")
+    try:
+        answer = input("> ").strip().strip('"').strip("'")
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    if answer:
+        if Path(answer).is_dir():
+            state["wow_dir"] = answer
+        else:
+            print("That folder does not exist; I keep looking in the usual places.")
+    _save_state(cfg, state)
+
+
+def _say_hello(cfg: config_mod.Config, state: dict, transport=None) -> None:
+    """First start in upload mode: an empty upload proves the personal link works; the bot reports it."""
+    key = hashlib.sha256(cfg.ingest_webhook.encode("utf-8")).hexdigest()[:16]
+    if cfg.mode != "upload" or not cfg.ingest_webhook or state.get("hello") == key:
+        return
+    data = gzip.compress(b"", mtime=0)
+    try:
+        kw = {"transport": transport} if transport else {}
+        discord.Webhook(cfg.ingest_webhook, "ingest", **kw).post_file(
+            upload_mod.describe(cfg.collector, 0, data), "gl-hello.jsonl.gz", data)
+    except discord.WebhookError as e:
+        log.error("test upload failed: %s. Check the upload link in config.toml, or ask the admin for a new"
+                  " collector package.", e)
+        return
+    log.info("test upload OK: Discord accepted your personal upload link")
+    state["hello"] = key
+    _save_state(cfg, state)
+
+
+def _self_update(cfg: config_mod.Config, args) -> int | None:
+    """Officer folder only: install a newer companion and start it. Returns its exit code, else None."""
+    if args.once or not cfg.update_auto or os.environ.get("GUILDLEDGER_NO_UPDATE"):
+        return None
+    root = update_mod.install_root()
+    if root is None:
+        return None
+    try:
+        version = update_mod.update(root)
+    except update_mod.UpdateError as e:
+        log.info("update check skipped (%s)", e)
+        return None
+    if version is None:
+        return None
+    log.info("updated the companion %s -> %s (your settings were not touched); restarting",
+             __version__, version)
+    env = dict(os.environ, GUILDLEDGER_NO_UPDATE="1")  # the new copy must not loop
+    return subprocess.call([sys.executable, "-m", "guildledger", *sys.argv[1:]], cwd=str(root), env=env)
+
+
+def _import_changed(spool: Spool, cfg: config_mod.Config, path: Path) -> None:
+    for attempt in (1, 2):
+        try:
+            import_file(spool, cfg, path, cfg.collector)
+            return
+        except (SVParseError, SchemaError, OSError, UnicodeError) as e:
+            if attempt == 1:
+                log.warning("could not read %s (%s); retrying once", path.name, e)
+                time.sleep(cfg.stable_seconds)
+            else:
+                log.error("giving up on this version of %s: %s", path.name, e)
+
+
 def cmd_watch(args, cfg) -> int:
-    if not cfg.sv_path:
-        log.error("sv_path is not set in the config")
-        return 2
-    path = cfg.sv_path
+    code = _self_update(cfg, args)
+    if code is not None:
+        return code
     lock = InstanceLock(cfg.data_dir / "watch.lock")
     if not lock.acquire():
         log.error("another GuildLedger companion is already running for this folder; close it first")
         return 1
-    log.info("watching %s (collector %s, mode %s)", path, cfg.collector, cfg.mode)
-    seen = None
-    hub = cfg.hub_path if cfg.loot else None
-    hub_seen = None
+    state = _load_state(cfg)
     direct = not args.no_post  # post (mode "direct") or upload (mode "upload")
     transport = getattr(args, "transport", None)
-    next_post = 0.0
+    seen: dict[Path, object] = {}  # data file -> signature of the version already imported
+    hub_seen: dict[Path, object] = {}
+    paths: list[Path] = []
+    next_detect = next_post = 0.0
+    next_update_note = time.monotonic() + UPDATE_EVERY
+    told_missing = False
     with lock, _open(cfg, args.db) as spool:
+        if direct and not args.once:
+            _say_hello(cfg, state, transport)
         while True:
-            if direct and time.monotonic() >= next_post:
+            now = time.monotonic()
+            if now >= next_detect:
+                next_detect = now + REDETECT_EVERY
+                found = _targets(cfg, state)
+                for p in found:
+                    if p not in paths:
+                        log.info("watching %s (collector %s, mode %s)", p, cfg.collector, cfg.mode)
+                paths = found
+                if not paths and not told_missing:
+                    told_missing = True
+                    if args.once:
+                        log.error("no GuildLedger data file found (set sv_path in the config)")
+                        return 1
+                    _ask_wow_dir(cfg, state)
+                    paths = _targets(cfg, state)
+                    if not paths:
+                        log.info("no GuildLedger data file yet: log in to WoW with the GuildLedger addon on and"
+                                 " type /reload once. I keep looking.")
+                        next_detect = now + 10
+            if direct and now >= next_post:
                 send_now(spool, cfg, args.post_backlog, transport)
                 next_post = time.monotonic() + POST_EVERY
-            sig = _signature(path)
-            if sig is not None and sig != seen:
-                time.sleep(cfg.stable_seconds)
-                if _signature(path) == sig:  # WoW has finished writing
-                    for attempt in (1, 2):
-                        try:
-                            import_file(spool, cfg, path, cfg.collector)
-                            break
-                        except (SVParseError, SchemaError, OSError, UnicodeError) as e:
-                            if attempt == 1:
-                                log.warning("could not read %s (%s); retrying once", path.name, e)
-                                time.sleep(cfg.stable_seconds)
-                            else:
-                                log.error("giving up on this version of %s: %s", path.name, e)
-                    seen = sig
-                    hub_seen = _import_hub_if_changed(spool, cfg, hub, hub_seen)
-                    if direct:
-                        send_now(spool, cfg, args.post_backlog, transport)
-                        next_post = time.monotonic() + POST_EVERY
-                    if args.once:
-                        return 0
-                    continue
-            elif hub is not None and _signature(hub) not in (None, hub_seen):
-                hub_seen = _import_hub_if_changed(spool, cfg, hub, hub_seen)
+            if now >= next_update_note and cfg.update_auto and update_mod.install_root():
+                next_update_note = now + UPDATE_EVERY
+                try:
+                    version, _ = update_mod.latest()
+                    if update_mod.newer(version, __version__):
+                        log.info("companion %s is available: close this window and start it again to update",
+                                 version)
+                except update_mod.UpdateError:
+                    pass
+            changed = False
+            for path in paths:
+                sig = _signature(path)
+                hub = cfg.hub_for(path)
+                if sig is not None and sig != seen.get(path):
+                    time.sleep(cfg.stable_seconds)
+                    if _signature(path) != sig:
+                        changed = True  # WoW is still writing: look again right away
+                        continue
+                    _import_changed(spool, cfg, path)
+                    seen[path] = sig
+                    hub_seen[path] = _import_hub_if_changed(spool, cfg, hub, hub_seen.get(path))
+                    changed = True
+                elif hub is not None and _signature(hub) not in (None, hub_seen.get(path)):
+                    hub_seen[path] = _import_hub_if_changed(spool, cfg, hub, hub_seen.get(path))
+                elif sig is None and args.once:
+                    log.error("file not found: %s", path)
+                    return 1
+            if changed:
+                if direct and all(p in seen for p in paths):
+                    send_now(spool, cfg, args.post_backlog, transport)
+                    next_post = time.monotonic() + POST_EVERY
+                if args.once and all(p in seen for p in paths):
+                    return 0
                 continue
-            elif sig is None and args.once:
-                log.error("file not found: %s", path)
-                return 1
             time.sleep(cfg.poll_seconds)
+
+
+def cmd_package(args, cfg) -> int:  # noqa: ARG001
+    zip_path, ver_path = package_mod.write_release(Path(args.out))
+    print(f"wrote {zip_path} and {ver_path} ({ver_path.read_text(encoding='utf-8').strip()})")
+    return 0
+
+
+def cmd_update(args, cfg) -> int:  # noqa: ARG001
+    root = update_mod.install_root()
+    if root is None:
+        log.error("this copy is not an unzipped collector package (a repository checkout updates with git)")
+        return 2
+    try:
+        version = update_mod.update(root)
+    except update_mod.UpdateError as e:
+        log.error("update failed: %s", e)
+        return 1
+    print(f"updated to {version}; start the companion again" if version else f"already up to date ({__version__})")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -306,6 +467,13 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("stats", help="show what the spool holds")
     s.set_defaults(func=cmd_stats)
+
+    u = sub.add_parser("update", help="officer folder: install the newest companion now (settings are kept)")
+    u.set_defaults(func=cmd_update)
+
+    pk = sub.add_parser("package", help="admin: build the public update package (zip + version file)")
+    pk.add_argument("--out", default="dist", help="output folder (default: dist)")
+    pk.set_defaults(func=cmd_package)
 
     args = p.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code page

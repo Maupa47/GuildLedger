@@ -1,22 +1,25 @@
 # GuildLedger companion - settings
 #
-# HOW TO USE THIS FILE
+# You normally do NOT need this file: the collector package the guild's bot gives you (the admin runs
+# /collector invite for you in Discord) already contains a finished config.toml. This example lists every
+# setting, for setting one up by hand:
 #   1. Copy this file in the same folder and name the copy  config.toml
 #   2. Open config.toml with Notepad and fill in the lines marked  FILL IN  below.
 #   3. Keep the quotes exactly as shown. Save.
 # config.toml holds your personal upload link: never send it to anyone, never post it.
-# Step-by-step guide with pictures of where to find each value: COLLECTOR.md (docs/collection/ in the repo).
+# Updates of the companion never change config.toml. Guide: COLLECTOR.md in this folder.
 
 
-# --- FILL IN: where WoW keeps the addon's data -------------------------------------------------------------
-# The file appears after your first /reload or logout with GuildLedger on.
-# Find it:  your WoW folder -> _forever_ -> WTF -> Account -> <your account folder> -> SavedVariables
-#           -> GuildLedger.lua   (not the .bak file)
-# Use single quotes ' ' around the path (then backslashes need no doubling).
-sv_path = 'C:\Program Files (x86)\World of Warcraft\_forever_\WTF\Account\YOUR_ACCOUNT_FOLDER\SavedVariables\GuildLedger.lua'
+# --- Optional: where WoW keeps the addon's data ------------------------------------------------------------
+# Leave these out: the companion finds every GuildLedger.lua itself (all your WoW accounts, so alts on a
+# second account are covered too). Only if it cannot find your WoW folder, name it here:
+# wow_dir = 'D:\Spiele\World of Warcraft'
+# Or pin one single data file (then only this one is read):
+# sv_path = 'C:\Program Files (x86)\World of Warcraft\_forever_\WTF\Account\YOUR_ACCOUNT_FOLDER\SavedVariables\GuildLedger.lua'
 
 # --- FILL IN: your name ------------------------------------------------------------------------------------
-# Your main character's name as the guild knows it. Shown in the archive next to what you uploaded.
+# Your name as the guild knows you (usually your main character). Only a label on this PC: the bot knows you
+# by your upload link, so it does not matter which of your characters is logged in.
 collector = "Your Character"
 
 # --- FILL IN: your personal upload link (from the GuildLedger admin) --------------------------------------
@@ -55,6 +58,11 @@ meta = "summary"
 enabled = true
 # Only if AmazingHub.lua is somewhere else (normally leave this commented out):
 # hub_sv_path = 'C:\...\SavedVariables\AmazingHub.lua'
+
+[update]
+# The companion fetches a newer version of itself from the project's GitHub releases when it starts
+# (code only; this file, your data and your logs are never touched). false = update by hand.
+auto = true
 
 [watch]
 poll_seconds = 2

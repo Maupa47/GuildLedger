@@ -5,7 +5,7 @@ Guild tools for a WoW: Forever guild, made by Maupa. The project has **two separ
 | Part | What it is | Who uses it | Code | Guide |
 |---|---|---|---|---|
 | **1. The addon pack** | Two in-game addons: **GuildLedger** (silent chat helper) and **Amazing Hub** (guild window, `/amazing`). Published on CurseForge as *Amazing Forever Guild Pack*. | every player | `addon/` | [docs/addon/README.md](docs/addon/README.md) |
-| **2. The collection system** | Turns what the addon sees into a permanent archive and Discord log: a **companion** program on officers' PCs and a **bot** on the server. Never public. | officers (collectors) and the admin | `companion/`, `bot/` | officers: [docs/collection/COLLECTOR.md](docs/collection/COLLECTOR.md) · admin: [docs/collection/ADMIN.md](docs/collection/ADMIN.md) |
+| **2. The collection system** | Turns what the addon sees into a permanent archive and Discord log: a **companion** program on officers' PCs and a **bot** on the server. Never public. | officers (collectors) and the admin | `companion/`, `bot/` | officers: [companion/COLLECTOR.md](companion/COLLECTOR.md) · admin: [docs/collection/ADMIN.md](docs/collection/ADMIN.md) |
 
 ```
  PART 1: in the game (every player)              PART 2: outside the game (officers + server)
@@ -33,7 +33,7 @@ Players need only part 1. Without part 2 the addons still work; nothing reaches 
 | `shared/schema.md` | 1+2 | data formats and ID/merge rules shared by addon, companion and bot |
 | `tools/` | — | `install.ps1` (link addons into the game), `package-collector.ps1` (build both zips), `deploy.ps1` (update the server), `rebrand-hub.py` |
 | `docs/addon/` | 1 | player README (shipped in the zip), CurseForge text and publishing, how the hub is built (`HUB_AUDIT.md`) |
-| `docs/collection/` | 2 | officer guide, admin guide |
+| `docs/collection/` | 2 | admin guide (the officer guide `COLLECTOR.md` is in `companion/`, it ships in every package) |
 | `docs/dev/` | — | development notes: measured game behaviour, in-game test checklists, the pack plan |
 | `STATUS.md` | — | what runs right now and what is next |
 | `CLAUDE.md` | — | full specification and rules (for Claude Code) |
@@ -45,7 +45,7 @@ the real files are git-ignored because they hold secrets.
 
 | Copy this … | … to this | Filled in by |
 |---|---|---|
-| `companion/config.example.toml` | `companion/config.toml` | each collecting officer ([COLLECTOR.md](docs/collection/COLLECTOR.md), step 3) |
+| (made by the bot) | `config.toml` in the officer's package | nobody: `/collector invite` in Discord builds it ([ADMIN.md](docs/collection/ADMIN.md) section 3); by hand: copy `companion/config.example.toml` |
 | `bot/config.example.toml` | `bot/config.toml` (sent to the server with `deploy.ps1 -UpdateConfig`) | the admin ([ADMIN.md](docs/collection/ADMIN.md)) |
 
 ## Building and testing

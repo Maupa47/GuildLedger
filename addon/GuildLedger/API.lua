@@ -1,6 +1,6 @@
 -- API: the bridge for other addons, the global GuildLedgerAPI (docs/dev/PACK_PLAN.md section 8; Amazing Hub's Ledger tab).
 -- Everything returned is a fresh plain table (strings, numbers, booleans): callers cannot reach our data.
--- The only calls that change anything are the map settings and RequestLink (the same as the /gl map commands
+-- The only calls that change anything are the settings switches (map, messages, collector role) and RequestLink (the same as the /gl map commands
 -- and /gl link CODE, but without a chat line).
 -- Every function is safe to call at any time, also before ADDON_LOADED or when GuildLedger switched itself off.
 
@@ -67,6 +67,17 @@ function API.SetWelcome(on) if ready() then ns.Store.Opts().welcome = on and tru
 -- Developer mode: readable reports of what is sent and received (same as /gl dev on|off). Default off.
 function API.GetDevMode() return ready() and ns.Store.Opts().dev == true or false end
 function API.SetDevMode(on) if ready() then ns.Store.Opts().dev = on and true or false end end
+
+-- Collector role (same as /gl collector on|off; officers who run the companion). The role is saved for the
+-- whole WoW account, so it covers every character on it. A change takes effect after /reload:
+-- GetCollector() -> wanted (the saved switch), active (the role this session is running with).
+function API.GetCollector()
+    if not ready() then return false, false end
+    local want = S.Opts().collector == true
+    if ns.startedAsCollector == nil then return want, want end
+    return want, ns.startedAsCollector
+end
+function API.SetCollector(on) if ready() then S.Opts().collector = on and true or false end end
 
 -- { requested, code?, sentAt?, acked?, expired? }
 function API.GetLink()

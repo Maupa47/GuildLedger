@@ -145,7 +145,7 @@ check(y(current("-  MODULES")) == 64 and y(current("MODULES option")) == 88 and 
   "an open section keeps its height and the rest follows")
 headingButton(current("-  MODULES")).scripts.OnClick()
 check(current("+  MODULES") and not current("MODULES option"), "and closes again")
-settings.openSections = { ["WORLD MAP"] = true, ["CHAT MESSAGES"] = true }
+settings.openSections = { ["WORLD MAP"] = true, ["CHAT MESSAGES"] = true, ["COLLECTOR (OFFICERS)"] = true }
 AmazingHub:RefreshSettingsPanel(content)
 local ok = false
 for _, o in ipairs(made) do
@@ -173,6 +173,8 @@ GuildLedgerAPI = {
   GetWelcome = function() return true end,
   SetWelcome = function(on) calls[#calls + 1] = "welcome " .. tostring(on) end,
   SetDevMode = function(on) calls[#calls + 1] = "dev " .. tostring(on) end,
+  GetCollector = function() return false, false end,
+  SetCollector = function(on) calls[#calls + 1] = "collector " .. tostring(on) end,
   SetMapLook = function(what, a, r, g, b)
     local rest = type(r) == "number" and string.format("%.1f %.1f %.1f", r, g, b) or (r ~= nil and tostring(r) or "")
     calls[#calls + 1] = table.concat({ what, tostring(a), rest }, " ")
@@ -216,6 +218,14 @@ local dev = box("Developer mode: show what GuildLedger sends and receives")
 check(dev and dev.checkbox.checked == false, "a developer-mode switch, off by default")
 dev.checkbox.onChanged(nil, true)
 check(calls[#calls] == "dev true", "developer mode writes through GuildLedgerAPI")
+local coll = box("I am a collector (I run the GuildLedger companion on this PC)")
+check(coll and coll.checkbox.checked == false, "a collector switch, off by default")
+check(not button("Reload now"), "no reload button while the switch matches the running role")
+coll.checkbox.onChanged(nil, true)
+check(calls[#calls] == "collector true", "the collector switch writes through GuildLedgerAPI")
+check(button("Reload now"), "after a change a reload button shows")
+coll.checkbox.onChanged(nil, false)
+check(calls[#calls] == "collector false" and not button("Reload now"), "switched back: no reload needed")
 calls = {}
 share.checkbox.onChanged(nil, false)
 pins.checkbox.onChanged(nil, true)

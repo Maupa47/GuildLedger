@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "guildledger-bot"
-version = "0.5.4"
+version = "0.6.0"
 description = "GuildLedger bot: merges collector uploads from #gl-ingest into the archive and posts them"
 requires-python = ">=3.11"
 # Also needs the companion package (merge rules, formatting): pip install ../companion

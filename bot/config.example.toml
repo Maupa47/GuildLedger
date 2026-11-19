@@ -28,12 +28,12 @@ server_id = 0
 
 
 [collectors]
-# REQUIRED: at least one line. One webhook in #gl-ingest per collecting officer:
-#   <webhook ID> = "<the officer's character name>"
-# Uploads from any other webhook are ignored. To revoke an officer: delete their webhook in Discord and their
-# line here. Example (made-up numbers):
+# Normally EMPTY: add officers in Discord with  /collector invite user:@officer  (docs/collection/ADMIN.md
+# section 3). The bot then makes their webhook itself and remembers it in its database.
+# Only for webhooks you made by hand in #gl-ingest:
+#   <webhook ID> = "<the officer's name>"
+# Uploads from any other webhook are ignored. Example (made-up numbers):
 # 1111111111111111111 = "First Officer"
-# 2222222222222222222 = "Second Officer"
 
 
 [post]

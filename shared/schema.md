@@ -109,6 +109,10 @@ records:** older bots reject the unknown record type. The bot takes the collecto
 webhook-ID list, never from the file. A row the companion changes after uploading it (text filled, flags,
 actor) is uploaded again; the bot merges it by the rules above.
 
+**Test upload (0.6.0):** at its first start with a new upload link the companion sends one empty file
+(gzip of nothing, `gl1 <collector> 0 <sha256>`). It carries no rows; a bot of any version accepts it. The bot
+uses the first accepted upload of a webhook made by `/collector invite` to report "… is connected".
+
 ## 5. Addon messages and budgets (guild channel, prefix `GuildLedger`)
 
 All kinds go through `Comms.lua`: one queue per client, **at most 1 message per second per client** (all

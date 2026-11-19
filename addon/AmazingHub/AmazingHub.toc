@@ -2,7 +2,7 @@
 ## Title: |cffFFD700Amazing Hub|r |cff888888(Amazing Forever Guild Pack)|r
 ## Notes: Guild window for the Amazing guild: roster, professions and recipes, calendar, guild members on the map.
 ## Author: Maupa
-## Version: 0.5.4
+## Version: 0.6.0
 ## SavedVariables: AmazingHubDB
 ## DefaultState: enabled
 ## IconTexture: Interface\AddOns\AmazingHub\Media\minimap-logo

@@ -146,6 +146,7 @@ ns.On("ADDON_LOADED", function(name)
         ns.disabled = "its saved data comes from a newer GuildLedger version; please update the addon"
         return -- silent; /gl status explains it
     end
+    ns.startedAsCollector = ns.Store.IsCollector() -- the role of this session (a change needs /reload)
     for _, m in ipairs(ns.modules) do
         if m.OnInit then ns.Safe(m.name .. ".OnInit", m.OnInit) end
     end

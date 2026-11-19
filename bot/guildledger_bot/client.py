@@ -16,7 +16,7 @@ import time
 import discord as dpy
 from discord import app_commands
 
-from . import commands, ingest
+from . import collectors, commands, ingest
 from .link import Links
 from .config import BotConfig
 from .ops import Ops
@@ -44,6 +44,8 @@ class LedgerBot(dpy.Client):
         self._loot_poster = None
         self._ops: Ops | None = None
         self._links: Links | None = None
+        self._collectors: collectors.Registry | None = None
+        self._hooks: dict[int, str] = dict(cfg.collectors)  # webhook ID -> collector name (config + registry)
         self.tree = app_commands.CommandTree(self)
         self._roles_at = 0.0
         self._post_task: asyncio.Task | None = None
@@ -63,9 +65,12 @@ class LedgerBot(dpy.Client):
             self._ops = Ops(self._archive, hook, self.cfg.timezone, self.cfg.report_hour,
                             self.cfg.alert_after_hours)
             self._links = Links(self._archive)
+            self._collectors = collectors.Registry(self._archive)
         await self._db(open_archive)
+        await self.refresh_collectors()
         commands.register(self)
-        self.add_dynamic_items(commands.LinkButton)
+        collectors.register(self)
+        self.add_dynamic_items(commands.LinkButton, collectors.PackageButton)
         if not self.once:
             try:
                 if self.cfg.server_id:
@@ -78,9 +83,30 @@ class LedgerBot(dpy.Client):
                 log.error("could not register slash commands (re-invite the bot with the applications.commands"
                           " scope?): %s", e)
 
+    async def refresh_collectors(self) -> None:
+        """Allowed upload webhooks: the config file's plus those made with /collector invite."""
+        registered = await self._db(self._collectors.names)
+        self._hooks = {**registered, **self.cfg.collectors}
+
+    async def _welcome_collector(self, webhook_id: int) -> None:
+        """The first accepted upload of a collector set up through the bot: tell the admin it works."""
+        c = await self._db(self._collectors.first_upload, webhook_id)
+        if c is None:
+            return
+        text = f"✅ <@{c.user_id}>'s collector (**{dpy.utils.escape_markdown(c.name)}**) is connected: first upload received."
+        log.info("collector %s: first upload received", c.name)
+        try:
+            channel = self.get_channel(c.channel_id) if c.channel_id else None
+            if channel is not None:
+                await channel.send(text, allowed_mentions=NO_MENTIONS)
+                return
+        except dpy.DiscordException as e:
+            log.info("could not announce collector %s in the invitation channel: %s", c.name, e)
+        await self._db(self._ops.send, f"✅ Collector {c.name} is connected: first upload received.")
+
     async def on_ready(self) -> None:
         log.info("connected as %s; ingest channel %s; %d collector webhook(s)",
-                 self.user, self.cfg.ingest_channel_id, len(self.cfg.collectors))
+                 self.user, self.cfg.ingest_channel_id, len(self._hooks))
         await self.backfill()  # every (re)connect: whatever arrived while the bot was away
         if self.once:
             await self._db(post_once, self._archive, self.cfg, self._poster)
@@ -201,9 +227,9 @@ class LedgerBot(dpy.Client):
         await self.handle(msg)
 
     async def handle(self, msg: dpy.Message) -> None:
-        collector = self.cfg.collectors.get(msg.webhook_id) if msg.webhook_id else None
+        collector = self._hooks.get(msg.webhook_id) if msg.webhook_id else None
         if collector is None:
-            return  # not one of the configured collector webhooks: ignored (CLAUDE.md 7.1)
+            return  # not a collector's webhook (config file or /collector invite): ignored (CLAUDE.md 7.1)
         data = None
         if len(msg.attachments) == 1 and msg.attachments[0].size <= ingest.MAX_ATTACHMENT:
             try:
@@ -220,6 +246,8 @@ class LedgerBot(dpy.Client):
                 log.info("upload %s from %s: %s%s", msg.id, collector, out.result.summary(),
                          f"; {out.loot_result.summary()}" if out.loot_result and out.loot_result.changed else "")
                 await msg.add_reaction(OK)
+                if msg.webhook_id not in self.cfg.collectors:
+                    await self._welcome_collector(msg.webhook_id)
             else:
                 log.warning("upload %s from %s rejected: %s", msg.id, collector, out.reason)
                 await self._db(self._ops.send, f"❌ Upload from {collector} rejected: {out.reason}")

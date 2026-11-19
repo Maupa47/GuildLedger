@@ -74,19 +74,20 @@ def test_config_errors(tmp_path):
 
 
 def test_config_example_is_valid_and_guides(tmp_path):
-    """config.example.toml: upload mode, settings in [general]; the placeholder path is refused clearly."""
+    """config.example.toml: upload mode, settings in [general], no data file path needed (it is searched for)."""
     from pathlib import Path
 
     example = (Path(__file__).resolve().parents[1] / "config.example.toml").read_text("utf-8")
-    raw = tmp_path / "raw.toml"
+    raw = tmp_path / "config.toml"
     raw.write_text(example, encoding="utf-8")
+    cfg = load(raw)
+    assert cfg.mode == "upload" and cfg.timezone == "Europe/Zurich" and cfg.collector == "Your Character"
+    assert cfg.ingest_webhook == "" and cfg.sv_path is None and cfg.wow_dir is None and cfg.update_auto is True
+    # the commented-out sv_path line, copied as it is, is still refused clearly
+    line = next(l for l in example.splitlines() if l.startswith("# sv_path"))
+    raw.write_text(line[2:] + "\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="YOUR_ACCOUNT_FOLDER"):
         load(raw)
-    filled = tmp_path / "config.toml"
-    filled.write_text(example.replace("YOUR_ACCOUNT_FOLDER", "ACC1"), encoding="utf-8")
-    cfg = load(filled)
-    assert cfg.mode == "upload" and cfg.timezone == "Europe/Zurich" and cfg.collector == "Your Character"
-    assert cfg.ingest_webhook == "" and str(cfg.sv_path).endswith("GuildLedger.lua")
 
 
 def test_config_old_top_level_layout_still_works(tmp_path):

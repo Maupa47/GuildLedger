@@ -20,7 +20,7 @@ Run every PowerShell command below in the repository folder. If PowerShell refus
 |---|---|---|---|
 | `bot\config.toml` | your PC (master copy, git-ignored) | bot token, channel and server IDs, webhooks, collector list | copy of `bot\config.example.toml`, filled in by you |
 | `/etc/guildledger/config.toml` | server | the same | `.\tools\deploy.ps1 -UpdateConfig` |
-| `companion\config.toml` | each collector PC (git-ignored) | game file path, name, personal upload webhook | copy of `companion\config.example.toml`, filled in by the officer |
+| `companion\config.toml` | each collector PC (git-ignored) | name, personal upload webhook (the game folder is found automatically) | inside the zip the bot gives the officer (`/collector invite`, section 3) |
 
 Every value has a comment in the example file saying where to find it. Secrets (token, webhook URLs) never go
 into git, chat or screenshots.
@@ -28,7 +28,8 @@ into git, chat or screenshots.
 ## 2. Discord setup (once)
 
 1. **Channels** (all private: you, officers, the bot):
-   - `#gl-ingest`: collectors upload here (bot: View Channel, Read Message History, Send Messages, Add Reactions)
+   - `#gl-ingest`: collectors upload here (bot: View Channel, Read Message History, Send Messages, Add Reactions,
+     Manage Webhooks for `/collector invite`)
    - `#guild-chat-log` and `#guild-roster-log`: the bot posts here through a webhook each
    - optional `#gl-ops` (monitoring, section 5) and `#gl-backup` (section 6)
 2. **Bot application**: https://discord.com/developers/applications → your app.
@@ -42,7 +43,7 @@ into git, chat or screenshots.
    to apply now.
 
 Slash commands: `/link`, `/unlink`, `/chars`, `/whois`, `/seen`, `/joined`, `/activity`, `/dkp`, `/loot`,
-`/wishlist`, `/wish add|remove|export|list`; officers (Manage Roles): `/linkstatus`, `/inactive`, `/roles`, and
+`/wishlist`, `/wish add|remove|export|list`; officers (Manage Roles): `/linkstatus`, `/inactive`, `/roles`, admins (Manage Server): `/collector invite|remove|list`, and
 `/wish` for anyone's characters (members only for their own linked ones).
 
 ### Loot channel (optional, Amazing Hub's DKP, loot, wishlists, raids)
@@ -63,16 +64,28 @@ player a line to paste into the game.
 
 ## 3. Adding an officer as a collector
 
-1. Discord: `#gl-ingest` → *Edit Channel → Integrations → Webhooks → New Webhook*; name it after the officer.
-2. *Copy Webhook URL*. The number right after `/api/webhooks/` is the webhook **ID**. In `bot\config.toml`
-   under `[collectors]` add: `<ID> = "<character name>"`.
-3. `.\tools\deploy.ps1 -UpdateConfig`
-4. `.\tools\package-collector.ps1` → `dist\GuildLedger-collector-<version>.zip`
-5. Send the officer the zip, and the webhook URL **privately** (DM). They follow `COLLECTOR.md` in the zip
-   ([COLLECTOR.md](COLLECTOR.md)).
+Once: give the bot the **Manage Webhooks** permission in `#gl-ingest` (channel → Edit Channel → Permissions).
 
-**Revoking:** delete their webhook in Discord (effective at once) and remove their line from `[collectors]`,
-then `-UpdateConfig`. Their earlier rows stay in the archive.
+1. In an officer channel: **`/collector invite user:@officer`** (optional `name:` = how the archive calls
+   them; default: their linked main character, else their Discord name). Needs *Manage Server*.
+2. The officer presses **Get my collector package** under the bot's message. The bot creates their personal
+   webhook in `#gl-ingest`, registers it (no config change, no restart) and shows them, privately, a zip with
+   the companion and a finished `config.toml`. They follow the three steps in the message
+   ([COLLECTOR.md](../../companion/COLLECTOR.md) is in the zip).
+3. When their companion starts for the first time, the bot writes "… is connected" into the channel of the
+   invitation.
+
+`/collector list` shows everyone set up, their last upload and open invitations.
+**Revoking:** `/collector remove user:@officer` deletes their webhook (effective at once). Their earlier rows
+stay in the archive. An officer who lost the zip presses the button again (same link); to give someone a
+**new** link, remove and invite them again.
+
+The package is built on the server from the deployed code, so officers get the version the bot runs. Their
+companions then **update themselves** from the GitHub release (section 4, "Releases").
+
+By hand, without the commands (still works): create a webhook in `#gl-ingest`, add `<webhook ID> = "<name>"`
+under `[collectors]` in `bot\config.toml`, `.\tools\deploy.ps1 -UpdateConfig`, send the officer
+`dist\GuildLedger-collector-<version>.zip` and, privately, the webhook URL.
 
 **Your own PC as a collector:** `.\tools\install.ps1` links `addon\GuildLedger` and `addon\AmazingHub` into
 the game's AddOns folder (changes apply on `/reload`). The companion: `companion\config.toml`, started with
@@ -102,6 +115,21 @@ the server refuses to replace an existing archive.
 On the server: code `/opt/guildledger/src`, venv `/opt/guildledger/venv`, settings
 `/etc/guildledger/config.toml` (mode 600), archive `/var/lib/guildledger/guildledger.db`, backups
 `/var/lib/guildledger/backups/`.
+
+### Releases: updating every officer's companion
+
+Officers' companions check the project's newest GitHub release when they start and install it themselves
+(code only; `config.toml`, the upload link and their data are never in the package and never touched).
+To publish a version:
+
+1. Set the version in `companion\guildledger\__init__.py` (and the TOC / `pyproject.toml` files), commit, push.
+2. `.\tools\deploy.ps1` first, so the bot understands whatever the new companion sends.
+3. `git tag v0.6.0` and `git push origin v0.6.0` (the tag must match the version). GitHub then runs the tests,
+   builds `GuildLedger-companion.zip` and publishes the release (`.github/workflows/release.yml`).
+
+An officer can switch this off with `[update] auto = false` in their `config.toml`; `python -m guildledger
+update` installs the newest version by hand. Your own PC runs the companion from the repository and updates
+with `git pull`.
 
 ## 5. Monitoring (`#gl-ops`)
 

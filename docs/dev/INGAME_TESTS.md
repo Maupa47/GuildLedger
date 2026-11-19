@@ -425,3 +425,23 @@ Amazing Hub's loot tools (Settings → Modules: Raids and Loot; Settings → Loo
 | D8 | `/wish add` for someone else's character (not an officer) | refused: "not one of your linked characters" |
 
 Result: (pending)
+
+## Easy collector setup (0.6.0, 2026-11-19) — run when ready
+
+Needs: the bot updated (`.\tools\deploy.ps1`), the bot's permission **Manage Webhooks** in `#gl-ingest`, the
+release published (`git tag v0.6.0`, `git push origin v0.6.0`; docs/collection/ADMIN.md section 4) and a second
+person (or a second Windows user/PC) to play the officer. None of this could be tried from the build machine:
+Discord and Windows are only covered by tests with stand-ins.
+
+| # | What | Expected |
+|---|---|---|
+| E1 | Discord, officer channel: `/collector invite user:@officer` | a message that mentions the officer, with a green button; `/collector list` shows them under "Invited, package not fetched yet" |
+| E2 | somebody else presses the button | "This button is for the invited officer only." |
+| E3 | the officer presses the button | a private message with three steps and `GuildLedger-collector-<name>.zip`; a new webhook "GL <name>" in `#gl-ingest` → Integrations |
+| E4 | officer PC (ideally one **without Python**): unzip, double-click `start-companion.cmd` | Python installs by itself (winget), the autostart question appears once, then `watching …\GuildLedger.lua` for every WoW account, `test upload OK`; in Discord the invitation channel gets "… is connected" |
+| E5 | officer, in game: `/amazing` → Settings → Collector (officers) → tick → *Reload now* | `/gl status` starts with `Role: Collector`; after the next `/reload` the companion shows `uploaded N row(s)` and `#gl-ingest` shows the upload with ✅ |
+| E6 | the officer logs in on an **alt** (same WoW account), writes in guild chat, `/reload` | uploaded as before; the archive names the same collector. If they have a second WoW account: tick the box there too, the companion window shows a second `watching …` line within a minute |
+| E7 | publish a higher version (tag), restart the officer's companion | `updated the companion 0.6.0 -> …; restarting`, then it runs as before; `config.toml` unchanged |
+| E8 | `/collector remove user:@officer`, officer `/reload`s in game | the webhook is gone from `#gl-ingest`; the companion window shows an upload error (link no longer valid); nothing new in the archive |
+
+Result: (pending)

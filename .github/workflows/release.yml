@@ -1,0 +1,41 @@
+name: release
+
+# Publishes the unpersonalised companion package that every officer's companion fetches to update itself
+# (companion/guildledger/update.py). Runs when a version tag is pushed:  git tag v0.6.0 && git push origin v0.6.0
+# The package holds code, starters and the guide only: no settings, no upload links, no data.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  companion-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tests
+        run: |
+          pip install pytest lupa "discord.py>=2.4,<3"
+          python -m pytest addon/tests companion/tests bot/tests -q
+      - name: Build the package
+        working-directory: companion
+        run: |
+          python -m guildledger package --out ../dist
+          version="$(cut -d' ' -f1 ../dist/companion-version.txt)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match the companion version $version (companion/guildledger/__init__.py)" >&2
+            exit 1
+          fi
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/GuildLedger-companion.zip dist/companion-version.txt \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Companion update package. Officers' companions install it by themselves at their next start; settings and data are kept. What changed: STATUS.md."

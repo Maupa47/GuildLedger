@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PINNED = "80883a096cdf9fa1366fb1a248e99b4462d74a21"  # GuildOS 1.20.1, audited in docs/addon/HUB_AUDIT.md
-HUB_VERSION = "0.5.4"
+HUB_VERSION = "0.6.0"
 
 # What is not copied (not part of the addon, or replaced by our own files).
 SKIP_DIRS = {".git", ".github", "docs", "__pycache__"}

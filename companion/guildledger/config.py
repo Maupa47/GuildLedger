@@ -17,7 +17,9 @@ PLACEHOLDER = "YOUR_ACCOUNT_FOLDER"  # in config.example.toml's sv_path
 
 @dataclass
 class Config:
-    sv_path: Path | None = None
+    sv_path: Path | None = None  # one data file; None = find every GuildLedger.lua (detect.py)
+    wow_dir: Path | None = None  # only for the search: a WoW folder in an unusual place
+    update_auto: bool = True  # officer installs: fetch a newer companion from GitHub at start (update.py)
     timezone: str = "Europe/Zurich"
     mode: str = "direct"
     collector: str = "collector"
@@ -44,6 +46,16 @@ class Config:
         if self.hub_sv_path:
             return self.hub_sv_path
         return self.sv_path.with_name("AmazingHub.lua") if self.sv_path else None
+
+    def hub_for(self, sv: Path) -> Path | None:
+        """Amazing Hub's data file belonging to one GuildLedger.lua (None: loot data switched off)."""
+        if not self.loot:
+            return None
+        return self.hub_sv_path or sv.with_name("AmazingHub.lua")
+
+    @property
+    def state_path(self) -> Path:
+        return self.data_dir / "state.json"
 
     def tz(self) -> tzinfo | None:
         return resolve_tz(self.timezone)
@@ -82,6 +94,9 @@ def load(path: str | Path | None) -> Config:
         if PLACEHOLDER in str(raw["sv_path"]):
             raise ConfigError(f"{path}: sv_path still contains {PLACEHOLDER}; put in your account folder's name"
                               " (see COLLECTOR.md, step 3)")
+    if raw.get("wow_dir"):
+        cfg.wow_dir = Path(str(raw["wow_dir"]))
+    cfg.update_auto = bool((raw.get("update", {}) or {}).get("auto", cfg.update_auto))
     cfg.timezone = str(opt("timezone") or cfg.timezone)
     cfg.mode = str(opt("mode") or cfg.mode)
     if cfg.mode not in MODES:

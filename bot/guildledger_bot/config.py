@@ -93,8 +93,7 @@ def load(path: str | Path) -> BotConfig:
         raise ConfigError("[discord] token is missing")
     if not cfg.ingest_channel_id:
         raise ConfigError("[discord] ingest_channel_id is missing")
-    if not cfg.collectors:
-        raise ConfigError("[collectors] lists no webhook: every upload would be ignored")
+    # [collectors] may be empty: collectors are normally set up in Discord with /collector invite (collectors.py).
     if cfg.meta not in ("summary", "lines", "skip"):
         raise ConfigError('[post] meta must be "summary", "lines" or "skip"')
     if not cfg.chat_webhook and not cfg.roster_webhook:

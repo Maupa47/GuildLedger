@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-17. Keep this file current when something changes. Overview of the project: [README.md](README.md).
+Last updated: 2026-11-19. Keep this file current when something changes. Overview of the project: [README.md](README.md).
 
 ## What runs right now
 
@@ -21,8 +21,10 @@ then); the bot then holds chat 60 s before posting.
 
 ## Next steps (in order)
 
-1. **Officers update** (both addon folders and the companion together; an old companion refuses the new data):
-   send them `dist\GuildLedger-collector-0.5.4.zip`. Their existing `config.toml` keeps working.
+1. **Easy collector setup (0.6.0):** deploy the bot, Manage Webhooks in `#gl-ingest`, tag `v0.6.0`, then run
+   checks E1–E8. After that officers are added with `/collector invite` and update by themselves. The two
+   existing officers: invite them (new package, new link) or send them the 0.6.0 zip once; later updates are
+   automatic either way.
 2. **Discord roles:** `/roles verified …`, `/roles rank …`, `/roles show` (docs/collection/ADMIN.md section 2).
 3. **Monitoring:** `#gl-ops` webhook (ADMIN.md section 5).
 4. **In-game test rounds** (docs/dev/INGAME_TESTS.md): bridge round B1–B15 (alone: `/reload` is enough), pack
@@ -32,6 +34,15 @@ then); the bot then holds chat 60 s before posting.
    (docs/addon/HUB_AUDIT.md section 9).
 
 ## Done (newest first)
+
+- **0.6.0, easy collector setup (2026-11-19, not deployed, not tested on Windows or against Discord):**
+  `/collector invite @officer` → the officer presses a button → the bot creates their webhook, registers it
+  and hands them a zip with a finished `config.toml` (`/collector remove`, `/collector list`). The companion
+  finds the WoW data files itself (every account, so alts on a second account count), installs Python through
+  winget if missing, asks once about autostart, sends a test upload ("… is connected" in Discord) and updates
+  itself from the GitHub release (settings never touched). Collector switch in the hub: Settings → Collector
+  (officers). To switch on: `deploy.ps1`, give the bot **Manage Webhooks** in `#gl-ingest`, push tag `v0.6.0`
+  (docs/collection/ADMIN.md sections 3 and 4). Checks E1–E8 in docs/dev/INGAME_TESTS.md.
 
 - **Loot outside the game (2026-11-18, not deployed):** the companion also reads `AmazingHub.lua` (points log,
   standings, loot history, wishlists, raid nights); the bot archives it, posts to a loot channel (`[loot] webhook`)

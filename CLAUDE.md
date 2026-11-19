@@ -88,11 +88,14 @@ Part 1, the addon pack (every player; CurseForge):
 /docs/addon/            README.md (shipped in the pack zip), CURSEFORGE.md (page text, publishing), HUB_AUDIT.md
 
 Part 2, the collection system (officers and admin; never public):
-/companion/guildledger/ __main__.py, svparse.py, store.py, discord.py, upload.py, config.py
-/companion/             config.example.toml, start-companion.cmd, autostart-on/off.cmd; tests/ (fixtures/*.lua)
-/bot/guildledger_bot/   __main__.py, ingest.py, post.py, store.py, ops.py, link.py, activity.py, commands.py
+/companion/guildledger/ __main__.py, svparse.py, store.py, discord.py, upload.py, config.py,
+                        detect.py (finds the data files), update.py (self-update), package.py (builds the zips)
+/companion/             config.example.toml, start-companion.cmd, autostart-on/off.cmd, COLLECTOR.md (officer
+                        guide, in every package); tests/ (fixtures/*.lua)
+/bot/guildledger_bot/   __main__.py, ingest.py, post.py, store.py, ops.py, link.py, activity.py, commands.py,
+                        collectors.py (/collector invite|remove|list, personal packages)
 /bot/                   config.example.toml, Dockerfile, deploy/ (setup.sh, systemd units, backup), tests/
-/docs/collection/       COLLECTOR.md (officer guide, in the collector zip), ADMIN.md (Discord, server, monitoring)
+/docs/collection/       ADMIN.md (Discord, adding collectors, server, releases, monitoring)
 
 Shared and tooling:
 /shared/schema.md       row formats and ID rules used by addon, companion and bot
@@ -202,7 +205,7 @@ Cost: one pass over up to ~1000 rows per snapshot; no per-row string building be
 
 ### 5.5 Slash commands
 
-`/gl status` (guild, rows spooled, unsaved rows, last sync, lockdown, feature flags), `/gl sync`, `/gl flush` (`ReloadUI()`), `/gl collector on|off`, `/gl officer on|off`, `/gl messages on|off`, `/gl dev on|off`, `/gl debug on|off`. Prefix output with `|cff33ff99GuildLedger|r:`.
+`/gl status` (guild, rows spooled, unsaved rows, last sync, lockdown, feature flags), `/gl sync`, `/gl flush` (`ReloadUI()`), `/gl collector on|off` (also a switch in the hub's Settings → Collector, `GuildLedgerAPI.SetCollector`; the role is saved per WoW account, so it covers alts), `/gl officer on|off`, `/gl messages on|off`, `/gl dev on|off`, `/gl debug on|off`. Prefix output with `|cff33ff99GuildLedger|r:`.
 `/gl status` is written for every player (2026-11-13): the first line has the prefix, then a gold heading per
 section (Guild chat, Member list, Sharing with other players, Saving, Settings) and one plain-language fact per
 indented line, no abbreviations or codes; timing only with debug on.
@@ -267,14 +270,28 @@ replaces existing text. Rows the collector does not have are ignored (members ex
 - **mode = "direct":** post new rows to the two webhooks using the formatting rules in 7.4. First run marks existing rows as posted unless `--post-backlog`.
 - **mode = "upload":** write new rows as gzip-compressed JSON Lines (`{"type":"chat"|"event","guild":…,"collector":…, …row}`), max 500 KB per file, and POST each as a file attachment to `ingest_webhook` with `content` = `gl1 <collector> <rowcount> <sha256>`. Mark rows uploaded on HTTP 2xx. Honour 429 `retry_after`.
 - **Export:** `logs/<guild>/chat-YYYY-MM-DD.log` (`[YYYY-MM-DD HH:MM:SS] [G] Name: text`), `roster-YYYY.log`.
-- **CLI:** `python -m guildledger watch | import <file> | export [--since] | stats`.
+- **CLI:** `python -m guildledger watch | import <file> | export [--since] | stats | update | package`.
+- **Easy setup (0.6.0, decided by the admin 2026-11-19).** An officer never edits settings:
+  - `sv_path` is optional. Without it `detect.py` finds every `GuildLedger.lua` of WoW: Forever on the PC
+    (registry, usual install folders, optional `wow_dir`; folders `_forever_` / `_classic_beta_` only) and the
+    watch loop reads all of them, so alts on a second WoW account are covered; it looks again every minute.
+  - `config.toml` comes ready-made in the personal package the bot builds (7.1). It holds the only secret
+    (the upload link) and the name; `state.json` holds what the PC found out. Neither is in any update.
+  - First start in upload mode: one empty upload (`gl1 <name> 0 <sha>`) proves the link works.
+  - `update.py`: at start, an unzipped officer folder (not a git checkout, not a pip install) fetches
+    `GuildLedger-companion.zip` + `companion-version.txt` (version and sha256) from the newest GitHub release,
+    checks the checksum, accepts only `guildledger/*.py` and top-level `.cmd/.md/.toml/.txt` files, never
+    `config.toml`, and restarts. `[update] auto = false` switches it off. `.github/workflows/release.yml`
+    publishes the two files when a `v*` tag is pushed.
+  - `start-companion.cmd` installs Python through `winget` when missing and asks once about autostart.
 - Must also run on Linux; no Windows-only APIs.
 
 ## 7. Bot (Python ≥ 3.11, `discord.py`; one instance on an always-on machine)
 
 ### 7.1 Setup
 - One Discord application/bot in the guild's server with the **Message Content** privileged intent enabled (needed to see webhook attachments). Permissions in `#gl-ingest`: View Channel, Read Message History, Add Reactions, Send Messages (for the ❌ reason). The bot posts to the two log channels through their **webhooks** (same formatting code as direct mode, `guildledger.direct.Poster`), so it needs no permission there.
-- `#gl-ingest` is private (bot + admins). **One webhook per collector**, so a single collector can be revoked. Config lists allowed webhook IDs → collector names; uploads from any other author are ignored.
+- `#gl-ingest` is private (bot + admins). **One webhook per collector**, so a single collector can be revoked. Allowed webhook IDs → collector names come from the bot's database (`collectors.py`) and from `[collectors]` in the config (may be empty); uploads from any other author are ignored.
+- **Collectors are added in Discord (0.6.0):** `/collector invite @officer [name]` (Manage Server) posts a button only that officer can use. Pressing it makes the bot create their webhook in `#gl-ingest` (needs Manage Webhooks there), register it, and answer ephemerally with a zip built by `guildledger.package`: the companion plus a finished `config.toml`. The webhook URL is never stored or logged (re-read from Discord for a second download). The first accepted upload is announced in the invitation's channel. `/collector remove` deletes the webhook; `/collector list` shows state.
 
 ### 7.2 Storage (SQLite, WAL; this is the archive)
 - `chat(guild, id, stream, ts_utc, author, guid, text, from_discord, edited, deleted, src, first_collector, posted, PRIMARY KEY(guild, stream, id))`

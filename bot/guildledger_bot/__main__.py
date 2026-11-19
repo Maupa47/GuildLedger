@@ -27,7 +27,8 @@ def cmd_check(cfg) -> int:
         stats = a.stats()
         uploads = a.db.execute("SELECT status, COUNT(*) FROM uploads GROUP BY status").fetchall()
         since = a.get_state("post_since")
-    print(f"config ok: ingest channel {cfg.ingest_channel_id}, collectors: {', '.join(sorted(cfg.collectors.values()))}")
+    print(f"config ok: ingest channel {cfg.ingest_channel_id}, collectors in the config file:"
+          f" {', '.join(sorted(cfg.collectors.values())) or 'none (see /collector list in Discord)'}")
     print(f"archive {cfg.db_path}: uploads {dict(uploads) or 'none'}; posting rows since {since or '(first start)'}")
     for s in stats:
         print(f"  {s['name']}: chat {s['chat']} ({s['chat_with_text']} with text, {s['chat_unposted']} not posted),"

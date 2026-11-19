@@ -103,3 +103,15 @@ def test_safe_when_guildledger_switched_itself_off():
     assert a.IsCollector() is False and a.GetMap()["available"] is False
     a.SetMapShare(False)  # no error, no effect
     assert a.GetLink()["requested"] is False
+
+
+def test_collector_switch_is_saved_and_reports_the_running_role():
+    game = Game(role="member", name="Mem Ber")
+    a = api(game)
+    assert tuple(a.GetCollector()) == (False, False)
+    a.SetCollector(True)
+    assert game.W.ns.Store.Opts().collector is True
+    assert tuple(a.GetCollector()) == (True, False), "wanted on, still running as member until /reload"
+    a.SetCollector(False)
+    assert tuple(a.GetCollector()) == (False, False)
+    assert tuple(api(Game()).GetCollector()) == (True, True)
