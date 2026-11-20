@@ -1279,7 +1279,7 @@ function AmazingHub:RefreshLootEquity(content, countText)
     for _, child in pairs({ content:GetChildren() }) do child:Hide() end
 
     local rows = AmazingHub.LootTracker:GetGuildLootEquity()
-    countText:SetText(string.format(L["%d members with loot/raid history"], #rows))
+    countText:SetText(string.format("%d members: items received compared with raid attendance", #rows))
 
     local yOff = 0
     for _, r in ipairs(rows) do
@@ -1310,10 +1310,10 @@ function AmazingHub:RefreshLootEquity(content, countText)
 
         -- Flag: dry (deserves loot) vs over-fed, for quick scanning.
         if r.attendance >= 70 and r.items == 0 then
-            local flag = UI:CreateText(row, L["dry"], 10, C.green.r, C.green.g, C.green.b)
+            local flag = UI:CreateText(row, "due loot", 10, C.green.r, C.green.g, C.green.b)
             flag:SetPoint("LEFT", 600, 0)
         elseif r.raids > 0 and r.perRaid >= 1.0 then
-            local flag = UI:CreateText(row, L["well-fed"], 10, C.red.r, C.red.g, C.red.b)
+            local flag = UI:CreateText(row, "lots of loot", 10, C.red.r, C.red.g, C.red.b)
             flag:SetPoint("LEFT", 600, 0)
         end
 
@@ -2087,7 +2087,29 @@ function AmazingHub:RefreshSettingsPanel(content, category)
     local scaleLabel = UI:CreateText(content, L["UI scale"], 11, C.text.r, C.text.g, C.text.b)
     scaleLabel:SetPoint("TOPLEFT", 0, -yOff)
 
-    local scale = CreateFrame("Slider", "AmazingHubScaleSlider", content, "OptionsSliderTemplate")
+    -- Amazing Hub: five buttons instead of the slider (the slider moved with the window it scaled)
+    local scaleBtns = {}
+    local function markScale()
+        local cur = AmazingHub:GetSetting("uiScale") or 1
+        for v, b in pairs(scaleBtns) do
+            local pct = string.format("%d%%", v * 100 + 0.5)
+            b.label:SetText(math.abs(cur - v) < 0.01 and ("|cffFFD700" .. pct .. "|r") or pct)
+        end
+    end
+    for i, v in ipairs({ 0.8, 0.9, 1.0, 1.1, 1.2 }) do
+        local b = UI:CreateButton(content, "", 50, 20)
+        b:SetPoint("TOPLEFT", 120 + (i - 1) * 54, -yOff)
+        b:SetScript("OnClick", function()
+            AmazingHub:SetSetting("uiScale", v)
+            markScale()
+            UI:ApplyScale()
+        end)
+        scaleBtns[v] = b
+    end
+    markScale()
+    yOff = yOff + 30
+    local scale = { SetPoint = function() end } -- the slider's lines below are left out
+    if false then
     scale:SetPoint("TOPLEFT", 120, -yOff)
     scale:SetWidth(180)
     scale:SetMinMaxValues(0.8, 1.2)
@@ -2103,7 +2125,7 @@ function AmazingHub:RefreshSettingsPanel(content, category)
         _G[self:GetName() .. "Text"]:SetText(string.format("%d%%", value * 100))
         UI:ApplyScale()
     end)
-    yOff = yOff + 40
+    end -- Amazing Hub: end of the unused slider
 
     --------------------------------------------------------------------
     -- MODULE TOGGLES

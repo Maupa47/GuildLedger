@@ -139,7 +139,10 @@ local COLUMNS = {
     { key = "race",        label = L["RACE"],        name = L["Race"],        min = 70,  weight = 1, align = "LEFT",
       value = function(d) return textOr(d.race) end },
     { key = "lastSeen",    label = L["LAST SEEN"],   name = L["Last seen"],   min = 78,  weight = 1, align = "RIGHT",
-      value = function(d) return d.lastUpdate > 0 and d.lastUpdate or nil end },
+      value = function(d) -- Amazing Hub: the later of the addon's data and the game's last login
+          local t = math.max(d.lastUpdate, d.lastOnline or 0)
+          return t > 0 and t or nil
+      end },
     { key = "professions", label = L["PROFESSIONS"], name = L["Professions"], min = 160, weight = 2, align = "LEFT", asc = true,
       value = function(d)
           local names = {}
@@ -1125,6 +1128,8 @@ function AmazingHub:CreateRosterPanel(parent, host)
                         race = addonData.race or "",
                         lastUpdate = addonData.lastUpdate or 0,
                         lastSync = addonData.lastSync or 0,
+                        lastOnline = (not isOnline and AmazingHub.GuildManager and AmazingHub.GuildManager.LastOnlineTime
+                            and AmazingHub.GuildManager:LastOnlineTime(i)) or 0, -- Amazing Hub
                         -- Prefer the live version a member is broadcasting on the mesh
                         -- (realm-wide, fresher than the last guild sync) over the stored
                         -- one, so an update shows up before CommSystem re-syncs.
@@ -1623,8 +1628,8 @@ function UpdateRosterRow(row, data, rowIndex)
     -- Last seen
     if data.isOnline then
         row.lastSeenText:SetText(L["|cff4CFF4CNow|r"])
-    elseif data.lastUpdate > 0 then
-        row.lastSeenText:SetText(AmazingHub:TimeAgo(data.lastUpdate))
+    elseif math.max(data.lastUpdate, data.lastOnline or 0) > 0 then -- Amazing Hub: or the game's last login
+        row.lastSeenText:SetText(AmazingHub:TimeAgo(math.max(data.lastUpdate, data.lastOnline or 0)))
     else
         row.lastSeenText:SetText("-")
     end

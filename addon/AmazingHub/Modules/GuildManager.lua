@@ -37,6 +37,27 @@ function GuildManager:CanDemote()
     return (CanGuildDemote and CanGuildDemote()) and true or false
 end
 
+-- Amazing Hub: the game lets you move only members below your own rank, and never past it
+local function myRank()
+    local _, _, r = GetGuildInfo("player")
+    return type(r) == "number" and r or nil
+end
+function GuildManager:MayPromote(rankIndex)
+    local me = myRank()
+    return me ~= nil and type(rankIndex) == "number" and rankIndex > me + 1
+end
+function GuildManager:MayDemote(rankIndex)
+    local me = myRank()
+    local n = (GuildControlGetNumRanks and GuildControlGetNumRanks()) or 0
+    return me ~= nil and type(rankIndex) == "number" and rankIndex > me and (n == 0 or rankIndex < n - 1)
+end
+-- Amazing Hub: the game's last login of an offline member as a time (nil when online or unknown)
+function GuildManager:LastOnlineTime(rosterIndex)
+    local d = self:GetDaysOffline(rosterIndex)
+    if type(d) ~= "number" or d ~= d then return nil end
+    return time() - math.floor(d * 86400)
+end
+
 function GuildManager:CanKick()
     return (CanGuildRemove and CanGuildRemove()) and true or false
 end

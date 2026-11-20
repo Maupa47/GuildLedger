@@ -101,6 +101,14 @@ Licence: MIT (see `LICENSE.txt` and `AmazingHub/THIRD_PARTY.md`).
 ```
 - Settings → Collector (officers): one switch, "I am a collector (I run the GuildLedger companion on this PC)",
   with a "Reload now" button after a change. Replaces typing /gl collector on|off. Players change nothing.
+- Bottom bar of the hub: "Game guild window" opens the game's own guild window and always shows.
+  (Settings → General → "Guild button opens Amazing Hub" off: the guild key opens the game's window.)
+- Roster "Last seen" also shows the game's last login, so members without the addon have a time.
+- Leadership → Ranks: the up/down arrows show only for members below your own rank.
+- Leadership: the Engagement tab is gone (it counted recruiting posts and invites, which WoW: Forever
+  does not allow addons to do).
+- Settings → UI scale: five buttons (80 % to 120 %) instead of the slider that jumped around.
+- Loot equity: plain words ("due loot", "lots of loot") and a line saying what the table compares.
 - Everything from 0.5.4 (below) is included.
 ```
 

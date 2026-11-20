@@ -18,7 +18,7 @@ local SUBTABS = {
     { key = "motd",     label = L["MOTD / Info"] },
     { key = "log",      label = L["Audit Log"] },
     { key = "ban",      label = L["Ban List"] },
-    { key = "engage",   label = L["Engagement"] },
+    -- Amazing Hub: no Engagement (recruiting posts and addon invites are blocked on WoW: Forever)
     { key = "presets",  label = L["Presets"] },
 }
 
@@ -156,7 +156,7 @@ local function BuildRanksSub(panel)
             lvlFS:SetPoint("LEFT", 340, 0)
 
             -- Demote one step (higher rankIndex). Hidden if no permission.
-            if canDemote then
+            if canDemote and GM:MayDemote(m.rankIndex) then -- Amazing Hub: only below your own rank
                 local downBtn = UI:CreateButton(row, "|TInterface\\BUTTONS\\Arrow-Down-Up:14:14|t", 26, 18)
                 downBtn:SetPoint("RIGHT", -8, 0)
                 downBtn:SetScript("OnClick", function()
@@ -165,7 +165,7 @@ local function BuildRanksSub(panel)
                 end)
             end
             -- Promote one step (lower rankIndex).
-            if canPromote then
+            if canPromote and GM:MayPromote(m.rankIndex) then -- Amazing Hub: never up to your rank
                 local upBtn = UI:CreateButton(row, "|TInterface\\BUTTONS\\Arrow-Up-Up:14:14|t", 26, 18)
                 upBtn:SetPoint("RIGHT", -38, 0)
                 upBtn:SetScript("OnClick", function()
@@ -362,7 +362,7 @@ local function BuildSuggestSub(panel)
                 local attFS = UI:CreateText(row, format(L["%d%% attendance"], m.attendance), 10, C.green.r, C.green.g, C.green.b)
                 attFS:SetPoint("LEFT", 300, 0)
 
-                if canPromote then
+                if canPromote and AmazingHub.GuildManager:MayPromote(m.rankIndex) then -- Amazing Hub
                     local fullName = m.fullName
                     local promoBtn = UI:CreateButton(row, L["Promote"], 76, 18)
                     promoBtn:SetPoint("RIGHT", -8, 0)

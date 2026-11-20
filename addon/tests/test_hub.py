@@ -33,6 +33,7 @@ EXPECTED_FAIL = {
     "recruit-module-off.lua": "recruitment module off by default",
     "startup-isolation.lua": "recruitment module off: its officer stage never starts",
     "guild-chat.lua": "GuildLedger keeps the guild chat",
+    "engagement-panel.lua": "Leadership's Engagement sub-tab is removed (recruiting and addon invites blocked on Forever)",
     "secret-values.lua": "stops at GuildChat:Initialize (off); passes with it on",
     "window-shell.lua": "slash commands renamed to /amazing, /amazinghub",
     "no-brutus.lua": "needs `git ls-files` of the folder (fails until committed)",
@@ -298,3 +299,23 @@ def test_own_chat_tag_replaces_the_alt_tag_for_everyone_who_reads_it():
         "[11] |cff888888(Floy)|r", "[11] |cff888888[Floy]|r", "[11]",
         "[11] |cff888888(alt of Floyd Mainchar)|r", "[11]",
     ]
+
+
+def test_rank_arrows_only_below_your_own_rank():
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        AmazingHub = { db = {}, L = setmetatable({}, { __index = function(_, k) return k end }) }
+        myRank = 2
+        function GetGuildInfo() return "G", "Officer", myRank end
+        function GuildControlGetNumRanks() return 6 end
+    """)
+    lua.execute((HUB / "Modules" / "GuildManager.lua").read_text("utf-8"))
+    out = lua.eval("""(function()
+        local GM, o = AmazingHub.GuildManager, {}
+        for r = 0, 5 do o[#o + 1] = r .. (GM:MayPromote(r) and "P" or "") .. (GM:MayDemote(r) and "D" or "") end
+        myRank = nil
+        o[#o + 1] = tostring(GM:MayPromote(4)) .. tostring(GM:MayDemote(4))
+        return table.concat(o, " ")
+    end)()""")
+    # rank 2 (you) may move 3 down, 4 and 5 up; 3 cannot go up to your rank; 5 is the lowest: no demote
+    assert out == "0 1 2 3D 4PD 5P falsefalse"

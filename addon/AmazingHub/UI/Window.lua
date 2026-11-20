@@ -167,7 +167,7 @@ local FOOTER = {
     { key = "invite", priority = 80 },
     { key = "cores", label = L["Core Sign-up"], priority = 60,
       run = function() if AmazingHub.ShowCoreSignupFrame then AmazingHub:ShowCoreSignupFrame() end end },
-    { key = "blizzard", label = L["Blizzard"], priority = 50,
+    { key = "blizzard", label = "Game guild window", priority = 95, -- Amazing Hub: always shown
       run = function() if AmazingHub.OpenBlizzardGuildUI then AmazingHub:OpenBlizzardGuildUI() end end },
 }
 

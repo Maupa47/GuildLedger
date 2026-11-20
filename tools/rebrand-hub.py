@@ -371,6 +371,114 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "    yOff = yOff + 26\n"
      "    if AmazingHub.ChatTag then yOff = AmazingHub.ChatTag.BuildSettings(content, yOff) end -- Amazing Hub\n",
      "Settings: what others see in the brackets"),
+    # --- 7. Officer and window fixes (0.6.1) -------------------------------------------------------------------------
+    # Rank arrows only where the game would allow the change: below your own rank (rank changes themselves are
+    # Blizzard-protected; the hub hands them to the game's guild window).
+    ("Modules/GuildManager.lua",
+     "function GuildManager:CanKick()\n",
+     "-- Amazing Hub: the game lets you move only members below your own rank, and never past it\n"
+     "local function myRank()\n"
+     "    local _, _, r = GetGuildInfo(\"player\")\n"
+     "    return type(r) == \"number\" and r or nil\n"
+     "end\n"
+     "function GuildManager:MayPromote(rankIndex)\n"
+     "    local me = myRank()\n"
+     "    return me ~= nil and type(rankIndex) == \"number\" and rankIndex > me + 1\n"
+     "end\n"
+     "function GuildManager:MayDemote(rankIndex)\n"
+     "    local me = myRank()\n"
+     "    local n = (GuildControlGetNumRanks and GuildControlGetNumRanks()) or 0\n"
+     "    return me ~= nil and type(rankIndex) == \"number\" and rankIndex > me and (n == 0 or rankIndex < n - 1)\n"
+     "end\n"
+     "-- Amazing Hub: the game's last login of an offline member as a time (nil when online or unknown)\n"
+     "function GuildManager:LastOnlineTime(rosterIndex)\n"
+     "    local d = self:GetDaysOffline(rosterIndex)\n"
+     "    if type(d) ~= \"number\" or d ~= d then return nil end\n"
+     "    return time() - math.floor(d * 86400)\n"
+     "end\n"
+     "\n"
+     "function GuildManager:CanKick()\n",
+     "rank changes allowed only below your own rank; last login as a time"),
+    ("UI/ManagementPanel.lua",
+     "            if canDemote then\n",
+     "            if canDemote and GM:MayDemote(m.rankIndex) then -- Amazing Hub: only below your own rank\n",
+     "Ranks: demote arrow only where allowed"),
+    ("UI/ManagementPanel.lua",
+     "            if canPromote then\n                local upBtn",
+     "            if canPromote and GM:MayPromote(m.rankIndex) then -- Amazing Hub: never up to your rank\n"
+     "                local upBtn",
+     "Ranks: promote arrow only where allowed"),
+    ("UI/ManagementPanel.lua",
+     "                if canPromote then\n",
+     "                if canPromote and AmazingHub.GuildManager:MayPromote(m.rankIndex) then -- Amazing Hub\n",
+     "Suggestions: Promote only where allowed"),
+    # Engagement counts recruiting posts and the player's own invites: both impossible in this pack on Forever.
+    ("UI/ManagementPanel.lua",
+     "    { key = \"engage\",   label = L[\"Engagement\"] },\n",
+     "    -- Amazing Hub: no Engagement (recruiting posts and addon invites are blocked on WoW: Forever)\n",
+     "Leadership: Engagement sub-tab removed"),
+    # Last seen: the game's last login too, so members without the addon show a time.
+    ("UI/RosterFrame.lua",
+     "lastSync = addonData.lastSync or 0,\n",
+     "lastSync = addonData.lastSync or 0,\n"
+     "                        lastOnline = (not isOnline and AmazingHub.GuildManager and AmazingHub.GuildManager.LastOnlineTime\n"
+     "                            and AmazingHub.GuildManager:LastOnlineTime(i)) or 0, -- Amazing Hub\n",
+     "roster rows: the game's last login"),
+    ("UI/RosterFrame.lua",
+     "value = function(d) return d.lastUpdate > 0 and d.lastUpdate or nil end },\n",
+     "value = function(d) -- Amazing Hub: the later of the addon's data and the game's last login\n"
+     "          local t = math.max(d.lastUpdate, d.lastOnline or 0)\n"
+     "          return t > 0 and t or nil\n"
+     "      end },\n",
+     "Last seen sorts by the game's last login too"),
+    ("UI/RosterFrame.lua",
+     "    elseif data.lastUpdate > 0 then\n        row.lastSeenText:SetText(AmazingHub:TimeAgo(data.lastUpdate))\n",
+     "    elseif math.max(data.lastUpdate, data.lastOnline or 0) > 0 then -- Amazing Hub: or the game's last login\n"
+     "        row.lastSeenText:SetText(AmazingHub:TimeAgo(math.max(data.lastUpdate, data.lastOnline or 0)))\n",
+     "Last seen shows the game's last login too"),
+    # The way back to the game's own guild window: always in the bottom bar, with a clear name.
+    ("UI/Window.lua",
+     "    { key = \"blizzard\", label = L[\"Blizzard\"], priority = 50,\n",
+     "    { key = \"blizzard\", label = \"Game guild window\", priority = 95, -- Amazing Hub: always shown\n",
+     "bottom bar: Game guild window button stays"),
+    # Loot equity: plain words.
+    ("UI/FeaturePanels.lua",
+     "countText:SetText(string.format(L[\"%d members with loot/raid history\"], #rows))",
+     "countText:SetText(string.format(\"%d members: items received compared with raid attendance\", #rows))",
+     "Loot equity: what the table compares"),
+    ("UI/FeaturePanels.lua", "L[\"dry\"]", "\"due loot\"", "Loot equity: 'dry' in plain words"),
+    ("UI/FeaturePanels.lua", "L[\"well-fed\"]", "\"lots of loot\"", "Loot equity: 'well-fed' in plain words"),
+    # UI scale: five buttons. The slider sat inside the window it scaled, so every step moved it under the mouse.
+    ("UI/FeaturePanels.lua",
+     "    local scale = CreateFrame(\"Slider\", \"AmazingHubScaleSlider\", content, \"OptionsSliderTemplate\")\n",
+     "    -- Amazing Hub: five buttons instead of the slider (the slider moved with the window it scaled)\n"
+     "    local scaleBtns = {}\n"
+     "    local function markScale()\n"
+     "        local cur = AmazingHub:GetSetting(\"uiScale\") or 1\n"
+     "        for v, b in pairs(scaleBtns) do\n"
+     "            local pct = string.format(\"%d%%\", v * 100 + 0.5)\n"
+     "            b.label:SetText(math.abs(cur - v) < 0.01 and (\"|cffFFD700\" .. pct .. \"|r\") or pct)\n"
+     "        end\n"
+     "    end\n"
+     "    for i, v in ipairs({ 0.8, 0.9, 1.0, 1.1, 1.2 }) do\n"
+     "        local b = UI:CreateButton(content, \"\", 50, 20)\n"
+     "        b:SetPoint(\"TOPLEFT\", 120 + (i - 1) * 54, -yOff)\n"
+     "        b:SetScript(\"OnClick\", function()\n"
+     "            AmazingHub:SetSetting(\"uiScale\", v)\n"
+     "            markScale()\n"
+     "            UI:ApplyScale()\n"
+     "        end)\n"
+     "        scaleBtns[v] = b\n"
+     "    end\n"
+     "    markScale()\n"
+     "    yOff = yOff + 30\n"
+     "    local scale = { SetPoint = function() end } -- the slider's lines below are left out\n"
+     "    if false then\n",
+     "UI scale: five buttons instead of the slider"),
+    ("UI/FeaturePanels.lua",
+     "        UI:ApplyScale()\n    end)\n    yOff = yOff + 40\n",
+     "        UI:ApplyScale()\n    end)\n    end -- Amazing Hub: end of the unused slider\n",
+     "UI scale: the old slider is never built"),
 ]
 
 # Patches whose anchor occurs a known number of times: (file, old, new, why, times).

@@ -384,6 +384,10 @@ Setup: the admin PC is repo-linked, so just `/reload` (no new folders this time)
 | B42 | DKP tab: click CURRENT, again, then MEMBER | largest first with a down arrow, then smallest first (up arrow), then by name |
 | B43 | Professions tab, pick a profession, both views: click each heading twice | sorts by that column, then the other way; the choice is still there after `/reload` |
 | B44 | two players with this pack, both with Settings → General → Chat → "Annotate guild chat" on. Player A (an alt linked to a main) types `Floy` in "What others see in the brackets for my lines", presses Enter, writes in /g | player B sees `[level] (Floy)` instead of `(alt of …)`; with "Short tag" on: `[Floy]`. A ticks "Show no tag at all" → B sees only `[level]`; A empties the box and unticks → `(alt of …)` again. Changes reach B within a few seconds |
+| B45 | open the hub, look at the bottom bar, click "Game guild window" | the button is there even in a narrow window; the game's guild window opens |
+| B46 | Roster: look at "Last seen" for an offline member who does not use the pack | a time (e.g. "3 days ago") instead of "-". If it still shows "-", tell me: the game's last-login value is missing on Forever |
+| B47 | officer: Leadership → Ranks | arrows only on members below your rank; none on yourself, your rank or higher; no down arrow on the lowest rank. Leadership has no Engagement tab |
+| B48 | Settings → General → UI scale: click 80 %, 120 %, 100 % | the window changes size once per click, the chosen value is gold, nothing jumps |
 | B24 | unzip `dist\Amazing-Forever-Guild-Pack-0.5.4.zip` with 7-Zip or *Extract All* to a test folder | exactly two folders, `GuildLedger` and `AmazingHub`, each with its `.toc` directly inside |
 
 ## Damage meter probe (GLMeterProbe, temporary) — 2026-11-17
