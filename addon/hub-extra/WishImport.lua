@@ -93,7 +93,8 @@ function W.ShowPopup()
     f:SetSize(460, 220)
     f:SetPoint("CENTER")
     if f.SetBackdrop then
-        f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+        f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = (UI.Edge and UI:Edge(f)) or 1 })
         f:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
         f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
     end

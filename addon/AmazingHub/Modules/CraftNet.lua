@@ -67,7 +67,13 @@ function CraftNet:Query(itemId, onUpdate)
     local payload = table.concat({ self.PROTO, "Q", itemId, qid }, "|")
     mesh:Guild(self.PREFIX, payload)                        -- hidden, fast
     mesh:Proximity(self.PREFIX, payload)                    -- hidden, nearby
-    mesh:Realm(self.PREFIX, payload, self.PREFIX .. ":" .. qid)  -- slow, coalesced
+    -- slow, coalesced; on WoW: Forever whispers, in the WhisperQueue's room (issue #393)
+    local queue = AmazingHub.WhisperQueue
+    if queue then
+        queue:Realm(self.PREFIX, payload, self.PREFIX .. ":" .. qid)
+    else
+        mesh:Realm(self.PREFIX, payload, self.PREFIX .. ":" .. qid)
+    end
 
     if C_Timer and C_Timer.After then
         C_Timer.After(self.TTL, function() CraftNet.active[qid] = nil end)
@@ -94,7 +100,15 @@ function CraftNet:OnMessage(payload, sender, dist)
         if prof then
             local reply = table.concat({ self.PROTO, "A", itemId, qid, prof }, "|")
             local mesh = _G.AmzHubMesh
-            if mesh then mesh:Whisper(self.PREFIX, reply, sender) end
+            if mesh then
+                local function send()
+                    AmazingHub:NoteWhisper(sender) -- the asker may log off before the answer leaves (issue #326)
+                    return mesh:Whisper(self.PREFIX, reply, sender) and true or false
+                end
+                -- "low": the query is gone in a minute, and a stale answer is no use (issue #393)
+                local queue = AmazingHub.WhisperQueue
+                if queue then queue:PushAddon(self.PREFIX, reply, sender, "low", send) else send() end
+            end
         end
 
     elseif op == "A" then

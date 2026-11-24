@@ -479,3 +479,41 @@ docs/discord/SERVER.md. Paste what you see in the right column when it differs.
 | C18 | Discord `/joined character:` for a member whose join the archive did not see | a date with "first guild chat line in the archive" when they wrote before the member list first showed them |
 
 Result: (pending)
+
+## Hub round U3 (Amazing Hub on GuildOS 1.40.0, branch repin-140, 2026-11-24) — run when ready
+
+Needs: the branch checked out, `.\tools\install.ps1` run once more (it links the new folder `AmazingHubDev`), a
+`/reload`. Back up `WTF\Account\<ACCOUNT>\SavedVariables\AmazingHub.lua` first (copy it somewhere): the hub's
+saved data moves to a new key (H8) and the old hub cannot read it back. Paste what differs.
+
+**With the developer addon** (your own install; the character screen's AddOns list shows "Amazing Hub (developer
+features)" ticked):
+
+| # | Do | Expect |
+|---|---|---|
+| H1 | log in, `/amazing` | the window opens, no Lua error (BugSack); the About text says "Amazing Forever Guild Pack" |
+| H2 | Settings → each sub-tab (Profile, Interface, Chat, Modules, Rules, Data) | every heading has + or −; the first section of a page is open, the others closed; a click opens or closes it |
+| H3 | Settings → Chat → "Chat messages"; Interface → "World map"; Profile → "Collector (officers)" | our three sections at the end of those pages, switches work as in 0.6 |
+| H4 | Settings → Chat → Guild chat | under "Short tag": "What others see in the brackets for my lines" with a Save button, and "Show no tag at all" |
+| H5 | Settings → Interface → UI scale | five buttons 80%–120%, the current one gold; a click rescales at once |
+| H6 | Groups tab → create a group | "Also post in guild chat" and "Invite whoever asks" are there, both **unticked** |
+| H7 | Leadership tab | sub-tabs "Bulk actions", "Without AmazingHub", "Chat alerts", "Alert rules" are there |
+| H8 | Bank tab (officer, at the bank) | the Cleanup sub-tab and the Cleanup button in the bank bar |
+| H9 | a member's detail → Warn | the "Only record it, without a whisper" box is there |
+| H10 | Ranks sub-tab | arrows only on members below your rank |
+| H11 | Loot window → Accounts (DKP standings), Professions → Recipes and Crafters | clicking a heading sorts, again flips, with an arrow |
+| H12 | Wishlist window | "Import from Discord" in the title bar |
+| H13 | the data you had before 21/11 and since (Raids, wishlists, notes) | both are there; in the SavedVariables file the old key `"<guild>-"` still exists and `_packRealmMerged` names it |
+
+**Without the developer addon** (untick "Amazing Hub (developer features)" in the AddOns list, log in; this is
+what CurseForge players get):
+
+| # | Do | Expect |
+|---|---|---|
+| H14 | Groups tab → create a group | neither "Also post in guild chat" nor "Invite whoever asks"; nothing is said in /g |
+| H15 | Leadership tab | no "Bulk actions", "Without AmazingHub", "Chat alerts", "Alert rules"; `/amazing bulk` says "Not available" |
+| H16 | Bank tab | no Cleanup sub-tab, no Cleanup button at the bank |
+| H17 | Warn a member | no "Only record it" box; the text label says it is kept with the warning; the member gets **no** whisper |
+| H18 | a second player with the old 0.6 pack online at the same time | no Lua errors on either side; roster and professions sync both ways |
+
+Tick the developer addon again afterwards. Result: (pending)

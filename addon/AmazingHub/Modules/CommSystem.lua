@@ -17,7 +17,7 @@ CommSystem.MSG_TYPES = {
     PING      = "PI",    -- Presence ping
     PONG      = "PO",    -- Presence response
     VERSION   = "VR",    -- Version check
-    ALT_LINK  = "AL",    -- Alt/main link table sync (officer-authored; all members store)
+    ALT_LINK  = "AL",    -- Alt/main link table, for clients before #424; received only as a merge (AltSync)
     SELF_ALT  = "SA",    -- member self-claim of own alts (officers replay via LinkAlt)
     RAID_DATA = "RD",    -- Raid attendance + session sync (officer only)
     RAID_DELETE = "RX",  -- Delete a raid session (officer only; sender verified)
@@ -27,6 +27,9 @@ CommSystem.MSG_TYPES = {
     SYNC_V2   = "SV",    -- SyncService v2 versioned envelope (points/events/bank/polls)
     RECRUIT_INFO = "RI", -- Recruitment status broadcast (officer → all members)
     LFG       = "LG",    -- member self-declared LFG availability (sender bound)
+    -- NOT "LP": that code is the wishlist's loot prio, matched by its literal further down.
+    LFG_GROUP = "GF",    -- a group being formed (sender bound; GUILD only; issue #341)
+    LFG_JOIN  = "GJ",    -- a request for a spot and its answer (WHISPER only; issue #341)
     RECRUIT_STATS = "RE",-- self-reported recruitment engagement (sender bound; officers aggregate).
                          -- NOT "RS": that code is already RESPONSE above; "RE" is the free code.
     MAP_POS   = "MP",    -- live guild-map position (sender bound; GUILD-only; clamped)
@@ -36,13 +39,25 @@ CommSystem.MSG_TYPES = {
 CommSystem.THROTTLE_INTERVAL = 5  -- seconds between broadcasts
 CommSystem.lastBroadcast = 0
 
+-- The alt links' old "AL" table (issue #424): sent only while a client before #424 was heard within
+-- LEGACY_WINDOW (its broadcast's version at or below LEGACY_ALT_MAX, or an "AL" without the mark).
+CommSystem.LEGACY_ALT_MAX = "0.6.99" -- Amazing Hub: our last version before AltSync (pack 0.7.0 has it)   -- 1.38.0 shipped before #424
+CommSystem.LEGACY_WINDOW = 1800
+local ALT_LINK_MARK = { v = 2 }
+-- The officers' safe list and nicknames (issue #429) on a sync request's answer at most once per 10 minutes.
+CommSystem.MARKS_BACKFILL_GAP = 600
+
 function CommSystem:Initialize()
     -- Addon messages on Amazing Hub's prefix.
     local frame = CreateFrame("Frame")
     AmazingHub.Compat.RegisterEvent(frame, "CHAT_MSG_ADDON")
     frame:SetScript("OnEvent", function(_, _, prefix, msg, channel, sender)
         if prefix == AmazingHub.PREFIX then
+            -- Timed by the type it carried (issue #324); a chunk still waiting for the rest says "chunk".
+            local st, t = AmazingHub.State.comm, AmazingHub.Perf:Start()
+            st.recvKind = nil
             CommSystem:OnMessageReceived(msg, channel, sender)
+            AmazingHub.Perf:Stop("guild sync in " .. (st.recvKind or "chunk"), t, #msg)
         end
     end)
 
@@ -72,10 +87,15 @@ function CommSystem:Initialize()
                 C_Timer.After(15, function()
                     AmazingHub:PublishOfficerMaxRank()
                     AmazingHub:PublishEventMaxRank()   -- who creates events (issue #283)
+                    if AmazingHub.Calendar then AmazingHub.Calendar:PublishMemberKinds() end   -- and which kinds (issue #308)
                     AmazingHub:PublishLootSystem()
+                    if AmazingHub.CoreManager then AmazingHub.CoreManager:PublishAllLoot() end   -- each core's own (issue #338)
                     if AmazingHub.Readiness then AmazingHub.Readiness:PublishMinIlvl() end  -- Forever (issue #206)
                     if AmazingHub.Founding and AmazingHub:IsFeatureEnabled("founding") then AmazingHub.Founding:Publish() end  -- Forever (issue #208)
                     if AmazingHub.TrialTracker then AmazingHub.TrialTracker:PublishConfig() end  -- the trials' length and switch (#249)
+                    if AmazingHub.Discipline then AmazingHub.Discipline:PublishConfig() end  -- the record's term and ladder (#402)
+                    if AmazingHub.ModAlerts then AmazingHub.ModAlerts:PublishConfig() end  -- the chat alerts' list (#404)
+                    if AmazingHub.GuildRules then AmazingHub.GuildRules:PublishConfig() end  -- the guild's rules (#407)
                 end)
             end
         end
@@ -85,8 +105,9 @@ function CommSystem:Initialize()
     -- The 300s ticker above only broadcasts our own data; without this a client
     -- that missed a peer's one broadcast would never re-pull it within the
     -- session. Kept on a separate 10-min timer; the 0-15s jitter spreads the
-    -- guild-wide REQUEST fan-out across clients (each peer's response is itself
-    -- throttled to once per THROTTLE_INTERVAL, so this cannot storm the channel).
+    -- guild-wide REQUEST fan-out across clients. Only a peer's own data was throttled
+    -- (THROTTLE_INTERVAL), and an officer's backfills went out on every request until
+    -- each peer answered once per ANSWER_GAP (issue #324).
     C_Timer.NewTicker(600, function()
         if IsInGuild() then
             C_Timer.After(math.random() * 15, function()
@@ -121,7 +142,12 @@ end
 
 -- Chunking settings
 CommSystem.CHUNK_SIZE = 230  -- Leave room for chunk header + "M:xxxx:nn:nn:"
-CommSystem.pendingMessages = {}  -- [sender] = { chunks = {}, total = 0, received = 0 }
+CommSystem.pendingMessages = {}  -- [sender] = { chunks = {}, total = 0, received = 0, last = GetTime() }
+-- Seconds a half-received message waits for its next chunk. A whisper's chunks come at the sender's
+-- WhisperQueue pace (issue #393): one every 4 s, up to 64 s while the server throttles, and a "high"
+-- whisper may pass between two of them; so two of its slowest steps.
+CommSystem.CHUNK_SECONDS = 30
+CommSystem.WHISPER_CHUNK_SECONDS = 128
 
 ----------------------------------------------------------------------
 -- Member-data counters (issue #312). Every drop on the way from a guildmate's broadcast to
@@ -179,41 +205,111 @@ CommSystem.DROP_REASON_TEXT = {
 ----------------------------------------------------------------------
 -- Send a message to guild (with chunking for large payloads)
 ----------------------------------------------------------------------
-function CommSystem:SendMessage(msgType, data, target, priority)
+-- `kind`, optional, names it in /amazing perf (SyncService passes its domain); else the type does.
+-- `channel`, optional: "OFFICER" for what only officers may receive (SendToOfficers); GUILD otherwise.
+function CommSystem:SendMessage(msgType, data, target, priority, kind, channel)
+    -- The officers' notes never leave by GUILD or a whisper, whoever calls (#430): SendToOfficers sends them.
+    if self.OFFICER_TYPES[msgType] and (target or channel ~= "OFFICER") then return end
     local payload = msgType .. ":" .. (data or "")
 
     -- Compress
+    local t = AmazingHub.Perf:Start()
     local compressed = LibDeflate:CompressDeflate(payload)
     local encoded = LibDeflate:EncodeForWoWAddonChannel(compressed)
+    AmazingHub.Perf:Stop("guild sync out " .. (kind or msgType), t, #encoded)
 
     local len = #encoded
     if len <= 250 then
         -- Single message, no chunking needed (prefix with "S:").
         -- Cap at 250 so "S:" + payload stays safely under the 255-byte addon-message limit.
         local msg = "S:" .. encoded
-        self:SendRaw(msg, target, priority)
+        self:SendRaw(msg, target, priority, channel)
     else
         -- Multi-chunk: prefix each with "M:msgId:chunkIndex:totalChunks:"
         local msgId = string.format("%X", math.random(0, 0xFFFF))
         local totalChunks = math.ceil(len / self.CHUNK_SIZE)
+        local msgs = {}
         for i = 1, totalChunks do
             local startPos = (i - 1) * self.CHUNK_SIZE + 1
             local endPos = math.min(i * self.CHUNK_SIZE, len)
-            local chunk = encoded:sub(startPos, endPos)
             local header = string.format("M:%s:%d:%d:", msgId, i, totalChunks)
+            msgs[i] = header .. encoded:sub(startPos, endPos)
+        end
+        -- A whisper on WoW: Forever waits in the WhisperQueue, which paces it: the chunks go in as one
+        -- message, all or none, since a message missing one is lost whole (issue #393).
+        local queue = AmazingHub.WhisperQueue
+        if target and queue and queue.Active() then
+            self:SendRawGroup(msgs, target, priority)
+            return
+        end
+        for i, msg in ipairs(msgs) do
             C_Timer.After((i - 1) * 0.1, function()
-                self:SendRaw(header .. chunk, target, priority)
+                self:SendRaw(msg, target, priority, channel)
             end)
         end
     end
 end
 
-function CommSystem:SendRaw(msg, target, priority)
+-- The chunks of one whisper, into the WhisperQueue together. Never "low", as SendRaw.
+function CommSystem:SendRawGroup(msgs, target, priority)
+    return AmazingHub.WhisperQueue:PushAddonGroup(AmazingHub.PREFIX, msgs, target,
+        priority == "ALERT" and "high" or "normal", function(msg) self:_Whisper(msg, target) end)
+end
+
+-- One addon whisper on the sync prefix.
+function CommSystem:_Whisper(msg, target)
+    AmazingHub:NoteWhisper(target) -- a guildmate gone since they asked answers "No player named" (issue #326)
+    AmazingHub.Compat.SendAddonMessage(AmazingHub.PREFIX, msg, "WHISPER", target, "NORMAL")
+end
+
+function CommSystem:SendRaw(msg, target, priority, channel)
     if target then
-        AmazingHub.Compat.SendAddonMessage(AmazingHub.PREFIX, msg, "WHISPER", target, "NORMAL")
+        local function send() self:_Whisper(msg, target) end
+        -- WoW: Forever throttles a client that whispers too fast (issue #393): every whisper waits its turn.
+        -- Never "low": a chunk the queue let go stale would cost the whole message.
+        local queue = AmazingHub.WhisperQueue
+        if queue then
+            queue:PushAddon(AmazingHub.PREFIX, msg, target, priority == "ALERT" and "high" or "normal", send)
+        else
+            send()
+        end
     else
-        AmazingHub.Compat.SendAddonMessage(AmazingHub.PREFIX, msg, "GUILD", nil, priority or "BULK")
+        AmazingHub.Compat.SendAddonMessage(AmazingHub.PREFIX, msg, channel or "GUILD", nil, priority or "BULK")
     end
+end
+
+-- Message types that travel only over the OFFICER addon channel, as SyncService.OFFICER_CHANNEL_DOMAINS for
+-- envelopes (issue #430): the officers' dated notes and tags. Sent there only; received over OFFICER, except "ON"
+-- over GUILD from an officer for the clients before #430 (OFFICER_TYPES_LEGACY_GUILD), never over a whisper.
+CommSystem.OFFICER_TYPES = { ON = true, OA = true }
+-- Transition only (#430, ADR-0045): an officer on a client before #430 still sends "ON" over GUILD; a new client
+-- reads it, so a note written there is not lost. Remove in the next version. "OA" over GUILD is not read.
+CommSystem.OFFICER_TYPES_LEGACY_GUILD = { ON = true }
+
+-- The OFFICER addon channel (Compat.OfficerAddonChannel), or nil when what goes to officers stays on this client.
+-- A rank that may not speak in officer chat is told so once a session, whatever wrote (#427, #430).
+function CommSystem:OfficerChannel()
+    local chan, why = AmazingHub.Compat.OfficerAddonChannel()
+    if why == "no-permission" and not CommSystem._warnedNoOfficerChat then
+        CommSystem._warnedNoOfficerChat = true
+        AmazingHub:Print(AmazingHub.L["Your rank cannot speak in officer chat: what you write for the officers stays on this client."])
+    end
+    return chan, why
+end
+
+-- Whether an OFFICER_TYPES message counts over `channel`: OFFICER; GUILD for the legacy "ON" only (#430). Pure.
+function CommSystem:OfficerTypeChannelOk(msgType, channel)
+    if channel == "OFFICER" then return true end
+    return channel == "GUILD" and self.OFFICER_TYPES_LEGACY_GUILD[msgType] == true
+end
+
+-- To the officers only, over the game's OFFICER addon channel: a member's client never gets the bytes (issue #427).
+-- False, and nothing sent, on a client without that channel (Compat.OfficerAddonChannel).
+function CommSystem:SendToOfficers(msgType, data, priority, kind)
+    local channel = self:OfficerChannel()
+    if not channel then return false end
+    self:SendMessage(msgType, data, nil, priority, kind, channel)
+    return true
 end
 
 ----------------------------------------------------------------------
@@ -246,19 +342,25 @@ function CommSystem:OnMessageReceived(msg, channel, sender)
 
         local key = sender .. ":" .. msgId
         if not self.pendingMessages[key] then
-            local started = { chunks = {}, total = total, received = 0 }
+            local started = { chunks = {}, total = total, received = 0, last = GetTime() }
             self.pendingMessages[key] = started
-            -- Timeout: clean up after 30s. Still waiting then, a chunk was lost: counted, not
-            -- silent (issue #312). A finished message has left the table already.
-            C_Timer.After(30, function()
-                if self.pendingMessages[key] == started then
-                    self.pendingMessages[key] = nil
-                    self:_CountPayload(sender, "dropped", "chunks")
-                end
-            end)
+            -- Timeout: given up once no chunk came for the window. Still waiting then, a chunk was
+            -- lost: counted, not silent (issue #312). A finished message has left the table already.
+            -- Each chunk renews it: a whisper's chunks leave the sender's WhisperQueue one every few
+            -- seconds on WoW: Forever, more slowly when the server throttles (issue #393).
+            local window = channel == "WHISPER" and self.WHISPER_CHUNK_SECONDS or self.CHUNK_SECONDS
+            local function expire()
+                if self.pendingMessages[key] ~= started then return end
+                local left = started.last + window - GetTime()
+                if left > 0 then C_Timer.After(left, expire); return end
+                self.pendingMessages[key] = nil
+                self:_CountPayload(sender, "dropped", "chunks")
+            end
+            C_Timer.After(window, expire)
         end
 
         local pending = self.pendingMessages[key]
+        pending.last = GetTime()
         if not pending.chunks[idx] then
             pending.chunks[idx] = chunkData
             pending.received = pending.received + 1
@@ -291,17 +393,16 @@ function CommSystem:OnMessageReceived(msg, channel, sender)
     -- Parse message type
     local msgType, data = decompressed:match("^(%w+):(.*)$")
     if not msgType then return end
+    AmazingHub.State.comm.recvKind = msgType   -- for /amazing perf; SyncService narrows SV to its domain
 
     if msgType == CommSystem.MSG_TYPES.BROADCAST then
-        self:HandleBroadcast(sender, data)
+        self:HandleBroadcast(sender, data, channel)
     elseif msgType == CommSystem.MSG_TYPES.REQUEST then
         self:HandleRequest(sender, data)
     elseif msgType == CommSystem.MSG_TYPES.RESPONSE then
         self:HandleResponse(sender, data)
     elseif msgType == CommSystem.MSG_TYPES.PING then
         self:HandlePing(sender)
-    elseif msgType == CommSystem.MSG_TYPES.VERSION then
-        self:HandleVersionCheck(sender, data)
     elseif msgType == "WL" then
         if AmazingHub.Wishlist then
             AmazingHub.Wishlist:HandleWishlistBroadcast(sender, data, channel)
@@ -314,8 +415,10 @@ function CommSystem:OnMessageReceived(msg, channel, sender)
             AmazingHub.Wishlist:HandleLootPriosBroadcast(sender, data)
         end
     elseif msgType == "ON" then
-        -- Only an officer writes officer notes, and only an officer keeps them (issue #78).
-        if AmazingHub.OfficerNotes and AmazingHub:IsOfficer() and channel == "GUILD" and AmazingHub:IsOfficerByName(sender) then
+        -- Only an officer writes officer notes, and only an officer keeps them (issue #78). Over OFFICER, or over
+        -- GUILD from a client before #430 (OFFICER_TYPES_LEGACY_GUILD); never a whisper.
+        if AmazingHub.OfficerNotes and AmazingHub:IsOfficer() and self:OfficerTypeChannelOk(msgType, channel)
+            and AmazingHub:IsOfficerByName(sender) then
             AmazingHub.OfficerNotes:HandleIncoming(data)
         end
     elseif msgType == "RC" then
@@ -333,24 +436,26 @@ function CommSystem:OnMessageReceived(msg, channel, sender)
             AmazingHub.RaiderRoster:HandleIncoming(sender, data)
         end
     elseif msgType == CommSystem.MSG_TYPES.ALT_LINK then
-        -- Officer-authored, everyone stores: members need altLinks to see
-        -- alt/main grouping (True Roster, chat tags, inspector). Over GUILD only (issue #81).
-        if channel == "GUILD" and AmazingHub:IsOfficerByName(sender) then
-            local ok, links = LibSerialize:Deserialize(data)
-            if ok and type(links) == "table" then
-                -- Both sides keyed this client's way: on Forever the officer's keys carry its realm (#97).
-                local localized = {}
-                for alt, main in pairs(links) do
-                    local la, lm = AmazingHub:LocalMemberKey(alt), AmazingHub:LocalMemberKey(main)
-                    if la ~= lm then localized[la] = lm end   -- one split person is not their own alt
-                end
-                AmazingHub.db.altLinks = localized
+        -- The whole table, from an officer on a client before #424 (or this one's copy for them). Over GUILD
+        -- only (issue #81). It used to replace this client's table and wiped everybody's links; now it is
+        -- only merged in, never removing or changing a link, and an empty one is nothing (AltSync).
+        -- A client since #424 adds a second value an old one never reads (ALT_LINK_MARK): its "AL" is for the old
+        -- clients only, and is ignored here, so new clients never merge each other's views.
+        if channel == "GUILD" and AmazingHub:IsOfficerByName(sender) and AmazingHub.AltSync then
+            local ok, links, mark = LibSerialize:Deserialize(data)
+            if ok and type(links) == "table" and not (type(mark) == "table" and mark.v == ALT_LINK_MARK.v) then
+                self:_HeardLegacy()
+                AmazingHub.AltSync:OnLegacyList(links, sender)
             end
         end
     elseif msgType == CommSystem.MSG_TYPES.SELF_ALT then
         if AmazingHub.AltAutoDetect then AmazingHub.AltAutoDetect:HandleSelfClaim(sender, data) end
     elseif msgType == CommSystem.MSG_TYPES.LFG then
-        if AmazingHub.LFGBoard then AmazingHub.LFGBoard:HandleEntry(sender, data) end
+        if AmazingHub.LFGBoard then AmazingHub.LFGBoard:HandleEntry(sender, data, channel) end
+    elseif msgType == CommSystem.MSG_TYPES.LFG_GROUP then
+        if AmazingHub.Groups then AmazingHub.Groups:HandleGroup(sender, data, channel) end
+    elseif msgType == CommSystem.MSG_TYPES.LFG_JOIN then
+        if AmazingHub.Groups then AmazingHub.Groups:HandleJoin(sender, data, channel) end
     elseif msgType == CommSystem.MSG_TYPES.RAID_DATA then
         if AmazingHub:IsOfficer() and channel == "GUILD" and AmazingHub:IsOfficerByName(sender) and AmazingHub.RaidTracker then
             AmazingHub.RaidTracker:HandleIncoming(data)
@@ -361,7 +466,9 @@ function CommSystem:OnMessageReceived(msg, channel, sender)
             AmazingHub.RaidTracker:HandleDeleteIncoming(data)
         end
     elseif msgType == CommSystem.MSG_TYPES.NOTES_ALL then
-        if AmazingHub:IsOfficer() and channel == "GUILD" and AmazingHub:IsOfficerByName(sender) and AmazingHub.OfficerNotes then
+        -- Over OFFICER only (#430).
+        if AmazingHub:IsOfficer() and self:OfficerTypeChannelOk(msgType, channel) and AmazingHub:IsOfficerByName(sender)
+            and AmazingHub.OfficerNotes then
             AmazingHub.OfficerNotes:HandleAllIncoming(data)
         end
     elseif msgType == CommSystem.MSG_TYPES.SYNC_V2 then
@@ -448,7 +555,7 @@ end
 ----------------------------------------------------------------------
 -- Handle incoming broadcast
 ----------------------------------------------------------------------
-function CommSystem:HandleBroadcast(sender, data)
+function CommSystem:HandleBroadcast(sender, data, channel)
     local ok, playerData = LibSerialize:Deserialize(data)
     if not ok or type(playerData) ~= "table" then self:_CountPayload(sender, "dropped", "decode"); return end
 
@@ -466,20 +573,54 @@ function CommSystem:HandleBroadcast(sender, data)
     -- Store the data, and count what became of it (issue #312).
     local stored, why = AmazingHub.DataCollector:StoreReceivedData(key, playerData)
     self:_CountPayload(sender, stored and "stored" or "dropped", why)
+    -- A guildmate's own version, over GUILD only: a whisper can come from anyone (#377).
+    if channel == "GUILD" then self:HandleVersionCheck(sender, playerData.addonVersion) end
 end
 
 ----------------------------------------------------------------------
 -- Request data from all online guildies
 ----------------------------------------------------------------------
-function CommSystem:RequestAllData()
+-- `now` (a /amazing sync) asks to be answered within NOW_GAP rather than ANSWER_GAP.
+function CommSystem:RequestAllData(now)
     if not IsInGuild() then return end
-    self:SendMessage(self.MSG_TYPES.REQUEST, "ALL")
+    self:SendMessage(self.MSG_TYPES.REQUEST, now and "NOW" or "ALL")
 end
 
 ----------------------------------------------------------------------
 -- Handle data request
 ----------------------------------------------------------------------
-function CommSystem:HandleRequest(_sender, _data)
+-- How often this client answers (issue #324). Every client answered every request and every officer
+-- re-sent its ~36 backfills each time, with three requests a login and one a client every ten minutes,
+-- all decoded by the whole guild, and an officer of a 700-member guild reported high CPU. A request inside
+-- the window gets one answer at its end, so nothing asked goes unanswered. A /amazing sync (NOW) waits
+-- NOW_GAP at most, so its report still counts who answered. A client before #324 sends ALL for
+-- everything, and answers NOW as it answers ALL.
+CommSystem.ANSWER_GAP = 120
+CommSystem.NOW_GAP = 15
+
+local function answer(self)
+    local st = AmazingHub.State.comm
+    st.answeredAt, st.answerDue = GetTime(), nil
+    AmazingHub.Perf:Count("guild sync request answered")
+    self:_Answer()
+end
+
+function CommSystem:HandleRequest(_sender, data)
+    local st = AmazingHub.State.comm
+    AmazingHub.Perf:Count("guild sync request")
+    local now = GetTime()
+    local gap = data == "NOW" and self.NOW_GAP or self.ANSWER_GAP
+    if not st.answeredAt or now - st.answeredAt >= gap then return answer(self) end
+    AmazingHub.Perf:Count("guild sync request held")
+    local at = st.answeredAt + gap
+    if st.answerDue and st.answerDue <= at then return end   -- an answer comes by then already
+    st.answerDue = at
+    AmazingHub.Compat.After(at - now, function()
+        if st.answerDue == at then answer(self) end   -- else answered meanwhile, or brought forward
+    end)
+end
+
+function CommSystem:_Answer()
     -- Respond with a broadcast to the GUILD channel instead of a direct
     -- WHISPER to the sender.  Using WHISPER caused "No player named X"
     -- spam whenever the requester logged off between their REQUEST and our
@@ -489,11 +630,8 @@ function CommSystem:HandleRequest(_sender, _data)
     C_Timer.After(math.random() * 3, function()  -- Stagger responses
         self:BroadcastMyData()
 
-        -- Officers also send the alt/main link table. This REQUEST handler
-        -- is what a member's automatic login-time pull (and the periodic
-        -- re-REQUEST ticker) lands on, so this is what lets a member who
-        -- logs in later actually converge on altLinks without an officer
-        -- having to run a manual /amazing sync.
+        -- Officers also send the alt/main link table, only while a client before #424 is around
+        -- (BroadcastAltLinks). The new clients' links come from AltSync:Backfill below.
         if AmazingHub:IsOfficer() then
             C_Timer.After(0.5, function()
                 self:BroadcastAltLinks()
@@ -519,10 +657,15 @@ function CommSystem:HandleRequest(_sender, _data)
             C_Timer.After(3, function()
                 AmazingHub:PublishOfficerMaxRank()
                 AmazingHub:PublishEventMaxRank()   -- who creates events (issue #283)
+                if AmazingHub.Calendar then AmazingHub.Calendar:PublishMemberKinds() end   -- and which kinds (issue #308)
                 AmazingHub:PublishLootSystem()
+                if AmazingHub.CoreManager then AmazingHub.CoreManager:PublishAllLoot() end   -- each core's own (issue #338)
                 if AmazingHub.Readiness then AmazingHub.Readiness:PublishMinIlvl() end  -- Forever (issue #206)
                 if AmazingHub.Founding and AmazingHub:IsFeatureEnabled("founding") then AmazingHub.Founding:Publish() end  -- Forever (issue #208)
                 if AmazingHub.TrialTracker then AmazingHub.TrialTracker:PublishConfig() end  -- the trials' length and switch (#249)
+                if AmazingHub.Discipline then AmazingHub.Discipline:PublishConfig() end  -- the record's term and ladder (#402)
+                if AmazingHub.ModAlerts then AmazingHub.ModAlerts:PublishConfig() end  -- the chat alerts' list (#404)
+                if AmazingHub.GuildRules then AmazingHub.GuildRules:PublishConfig() end  -- the guild's rules (#407)
             end)
         end
 
@@ -549,6 +692,12 @@ function CommSystem:HandleRequest(_sender, _data)
         if AmazingHub.LFGBoard and AmazingHub.LFGBoard:AmAvailable() then
             C_Timer.After(3.5, function()
                 AmazingHub.LFGBoard:Rebroadcast()
+            end)
+        end
+        -- And a leader with the group they are forming (issue #341), for the same reason.
+        if AmazingHub.Groups and AmazingHub.Groups:Mine() then
+            C_Timer.After(4, function()
+                AmazingHub.Groups:Rebroadcast()
             end)
         end
 
@@ -582,6 +731,12 @@ function CommSystem:HandleRequest(_sender, _data)
             end)
         end
 
+        if AmazingHub:IsOfficer() and AmazingHub.Discipline then
+            C_Timer.After(5.25, function()
+                AmazingHub.Discipline:Backfill()
+            end)
+        end
+
         if AmazingHub:IsOfficer() and AmazingHub.RosterLog then
             C_Timer.After(5.5, function()
                 AmazingHub.RosterLog:Backfill()
@@ -591,6 +746,35 @@ function CommSystem:HandleRequest(_sender, _data)
         if AmazingHub:IsOfficer() and AmazingHub.Bulletin then
             C_Timer.After(6, function()
                 AmazingHub.Bulletin:Backfill()
+            end)
+        end
+
+        -- Every alt link, tombstones included, at its stored revision, in spaced batches, at most once per
+        -- AltSync.BACKFILL_GAP (issue #424).
+        if AmazingHub:IsOfficer() and AmazingHub.AltSync then
+            C_Timer.After(6.5, function()
+                AmazingHub.AltSync:Backfill()
+            end)
+        end
+
+        -- Every member's birthday, tombstones included, in spaced batches (issue #428).
+        if AmazingHub:IsOfficer() and AmazingHub.Birthdays then
+            C_Timer.After(7, function()
+                AmazingHub.Birthdays:Backfill()
+            end)
+        end
+
+        -- Every member's officer sheet, a couple per envelope and spaced out, once per 10 minutes (issue #427).
+        if AmazingHub:IsOfficer() and AmazingHub.OfficerNotes then
+            C_Timer.After(7.5, function()
+                AmazingHub.OfficerNotes:BackfillSheets()
+            end)
+        end
+
+        -- The officers' safe list and nicknames (issue #429), the same way, at most once per MARKS_BACKFILL_GAP.
+        if AmazingHub:IsOfficer() and AmazingHub.MemberMarks then
+            C_Timer.After(7, function()
+                self:_BackfillMarks()
             end)
         end
     end)
@@ -612,23 +796,80 @@ function CommSystem:HandlePing(sender)
 end
 
 ----------------------------------------------------------------------
--- Handle version check
+-- A newer Amazing Hub in the guild (#377)
 ----------------------------------------------------------------------
-function CommSystem:HandleVersionCheck(_sender, data)
-    -- Could notify user of newer versions
-    if data and data ~= AmazingHub.VERSION then
-        AmazingHub:Print(L["A different Amazing Hub version detected: "] .. tostring(data))
-    end
+-- Every member's broadcast carries its addon version, and the newest one above this client's is said in
+-- chat: NOTICE_WAIT seconds after the first, so a login's wave of broadcasts says only its newest, and
+-- again only if a newer one still comes. The addon cannot see CurseForge: the newest is the newest some
+-- guildmate runs. Only a plain x.y.z on both sides counts, so a beta, a dev build or junk off the network
+-- warns nobody.
+-- At most NOTICE_MAX lines a session, and each part at most three digits: a guildmate stepping
+-- 1.29.1, 1.29.2... earns a few lines, not one every 10s.
+-- ponytail: one guildmate can still claim a version; ask for two senders if that is ever abused.
+CommSystem.NOTICE_WAIT, CommSystem.NOTICE_MAX = 10, 3
+local PLAIN = "^%d%d?%d?%.%d%d?%d?%.%d%d?%d?$"
+function CommSystem:HandleVersionCheck(_sender, ver)
+    if type(ver) == "string" and ver:match(PLAIN) and not self:_AfterLegacyAlt(ver) then self:_HeardLegacy() end
+    local cur, M = AmazingHub.VERSION, AmazingHub.Mesh
+    if not (M and M.CompareVersions) then return end
+    if type(ver) ~= "string" or not ver:match(PLAIN) or type(cur) ~= "string" or not cur:match(PLAIN) then return end
+    if M.CompareVersions(ver, self.newestSeen or cur) <= 0 then return end
+    self.newestSeen = ver
+    if self.noticeDue or (self.noticesSaid or 0) >= self.NOTICE_MAX then return end
+    self.noticeDue = true
+    C_Timer.After(self.NOTICE_WAIT, function()
+        self.noticeDue = nil
+        self.noticesSaid = (self.noticesSaid or 0) + 1
+        AmazingHub:Print(string.format(L["Amazing Hub %s is out, you have %s. Update it on CurseForge."], self.newestSeen, cur))
+    end)
 end
 
 ----------------------------------------------------------------------
 -- Broadcast alt link table to all officers in guild
 ----------------------------------------------------------------------
+-- For the clients before #424, which replace their whole table with it (issue #424). Only while one was
+-- heard within LEGACY_WINDOW: with only new clients listening it is noise, and an old officer's unlink is not
+-- undone on the old clients by a new one's view. AltSync:LegacyView is the whole view without the unconfirmed
+-- links an old officer's newest table lacks; an empty one goes too (the last unlink reaches the old clients),
+-- but nothing goes from a client that knows no entry at all (a new install would wipe them).
 function CommSystem:BroadcastAltLinks()
     if not AmazingHub:IsOfficer() then return end
-    if not IsInGuild() then return end
-    local serialized = LibSerialize:Serialize(AmazingHub.db.altLinks or {})
+    if not IsInGuild() or not AmazingHub.AltSync or not self:LegacyHeard() then return end
+    local links = AmazingHub.AltSync:LegacyView()
+    if type(links) ~= "table" then return end
+    local serialized = LibSerialize:Serialize(links, ALT_LINK_MARK)
     self:SendMessage(self.MSG_TYPES.ALT_LINK, serialized)
+end
+
+-- Whether `ver` (a plain x.y.z) is a version with AltSync, after LEGACY_ALT_MAX.
+function CommSystem:_AfterLegacyAlt(ver)
+    local function parts(v)
+        local a, b, c = v:match("^(%d+)%.(%d+)%.(%d+)$")
+        return tonumber(a) or 0, tonumber(b) or 0, tonumber(c) or 0
+    end
+    local a1, a2, a3 = parts(ver)
+    local b1, b2, b3 = parts(self.LEGACY_ALT_MAX)
+    if a1 ~= b1 then return a1 > b1 end
+    if a2 ~= b2 then return a2 > b2 end
+    return a3 > b3
+end
+
+function CommSystem:_HeardLegacy()
+    self.legacyHeardAt = GetTime()
+end
+
+--- Whether a client before #424 was heard within LEGACY_WINDOW.
+function CommSystem:LegacyHeard()
+    return self.legacyHeardAt ~= nil and GetTime() - self.legacyHeardAt < self.LEGACY_WINDOW
+end
+
+-- MemberMarks:Backfill on a sync request's answer, at most once per MARKS_BACKFILL_GAP (`force`: /amazing sync).
+function CommSystem:_BackfillMarks(force)
+    if not AmazingHub.MemberMarks then return end
+    local now = GetTime()
+    if not force and self._marksBackfillAt and now - self._marksBackfillAt < self.MARKS_BACKFILL_GAP then return end
+    self._marksBackfillAt = now
+    AmazingHub.MemberMarks:Backfill()
 end
 
 ----------------------------------------------------------------------
@@ -645,8 +886,8 @@ function CommSystem:FullSync()
     -- Broadcast own member data (gear, professions, attunements, recipes)
     self:BroadcastMyData()
 
-    -- Request fresh data from all online guild members
-    self:RequestAllData()
+    -- Request fresh data from all online guild members, answered within NOW_GAP (issue #324)
+    self:RequestAllData(true)
 
     if not AmazingHub:IsOfficer() then
         AmazingHub:Print(L["Syncing data with guild..."])
@@ -660,6 +901,12 @@ function CommSystem:FullSync()
 
     C_Timer.After(1, function()
         self:BroadcastAltLinks()
+        if AmazingHub.AltSync then AmazingHub.AltSync:Backfill(true) end   -- issue #424
+        self:_BackfillMarks(true)   -- issue #429
+    end)
+
+    C_Timer.After(1.5, function()
+        if AmazingHub.Birthdays then AmazingHub.Birthdays:Backfill() end   -- issue #428
     end)
 
     C_Timer.After(2, function()
@@ -677,6 +924,7 @@ function CommSystem:FullSync()
     C_Timer.After(4, function()
         if AmazingHub.OfficerNotes then
             AmazingHub.OfficerNotes:BroadcastAllNotes()
+            AmazingHub.OfficerNotes:BackfillSheets(true)   -- issue #427
         end
     end)
 end

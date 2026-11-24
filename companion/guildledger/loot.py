@@ -138,6 +138,11 @@ def hub_guilds(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
     for key, gdb in as_dict(root).items():
         if isinstance(key, str) and not key.startswith("_") and isinstance(gdb, dict) and "-" in key:
             out[key] = gdb
+    # Pack 0.6 saved under "<Guild>-" (no realm) after Forever's patch of 2026-11-21; 0.7 copies that to
+    # "<Guild>-<Realm>" and writes there (addon/hub-extra/PackMigrate.lua). The realmless copy is then stale.
+    for key in [k for k in out if k.endswith("-")]:
+        if any(o != key and o.startswith(key) for o in out):
+            del out[key]
     return out
 
 

@@ -71,3 +71,8 @@ def test_config_hub_path_defaults_next_to_the_guildledger_file(tmp_path):
                    encoding="utf-8")
     c = config.load(cfg)
     assert not c.loot and str(c.hub_path).replace("\\", "/") == "D:/b/AmazingHub.lua"
+
+
+def test_the_stale_realmless_hub_copy_is_skipped_once_the_realm_key_exists():
+    data = {"AmazingHubDB": {"G-": {"points": {}}, "G-Realm": {"points": {}}, "Solo-": {}, "_dbVersion": 2}}
+    assert sorted(loot.hub_guilds(data)) == ["G-Realm", "Solo-"]

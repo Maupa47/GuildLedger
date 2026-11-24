@@ -305,7 +305,7 @@ local function fillDetail(o)
 
     local rows = T:Ranked(o)
     local canAward = T:MayIAward(o)
-    local showPoints = AmazingHub:GetLootSystem() == "dkp"
+    local showPoints = AmazingHub:LootSystemUsesPoints()
     for i, r in ipairs(d.rows) do
         local a = rows[i]
         r.key = a and a.key

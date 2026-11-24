@@ -114,6 +114,10 @@ function Frame:SetFrameLevel(l) self.level = l end
 function Frame:GetFrameLevel() return self.level end
 function Frame:SetScale(s) self.scale = s end
 function Frame:GetScale() return self.scale end
+function Frame:GetEffectiveScale() return (self.scale or 1) * (self.parent and self.parent:GetEffectiveScale() or 1) end
+function Frame:SetBackdrop(b) self.backdrop, self.backdropInfo = b, b end
+function Frame:GetBackdropColor() if self.bg then return unpack(self.bg) end end
+function Frame:GetBackdropBorderColor() end
 function Frame:RegisterEvent(e) self.events[e] = true end
 function Frame:SetAtlas(name) self.atlas = name end
 function Frame:SetColorTexture(r, g, b, a) self.color = { r, g, b, a } end
@@ -156,12 +160,17 @@ function Frame:GetRegions()
   for _, c in ipairs(self.children) do if isRegion(c) then out[#out + 1] = c end end
   return unpack(out)
 end
-function Frame:IsEnabled() return true end
+function Frame:IsEnabled() return self.disabled ~= true end
+function Frame:Enable() self.disabled = nil end
+function Frame:Disable() self.disabled = true end
+function Frame:SetFocus() self.focused = true end
+function Frame:HasFocus() return self.focused == true end
 function Frame:IsMouseOver() return false end
-for _, name in ipairs({ "SetClampedToScreen", "RegisterForClicks", "SetBackdrop",
+for _, name in ipairs({ "SetClampedToScreen", "RegisterForClicks", "Raise",
   "SetBackdropBorderColor", "SetTexture", "SetTexCoord", "SetBlendMode", "SetAlpha", "SetShadowOffset",
   "SetShadowColor", "SetJustifyH", "SetWordWrap", "SetTextInsets", "SetAutoFocus", "SetMaxLetters", "ClearFocus",
-  "SetNormalTexture", "SetHighlightTexture", "SetPushedTexture", "SetMultiLine", "SetHorizTile", "SetVertTile" }) do
+  "SetNormalTexture", "SetHighlightTexture", "SetPushedTexture", "SetMultiLine", "SetHorizTile", "SetVertTile",
+  "HighlightText" }) do
   Frame[name] = function() end
 end
 
@@ -214,6 +223,10 @@ end
 
 local NOW = 1757800000
 function GetServerTime() return NOW end
+-- Each read is a minute after the last, so no roster update here is held as part of a burst
+-- (AmazingHub:Coalesce, issue #324; tools/coalesce.lua tests the holding).
+local clock = 0
+function GetTime() clock = clock + 60; return clock end
 time = function(t) if t then return os.time(t) end return NOW end
 date = os.date
 function GetBuildInfo() return "2.5.6", "1", "", 20506 end
@@ -272,6 +285,9 @@ end
 AmazingHub.Style:Resolve()
 dofile(ADDON .. "/Core/Commands.lua")
 dofile(ADDON .. "/UI/Helpers.lua")
+-- Core/Utils.lua's UTF-8 head; this harness loads Utils further down. The calendar editor's kind
+-- buttons shorten a long label with it (#371).
+function AmazingHub:Utf8Head(s, n) return tostring(s):sub(1, n) end
 dofile(ADDON .. "/UI/Layout.lua")
 dofile(ADDON .. "/UI/FeatureRegistry.lua")
 local UI, C = AmazingHub.UI, AmazingHub.Colors
@@ -293,6 +309,7 @@ AmazingHub.Calendar = {
   GetComposition = function(_, e) return { yes = e.yes or 0 } end,
   MyRsvp = function(_, e) return e.mine end,
   GetEvents = function() return {} end,
+  CreatableKinds = function() return { "RAID" } end,   -- the kinds this rank creates (#308)
 }
 
 -- Panel builders record what they built and, where the real one does, expose
@@ -308,12 +325,14 @@ local function builder(name, withSub)
     end
   end
 end
-for _, n in ipairs({ "CreateRosterPanel", "CreateLootPanel", "CreateDKPPanel", "CreateWishlistGuildPanel",
-  "CreateRecipesPanel", "CreateTrialsPanel", "CreateWebPanel", "CreateSettingsPanel", "CreateDashboardPanel" }) do
+-- The Loot window took the Loot, DKP and Wishlist tabs' panels (issue #346), with sub-tabs. The
+-- Recruitment tab took Trials, the Guild tab Journal and Achievements (issue #367).
+for _, n in ipairs({ "CreateRosterPanel",
+  "CreateRecipesPanel", "CreateWebPanel", "CreateSettingsPanel", "CreateDashboardPanel" }) do
   builder(n)
 end
 for _, n in ipairs({ "CreateRaidHubPanel", "CreateGuildHub", "CreateAlliancePanel", "CreateRecruitmentPanel",
-  "CreateManagementPanel" }) do
+  "CreateManagementPanel", "CreateLootWindow" }) do
   builder(n, true)
 end
 
@@ -476,6 +495,17 @@ check(selected[#selected] == "CreateManagementPanel:ban", "/amazing banlist land
 slash("calendar")
 check(f.activeTab == "guild" and selected[#selected] == "CreateGuildHub:calendar", "/amazing calendar lands on the calendar")
 check(built.CreateManagementPanel == 1 and built.CreateGuildHub == 1, "each panel builds once, the first time it opens")
+-- Trials, Journal and Achievements are sub-tabs since issue #367: their names open the tab that hosts
+-- them, on their sub-tab.
+slash("open trials")
+check(f.activeTab == "recruitment" and selected[#selected] == "CreateRecruitmentPanel:trials",
+  "/amazing open trials opens Recruitment on its Trials sub-tab")
+slash("open journal")
+check(f.activeTab == "guild" and selected[#selected] == "CreateGuildHub:journal",
+  "/amazing open journal opens Guild on its Journal sub-tab")
+check(UI:OpenWindow("achievements") and f.activeTab == "guild" and selected[#selected] == "CreateGuildHub:achievements",
+  "and Achievements on its own")
+check(built.CreateGuildHub == 1 and built.CreateRecruitmentPanel == 1, "through the one panel each tab builds")
 printed = {}
 slash("open nope")
 check(said("Usage: /amazing open <feature>"), "/amazing open with an unknown tab shows its usage")
@@ -488,10 +518,22 @@ check(not UI:OpenWindow("nope") and not UI:OpenWindow("raidTracker"), "OpenWindo
 resize(f, 1000, 620)
 check(listed(f, "recipes") and listed(f, "loot") and listed(f, "alliance"), "available features have tabs")
 check(not listed(f, "tbcOnly"), "a feature this client does not support gets no tab")
+for _, id in ipairs({ "trials", "journal", "achievements" }) do
+  check(tabOf(f, id) == nil and not UI:GetFeature(id).tab and UI:GetFeature(id).opens,
+    id .. " has no tab of its own: it is a sub-tab (#367)")
+end
+check(UI:GetFeature("trials").opens[1] == "recruitment" and UI:GetFeature("trials").opens[2] == "trials"
+  and UI:GetFeature("trials").officerOnly, "Trials is Recruitment's, for officers")
+for _, id in ipairs({ "journal", "achievements" }) do
+  local d = UI:GetFeature(id)
+  check(d.opens[1] == "guild" and d.opens[2] == id and d.tbc == false and d.retail == false,
+    id .. " is Guild's, on WoW: Forever only")
+end
+check(UI:GetFeature("journal").restart, "the journal still asks for a reload when switched")
 
 AmazingHub:SetFeatureEnabled("recipes", false)
 printed = {}
-check(not UI:OpenWindow("recipes") and said("Recipes is disabled in Settings."), "a disabled feature refuses, saying why")
+check(not UI:OpenWindow("recipes") and said("Crafts is disabled in Settings."), "a disabled feature refuses, saying why")
 check(not listed(f, "recipes"), "a disabled feature has no tab")
 AmazingHub:SetFeatureEnabled("recipes", true)
 check(listed(f, "recipes"), "switching it back on brings the tab back")
@@ -506,8 +548,13 @@ AmazingHub.State.startup.failedFeatures.alliance = nil
 officer = false
 f:UpdateTabVisibility()
 printed = {}
-check(not UI:OpenWindow("loot") and said("Loot is officer-only."), "an officer-only tab refuses a member")
-check(not listed(f, "loot") and not listed(f, "management"), "a member sees no officer tabs")
+check(not UI:OpenWindow("management") and said("Leadership is officer-only."), "an officer-only tab refuses a member")
+check(not listed(f, "management"), "a member sees no officer tabs")
+check(not UI:IsFeatureAllowed(UI:GetFeature("trials")), "nor the officers' Trials sub-tab")
+printed = {}
+check(not UI:OpenWindow("trials") and said("Trials is officer-only."), "and /amazing open trials tells a member why")
+-- The Loot window is every member's since issue #346 (it was officer-only): a raider reads the rule.
+check(listed(f, "loot") and UI:IsFeatureAllowed(UI:GetFeature("loot")), "a member has the Loot tab")
 officer = true
 f:UpdateTabVisibility()
 
@@ -532,11 +579,11 @@ do
   check(AmazingHub.State.startup.failed["Tab:boom"], "and /amazing errors lists it as Tab:boom")
 end
 
-UI:OpenWindow("trials")
-AmazingHub:SetFeatureEnabled("trials", false)
-check(f.activeTab == "home" and not f.tabPanels.trials.shown and f.tabPanels.home.shown,
+UI:OpenWindow("management")
+AmazingHub:SetFeatureEnabled("management", false)
+check(f.activeTab == "home" and not f.tabPanels.management.shown and f.tabPanels.home.shown,
   "switching off the open tab's feature falls back to Now")
-AmazingHub:SetFeatureEnabled("trials", true)
+AmazingHub:SetFeatureEnabled("management", true)
 
 -- ── Geometry and persistence ────────────────────────────────────────────
 do
@@ -570,6 +617,19 @@ AmazingHub.db.settings.window, AmazingHub.db.settings.uiScale = nil, 2
 AmazingHub.RosterFrame = nil
 f = UI:GetMainWindow()
 check(f.scale == 2 and f.w == 800 and f.h == 450, "the UI scale applies, and the default size fits the scaled screen")
+-- Its border is sized after the scale, not before (#369): 0.5 makes 1 unit 0.7 of a 1080p pixel.
+PixelUtil = { GetNearestPixelSize = function(units, scale, min)
+  local factor = 768 / 1080
+  return math.max(min or 0, math.floor(units * scale / factor + 0.5)) * factor / scale
+end }
+AmazingHub.db.settings.uiScale = 0.5
+AmazingHub.RosterFrame = nil
+f = UI:GetMainWindow()
+if STYLE ~= "forever" then
+  check(f.backdrop and math.abs(f.backdrop.edgeSize * f:GetEffectiveScale() * 1080 / 768 - 1) < 1e-9,
+    "the window's border is one screen pixel at its own scale")
+end
+PixelUtil = nil
 AmazingHub.db.settings.uiScale = 1.1
 UI:ApplyScale()
 check(f.scale == 1.1, "changing the UI scale rescales the window")
@@ -591,15 +651,15 @@ do
     if c.kind == "Texture" and c.layer == "BACKGROUND" then barBg = c end
   end
   check(wordmark and wordmark.font.file == face(F.wordmark.file) and wordmark.font.size == 18 and same(wordmark.color, C.gold),
-    "left: the gold wordmark, AmazingHub, in its Spectral face")
+    "left: the gold wordmark, AmazingHub, in its own face")
   if STYLE == "forever" then
     -- The metal frame's top edge is the bar: a band over it met the frame's corner off true (#148).
     check(not barBg, "in the Forever style the title bar paints no band of its own")
   else
     check(barBg and same(barBg.color, C.panel), "the title bar sits on panel")
   end
-  check(same(f.metaText.color, C.labelDim) and same(f.syncText.color, C.label) and f.metaText.font.file == face(F.mono)
-    and f.syncText.font.size == 10, "the meta line in labelDim and the sync time in label, both mono 10")
+  check(same(f.metaText.color, C.label) and same(f.syncText.color, C.label) and f.metaText.font.file == face(F.mono)
+    and f.syncText.font.size == 10, "the meta line and the sync time in label, both mono 10")
   local label = tabOf(f, "roster").label
   check(label.font.file == face(F.mono) and label.font.size == 11, "tab labels are mono 11")
   local ruleLine
@@ -655,10 +715,10 @@ do
   flush()
   officer = false
   fire(f, "OnEvent", "GROUP_ROSTER_UPDATE")
-  check(not listed(f, "loot"), "a group change re-checks the tabs")
+  check(not listed(f, "management"), "a group change re-checks the tabs")
   officer = true
   fire(f, "OnEvent", "PARTY_LOOT_METHOD_CHANGED")
-  check(listed(f, "loot"), "so does a loot-method change")
+  check(listed(f, "management"), "so does a loot-method change")
   roster = {}
   f:RefreshTitle()
   check(f.metaText.text == "Chama · \226\128\148", "while the roster loads, a dash instead of 0 online")
@@ -666,58 +726,116 @@ do
   f:RefreshTitle()
 end
 
+-- The title bar's actions (#377): Search and Sync moved here from the footer, children of the bar
+-- so its drag does not eat their clicks, after the sync time and before minimise and close.
+local function titleRight(win) return win.w - 6 - win.closeButton.w - 2 - win.minimise.w end
+local function titleItems(win)
+  local out = {}
+  for _, k in ipairs({ "metaText", "syncText", "searchButton", "syncButton" }) do
+    local fr = win[k]
+    if fr.shown then out[#out + 1] = { key = k, x = fr.points[1][4], w = fr.w } end
+  end
+  return out
+end
+-- Nothing on the bar overlaps the next item or runs under the minimise button.
+local function titleFits(win)
+  local items, edge = titleItems(win), 10 + #"AmazingHub" * 6
+  for _, it in ipairs(items) do
+    if type(it.x) ~= "number" or it.x < edge or it.x + it.w > titleRight(win) then return false, it.key end
+    edge = it.x + it.w
+  end
+  return true
+end
 do
-  local function footShown(key) return f.footItems[key].shown end
-  -- Off Anniversary the game lets no addon invite (#256): no invite field, the rest as ever. What the
-  -- field does is Anniversary's, read below with the client switched to it.
-  local wasAnniversary = AmazingHub.Client.isAnniversary
-  AmazingHub.Client.isAnniversary = false
-  f:LayoutFooter(1000)
-  check(not footShown("invite") and footShown("search") and footShown("sync") and footShown("cores") and footShown("blizzard"),
-    "off Anniversary the footer has no invite field")
-  AmazingHub.Client.isAnniversary = true
-  f:LayoutFooter(1000)
-  check(footShown("search") and footShown("sync") and footShown("invite") and footShown("cores") and footShown("blizzard"),
-    "at 1000px the footer holds every action and the invite field")
-  check(point(f.footItems.search) == "LEFT,10,0", "starting 10px in")
-  check(f.footItems.search.variant == "ghost" and f.footItems.sync.variant == "ghost"
-    and f.footItems.cores.variant == "ghost" and f.footItems.blizzard.variant == "ghost", "as ghost buttons")
-  local ran = {}
-  local real = { AmazingHub.Search, AmazingHub.CommSystem, AmazingHub.ShowCoreSignupFrame, AmazingHub.OpenBlizzardGuildUI }
+  local search, syncB = f.searchButton, f.syncButton
+  check(search.parent == f.titleBar and syncB.parent == f.titleBar and search.level > f.titleBar.level
+    and syncB.level > f.titleBar.level, "Search and Sync are the title bar's children, above it, so a click is theirs")
+  check(search.label.text == "Search" and syncB.label.text == "Sync" and search.variant == "ghost"
+    and syncB.variant == "ghost" and search.h == 20, "as 20px ghost buttons labelled Search and Sync")
+  check(search.shown and syncB.shown and f.syncText.shown and f.metaText.shown, "at 1000px the bar holds them all")
+  local items = titleItems(f)
+  check(#items == 4 and items[1].key == "metaText" and items[2].key == "syncText" and items[3].key == "searchButton"
+    and items[4].key == "syncButton" and items[2].x < items[3].x, "left to right: meta, sync time, Search, Sync")
+  check(titleFits(f), "none of them overlaps or runs under the minimise button")
+  check(items[4].x + items[4].w == titleRight(f) - 8, "Sync stands 8px short of the minimise button")
+  local ran, real = {}, { AmazingHub.Search, AmazingHub.CommSystem }
   AmazingHub.Search = { Show = function() ran.search = true end }
   AmazingHub.CommSystem = { FullSync = function() ran.sync = true end }
-  AmazingHub.ShowCoreSignupFrame = function() ran.cores = true end
-  AmazingHub.OpenBlizzardGuildUI = function() ran.blizzard = true end
-  for _, key in ipairs({ "search", "sync", "cores", "blizzard" }) do fire(f.footItems[key], "OnClick") end
-  check(ran.search and ran.sync and ran.cores and ran.blizzard, "each footer action runs what it names")
-  AmazingHub.Search, AmazingHub.CommSystem, AmazingHub.ShowCoreSignupFrame, AmazingHub.OpenBlizzardGuildUI = real[1], real[2], real[3], real[4]
-  local invitedName
-  local realInvite = GuildInvite
-  GuildInvite = function(name) invitedName = name end
-  local holder, inviteBtn = f.footItems.invite, nil
-  for _, c in ipairs(holder.children) do
-    if c.kind == "Button" and c.label and c.label.text == "Invite" then inviteBtn = c end
+  fire(search, "OnClick")
+  fire(syncB, "OnClick")
+  check(ran.search and ran.sync, "Search opens the search, Sync runs a full sync")
+  AmazingHub.Search, AmazingHub.CommSystem = real[1], real[2]
+  -- The 10s tick and every roster update lay the bar out again: a button kept is never hidden and shown
+  -- again, or a press in progress loses its click (#377).
+  local hides, hide = 0, search.Hide
+  search.Hide = function(self) hides = hides + 1; return hide(self) end
+  syncB.Hide = search.Hide
+  for _ = 1, 3 do f:RefreshTitle() end
+  search.Hide, syncB.Hide = nil, nil
+  check(hides == 0 and search.shown and syncB.shown, "refreshing the title hides neither button (" .. hides .. ")")
+end
+
+-- The footer is links and the version (#377): every action it held went to where it is used.
+do
+  local function footShown(key) return f.footItems[key].shown end
+  f:LayoutFooter(1000)
+  local keys, buttons, boxes = {}, 0, 0
+  for k in pairs(f.footItems) do keys[#keys + 1] = k end
+  table.sort(keys)
+  for _, c in ipairs(f.footer.children) do
+    if c.kind == "Button" then buttons = buttons + 1 end
+    if c.kind == "EditBox" then boxes = boxes + 1 end
   end
+  check(table.concat(keys, ",") == "blizzard,help,site" and buttons == 3 and boxes == 1,
+    "the footer holds three links and the site's copy box, no action: " .. table.concat(keys, ","))
+  check(footShown("site") and footShown("help") and footShown("blizzard"), "at 1000px every link shows")
+  check(f.footItems.site.label.text == "the guild website" and f.footItems.help.label.text == "/amazing help"
+    and f.footItems.blizzard.label.text == "Blizzard", "the guild website, /amazing help and Blizzard")
+  check(f.footItems.site.variant == "ghost" and f.footItems.help.variant == "ghost"
+    and f.footItems.blizzard.variant == "ghost", "as links")
+  local function x(k) return f.footItems[k].points[1][4] end
+  check(point(f.footItems.site) == "LEFT,6,0" and x("site") < x("help") and x("help") < x("blizzard"),
+    "in that order, the first one's text 10px in")
+  local v = f.versionText
+  check(v.shown and v.text == "vtest" and point(v) == "RIGHT,-26,0" and v.font.size == 10
+    and v.font.file == face(AmazingHub.Fonts.mono) and same(v.color, C.label),
+    "and the version at the right, clear of the grip, mono 10 in label")
+  -- The links never run into the version, at any width the footer is drawn at.
+  local overlap
+  for w = 100, 1000, 3 do
+    f:LayoutFooter(w)
+    local versionLeft = w - 26 - #v.text * 6
+    for _, k in ipairs({ "site", "help", "blizzard" }) do
+      local link = f.footItems[k]
+      if link.shown and link.points[1][4] + link.w > versionLeft - 4 then overlap = overlap or (k .. " at " .. w) end
+    end
+  end
+  check(overlap == nil, "no link runs into the version: " .. tostring(overlap))
+  f:LayoutFooter(240)
+  check(not footShown("blizzard") and footShown("help") and footShown("site"), "narrower: Blizzard goes first")
+  f:LayoutFooter(190)
+  check(not footShown("help") and footShown("site") and v.shown, "then /amazing help; the guild website and the version stay longest")
+  f:LayoutFooter(1000)
+
+  local ran, real = {}, AmazingHub.OpenBlizzardGuildUI
+  AmazingHub.OpenBlizzardGuildUI = function() ran.blizzard = true end
+  fire(f.footItems.blizzard, "OnClick")
+  check(ran.blizzard, "Blizzard opens the game's own guild window")
+  AmazingHub.OpenBlizzardGuildUI = real
   printed = {}
-  holder.box:SetText("")
-  fire(inviteBtn, "OnClick")
-  check(invitedName == nil and said("Enter a player name to invite."), "an empty invite asks for a name")
-  holder.box:SetText("  Nova  ")
-  fire(inviteBtn, "OnClick")
-  check(invitedName == "Nova" and said("Guild invite sent to Nova.") and holder.box.text == "",
-    "the invite field invites the name typed, then clears")
-  GuildInvite = realInvite
-  canInvite = false
-  f:LayoutFooter(1000)
-  check(not footShown("invite") and footShown("blizzard"), "no invite field for who cannot invite")
-  canInvite = true
-  f:LayoutFooter(490)
-  check(not footShown("blizzard") and footShown("cores") and footShown("invite"), "narrower: Blizzard goes first")
-  f:LayoutFooter(420)
-  check(not footShown("cores") and footShown("search") and footShown("sync") and footShown("invite"),
-    "then Core Sign-up; search, sync and invite stay longest")
-  AmazingHub.Client.isAnniversary = wasAnniversary
-  f:LayoutFooter(1000)
+  fire(f.footItems.help, "OnClick")
+  check(said("Amazing Hub commands (/amazing or /amazing):"), "/amazing help prints the commands")
+  local box = f.siteBox
+  check(not box.shown, "the site's copy box waits hidden")
+  printed = {}
+  fire(f.footItems.site, "OnClick")
+  check(box.shown and box.text == "the guild website" and box.focused and box.level > f.footer.level
+    and said("Ctrl+C"), "the guild website puts the address in a box over the links, focused for Ctrl+C")
+  box:SetText("typed over")
+  fire(box, "OnTextChanged")
+  check(box.text == "the guild website", "the box is read-only: an edit snaps back to the address")
+  fire(box, "OnEditFocusLost")
+  check(not box.shown, "and it goes once it lets go")
 end
 
 -- ── Tab rule and »n ─────────────────────────────────────────────────────
@@ -980,8 +1098,8 @@ do
   check(#A:Activity(2) == 2 and A:Activity(2)[1].ts == feed[1].ts, "the limit keeps the newest")
   officer = false
   local mine = A:Activity()
-  check(mine[1].id == "roster" and mine[1].sub == nil and mine[6].id == "roster",
-    "a member's rows open the roster where the owner is officer-only")
+  check(mine[1].id == "roster" and mine[1].sub == nil and mine[6].id == "loot",
+    "a member's rows open the roster where the owner is officer-only, and loot the Loot window, every member's since #346")
   officer = true
 
   local saved = { AmazingHub.db.rosterLog, AmazingHub.db.lootHistory, AmazingHub.db.milestones, AmazingHub.db.raidTracker }
@@ -1015,57 +1133,62 @@ local nowTicker = liveTicker(1)
 check(nowTicker ~= nil, "its clock ticks every second while on screen")
 now:SetSize(976, 520)
 flush()
-check(built.CreateDashboardPanel == 1 and now.home.shown and now.column.w == 296, "wide: the home cards beside the 296px column")
+-- The column and the cards as the approved sketch (#377); tools/dashboard-layout.lua checks the
+-- grid itself. The tab scrolls: its child stops the scroll bar's gutter short.
+-- Every Now tab builds its cards with it (each window this harness opened did): count from here.
+local nowW, dashBuilds = 976 - UI.SCROLL_GUTTER, built.CreateDashboardPanel
+check(dashBuilds and now.home.shown and now.column.w == math.floor((nowW - 24) / 3)
+  and not now.gridRule.shown, "wide: the cards beside the column, a third of the tab")
 now:SetSize(700, 520)
 flush()
-check(not now.home.shown and now.column.w == 700, "under 780px: the column alone")
+check(now.home.shown and now.column.w == 700 - UI.SCROLL_GUTTER and now.gridRule.shown
+  and point(now.home) == "TOPLEFT,0," .. -(now.column.h + 28), "under 780px: the cards under the column, below a rule")
 now:SetSize(976, 520)
 flush()
-check(built.CreateDashboardPanel == 1, "the home cards build once")
+check(built.CreateDashboardPanel == dashBuilds, "the home cards build once, not again on a resize")
 do
   local p = now.home.points[1]
-  check(p and p[1] == "TOPLEFT" and p[2] == now.column and p[3] == "TOPRIGHT" and p[4] == 8 and p[5] == 0,
-    "the home cards sit 8px beside the column, not over it")
-  local raidCard, needsCard, feedCard = now.clock.parent, now.needsList.parent, now.feedList.parent
-  local n1, f1 = needsCard.points[1], feedCard.points[1]
-  local toBottom = false
-  for _, q in ipairs(feedCard.points) do
-    if q[1] == "BOTTOM" and q[2] == now.column and q[3] == "BOTTOM" then toBottom = true end
-  end
-  check(n1 and n1[2] == raidCard and n1[3] == "BOTTOMLEFT" and n1[5] == -8
-    and f1 and f1[2] == needsCard and f1[3] == "BOTTOMLEFT" and f1[5] == -8 and toBottom,
-    "the cards stack 8px apart, and activity runs to the bottom of the column")
+  check(p and p[1] == "TOPLEFT" and p[2] == now.column and p[3] == "TOPRIGHT" and p[4] == 12 and p[5] == 0,
+    "the home cards sit 12px beside the column, not over it")
+  check(now.needsList.parent == now.column and now.feedList.parent == now.column and now.clock.parent == now.column
+    and not now.column.backdrop and now.raidTitle.rule == nil and now.needsTitle.rule and now.feedTitle.rule,
+    "the sections stand on the tab, no box, a rule over every title but the first")
   now:SetSize(780, 520)
   flush()
-  check(now.home.shown and now.column.w == 296, "from 780px the home cards are beside the column")
+  check(not now.gridRule.shown and now.column.w == math.floor((780 - UI.SCROLL_GUTTER - 24) / 3),
+    "from 780px the home cards are beside the column")
   now:SetSize(779, 520)
   flush()
-  check(not now.home.shown and now.column.w == 779, "at 779px the column is alone")
+  check(now.gridRule.shown and now.column.w == 779 - UI.SCROLL_GUTTER, "at 779px they go under it")
   now:SetSize(976, 520)
   flush()
 end
 
 check(now.clock.text == "4:12:38", "the countdown to the next raid")
-check(same(now.clock.color, C.gold) and now.clock.font.file == face(AmazingHub.Fonts.countdown.file) and now.clock.font.size == 19,
-  "in gold, in the countdown's mono face at 19px")
-check(now.raidMeta.text == "Karazhan · " .. os.date("%a %H:%M", KARAZHAN) .. " · 9 going", "its title, time and who is going")
-check(now.openCalendar.shown and now.openCalendar.variant == "primary", "and a primary button to the calendar")
+check(same(now.clock.color, C.text) and now.clock.font.file == face(AmazingHub.Fonts.countdown.file) and now.clock.font.size == 40,
+  "in paper, in the countdown's mono face at 40px")
+check(now.raidName.text == "Karazhan" and now.raidMeta.text == AmazingHub:LocalDate("%a %d %b, %H:%M", KARAZHAN) .. " · 9 going",
+  "its title, then its time and who is going")
+check(now.openCalendar.shown and now.openCalendar.variant == "ghost", "and a link to the calendar")
 
 local needRows, feedRows = now.needsList.rows, now.feedList.rows
-check(visible(now.needsList) == 5 and now.needsList.h == 2 + 5 * 26 and needRows[1].h == 26, "five 26px rows of what needs me")
+check(visible(now.needsList) == 5 and now.needsList.h == 5 * 24 and needRows[1].h == 24, "five 24px rows of what needs me")
 check(needRows[1].mark.shown and needRows[1].mark.w == 6 and needRows[1].mark.h == 6
   and needRows[1].mark.color[1] == C.danger.r and needRows[1].text.text == "1 trial(s) ready to review",
   "urgent rows carry the 6px danger mark")
-check(needRows[2].mark.color[1] == C.gold.r and needRows[2].mark.color[2] == C.gold.g, "the others the gold one")
-check(point(needRows[1]) == "TOPLEFT,1,-1" and point(needRows[2]) == "TOPLEFT,1,-27",
-  "rows stack 26px apart inside the list's 1px frame")
-check(point(needRows[1].text, 2) == "LEFT,22,0", "a need's text starts after its mark")
+check(same(needRows[2].mark.color, C.label), "the others a neutral one: gold is not a status")
+check(point(needRows[1]) == "TOPLEFT,0,0" and point(needRows[2]) == "TOPLEFT,0,-24",
+  "rows stack 24px apart, no frame around the list")
+check(needRows[1].line.shown and not needRows[5].line.shown, "a 1px line between rows, none under the last")
+check(point(needRows[1].text, 1) == "LEFT,14,0" and needRows[1].arrow.shown, "a need's text starts after its mark, a > on its right")
 fire(needRows[1], "OnEnter")
 check(needRows[1].hover.shown, "a row lights up under the cursor")
 fire(needRows[1], "OnLeave")
 check(visible(now.feedList) == 7 and feedRows[1].time.shown and feedRows[1].time.w == 44
-  and feedRows[1].time.text == os.date("%H:%M", NOW - 50), "activity fills the column's height, each row led by a 44px time")
-check(point(feedRows[1].text, 2) == "LEFT,56,0", "the text starts after the time column")
+  and feedRows[1].time.text == os.date("%H:%M", NOW - 50) and point(feedRows[1].time) == "RIGHT,0,0",
+  "activity fills the column's height, each row's 44px time on its right")
+check(point(feedRows[1].text, 1) == "LEFT,0,0" and point(feedRows[1].text, 2) == "RIGHT,-52,0",
+  "the text runs from the left edge to the time")
 now:SetSize(976, 1000)
 flush()
 check(visible(now.feedList) == 10, "a taller column shows more of it")
@@ -1214,6 +1337,9 @@ do
   dofile(ADDON .. "/Modules/GuildChat.lua")
   AmazingHub.CallToArms:Initialize()
   dofile(ADDON .. "/UI/CommunityPanel.lua")
+  -- The Guild tab's Journal and Achievements sub-tabs draw with the real panels (#367).
+  dofile(ADDON .. "/UI/JournalPanel.lua")
+  dofile(ADDON .. "/UI/AchievementsPanel.lua")
   AmazingHub.RosterFrame, AmazingHub.db.settings.window = nil, nil
   local win = UI:GetMainWindow()
   local when = os.time({ year = 2026, month = 1, day = 15, hour = 21 })
@@ -1227,17 +1353,20 @@ do
   for _, c in ipairs(guild.children) do if c.bg then bar = c end end
   guild:SetSize(800, 500)   -- a window of ordinary width: six tabs wrap only below it (#124)
   flush()
-  local subTabs, open = 0, nil
+  local subTabs, visibleSubs, open = 0, {}, nil
   for _, c in ipairs(bar and bar.children or {}) do
     if c.underline then
       subTabs = subTabs + ((c.underline.h == 1) and 1 or -100)
+      if c.shown then visibleSubs[#visibleSubs + 1] = c.label.text end
       if c.isActive then open = c end
     end
   end
   check(bar and bar.h == 28 and same(bar.bg.color, C.panel), "the Guild tab's sub-tab bar is 28px on panel")
-  check(subTabs == 6 and open and open.label.text == "Calendar"
+  check(subTabs == 9 and #visibleSubs == 9 and visibleSubs[1] == "Achievements" and visibleSubs[5] == "Rules"
+    and visibleSubs[8] == "Chat" and visibleSubs[9] == "Journal" and open and open.label.text == "Calendar"
     and (open.underline.shown or (STYLE == "forever" and open.__styleTab)),
-    "its six sub-tabs (Chat is the sixth, #124) carry a 1px gold rule, shown under the open one")
+    "its nine sub-tabs on WoW: Forever (Achievements first, #373; Rules after the Bulletin, #407; Chat the eighth; Journal last) "
+      .. "carry a 1px gold rule, shown under the open one")
   check(cal.viewYear == 2026 and cal.viewMonth == 1 and cal.selectedKey == 20260115,
     "showing the raid's month, with its day selected")
   local function drawn(text)
@@ -1251,7 +1380,176 @@ do
     "and drawn: that month's name and the day's heading")
   UI:OpenWindow("guild", "calendar")
   check(cal.selectedKey == 20260115, "opening the calendar without a day leaves the selection alone")
+
+  -- The event editor (#308): only the kinds this rank creates, and a dungeon from the game's list.
+  -- Calendar's own rules are tools/event-kinds.lua's.
+  local Cal = AmazingHub.Calendar
+  Cal.KINDS, Cal.REPEATS = { "RAID", "DUNGEON", "PVP", "FARM", "SOCIAL", "OTHER" }, { "none" }
+  Cal.SizesFor = function(k, sizes) return k == "DUNGEON" and { 5 } or sizes end
+  Cal.KindLabel = function(_, k) return k end
+  Cal.MayCreateKind = function(_, k) return k == "DUNGEON" or k == "SOCIAL" end
+  Cal.CreatableKinds = function() return { "DUNGEON", "SOCIAL" } end
+  Cal.DungeonChoices = function() return { "Ruins of Lordaeron", "Scholomance" } end
+  tinsert = tinsert or table.insert
+  fire(cal.newBtn, "OnClick")
+  local ed = _G.AmazingHubEventEditor
+  check(ed and ed.shown, "New Event opens the editor")
+  local pills, picker, titleBox = {}, nil, nil
+  local isKind = {}
+  for _, k in ipairs(Cal.KINDS) do isKind[k] = true end
+  for _, c in ipairs(ed.children) do
+    if c.fs and isKind[c.kind] then pills[c.kind] = c end   -- a pill keeps its kind where the stub keeps its type
+    if c.label and c.label.text == "Pick a dungeon" then picker = c end
+    if c.kind == "EditBox" and (c.w == 332 or c.w == 222) then titleBox = titleBox or c end   -- the title, first
+  end
+  check(pills.RAID and pills.RAID.disabled and pills.DUNGEON and not pills.DUNGEON.disabled,
+    "a kind this rank does not create is there, and cannot be picked")
+  -- Six fixed 52px places inside the 360px editor, labels never marked as removable chips (#371).
+  local placed, chipX = 0, false
+  for i, k in ipairs(Cal.KINDS) do
+    local p = pills[k]
+    local pt = p and p.points[1]
+    if p and p.w == 52 and pt and pt[2] == 14 + (i - 1) * 55 then placed = placed + 1 end
+    if p and p.label.text:find("x$") then chipX = true end
+  end
+  check(placed == #Cal.KINDS and not chipX, "the kinds sit in six 52px places, no chip's x on any")
+  check(picker and picker.shown and titleBox and titleBox.w == 222,
+    "it starts on the first kind it creates, a dungeon, with the list beside the title")
+  fire(picker, "OnClick")
+  local list
+  for _, c in ipairs(ed.children) do
+    if c ~= picker and c.children and #c.children == 3 and c.strata == "DIALOG" then list = c end
+  end
+  check(list and list.shown, "the list opens beside the editor")
+  local rows = {}
+  for _, b in ipairs(list.children) do if b.label then rows[#rows + 1] = b end end
+  check(#rows == 3 and rows[1].label.text == "Ruins of Lordaeron" and rows[3].label.text == "Other (type a name)",
+    "the game's dungeons, then Other")
+  fire(rows[2], "OnClick")
+  check(titleBox.text == "Scholomance" and not list.shown, "a pick is the title")
+  fire(picker, "OnClick")
+  fire(rows[3], "OnClick")
+  check(titleBox.text == "" and titleBox.focused, "Other clears a picked name and asks for one")
+  fire(pills.SOCIAL, "OnClick")
+  check(not picker.shown and titleBox.w == 332, "another kind has no list")
+  ed:Hide()
   win:Hide()
+end
+
+-- The Journal and the Achievements, the Guild tab's last two sub-tabs on WoW: Forever (#367): each
+-- offered while its feature is here and on, built the first time it opens, redrawn on its own OnShow,
+-- and a deep link to one that is not offered lands on the calendar.
+do
+  local reads = { journal = 0, achievements = 0 }
+  AmazingHub.Journal = {
+    ThisWeek = function() reads.journal = reads.journal + 1; return { milestones = 2, members = 1, clears = 3 } end,
+    GuildFirsts = function() return {} end,
+    Mine = function() return {} end,
+  }
+  AmazingHub.Achievements = { Renown = function() reads.achievements = reads.achievements + 1 end }
+  AmazingHub.RosterFrame, AmazingHub.db.settings.window = nil, nil
+  local win = UI:GetMainWindow()
+  check(UI:OpenWindow("guild"), "the real Guild tab opens")
+  local guild = win.tabPanels.guild
+  local bar
+  for _, c in ipairs(guild.children) do if c.bg then bar = c end end
+  local function subTab(label)
+    for _, c in ipairs(bar.children) do
+      if c.underline and c.label.text == label then return c end
+    end
+  end
+  local journal, achievements = guild.subPanels.journal, guild.subPanels.achievements
+  check(subTab("Journal").shown and subTab("Achievements").shown, "Journal and Achievements are offered on WoW: Forever")
+  check(guild.activeSub == "achievements" and achievements.built and achievements.panel.shown
+    and subTab("Achievements").isActive, "Guild opens on Achievements, its first sub-tab on WoW: Forever (#373)")
+  check(not journal.built and not journal.panel.shown, "and the Journal is not built before it opens")
+
+  check(UI:OpenWindow("journal") and win.activeTab == "guild" and guild.activeSub == "journal",
+    "/amazing open journal lands on the Guild tab's Journal")
+  check(journal.built and journal.panel.shown and not guild.subPanels.calendar.panel.shown
+    and subTab("Journal").isActive and reads.journal > 0, "built there, shown alone, its tab marked, drawn")
+  local before = reads.journal
+  journal.panel:Hide()
+  journal.panel:Show()
+  check(reads.journal > before, "the Journal's own OnShow redraws it as a sub-panel")
+  before = reads.journal
+  win:Hide()
+  win:Show()
+  check(reads.journal > before and guild.activeSub == "journal", "and so does the window opening again on it")
+
+  check(UI:OpenWindow("achievements") and guild.activeSub == "achievements" and achievements.built
+    and achievements.panel.shown and not journal.panel.shown, "/amazing open achievements lands on its sub-tab")
+  before = reads.achievements
+  achievements.panel:Hide()
+  achievements.panel:Show()
+  check(reads.achievements > before, "and its own OnShow redraws it too")
+
+  -- Switched off in Settings: no tab, and the deep link says so as a tab's does.
+  AmazingHub:SetFeatureEnabled("journal", false)
+  win:Hide()
+  win:Show()
+  check(not subTab("Journal").shown and subTab("Achievements").shown, "a journal switched off has no sub-tab")
+  printed = {}
+  check(not UI:OpenWindow("journal") and said("Journal is disabled in Settings.") and not journal.panel.shown,
+    "and its deep link refuses, saying why")
+  -- A sub-tab that went stale on screen still falls back: a click asks again.
+  guild.SelectSub("journal")
+  check(guild.activeSub == "achievements" and achievements.panel.shown and not journal.panel.shown,
+    "selecting it anyway lands where Guild opens, Achievements")
+  guild.SelectSub("achievements")
+  AmazingHub:SetFeatureEnabled("achievements", false)
+  win:Hide()
+  win:Show()
+  check(guild.activeSub == "calendar" and not subTab("Achievements").shown,
+    "the open sub-tab switched off falls back to the calendar the next time the tab shows")
+  AmazingHub:SetFeatureEnabled("journal", true)
+  AmazingHub:SetFeatureEnabled("achievements", true)
+
+  -- A module that failed to start: its deep link says so, as its tab did (issue #367).
+  local startFailed = AmazingHub.FeatureStartFailed
+  AmazingHub.FeatureStartFailed = function(_, id) return id == "journal" end
+  printed = {}
+  check(not UI:OpenWindow("journal") and said("Journal could not start on this client."),
+    "a journal that failed to start says so")
+  AmazingHub.FeatureStartFailed = startFailed
+
+  -- A lazy sub-tab whose builder errors is recorded and refused for the session, and the hub falls
+  -- back to the calendar, in a hub of its own so the one above keeps its Achievements.
+  local realAchievements = AmazingHub.CreateAchievementsPanel
+  AmazingHub.CreateAchievementsPanel = function() error("boom") end
+  local hub = newFrame("Frame", UIParent)
+  hub:SetSize(800, 500)
+  AmazingHub:CreateGuildHub(hub)
+  local errors = #(AmazingHub.State.errors or {})
+  printed = {}
+  hub.SelectSub("achievements")
+  check(hub.activeSub == "calendar" and hub.subPanels.calendar.panel.shown and not hub.subPanels.achievements.panel.shown,
+    "an Achievements builder that errors lands on the calendar")
+  check(said("Achievements could not start on this client.") and #(AmazingHub.State.errors or {}) > errors,
+    "saying so, and recording the error")
+  printed = {}
+  hub.SelectSub("achievements")
+  check(hub.activeSub == "calendar" and #printed == 0, "and is refused, quietly, for the rest of the session")
+  AmazingHub.CreateAchievementsPanel = realAchievements
+  guild.SelectSub("nope")
+  check(guild.activeSub == "achievements", "a sub-tab the hub does not have lands where Guild opens, Achievements (#373)")
+
+  -- Not on TBC Anniversary nor retail: the tabs are not there, and the deep links say so.
+  for _, other in ipairs({ "isAnniversary", "isRetail" }) do
+    AmazingHub.Client[other] = true
+    win:Hide()
+    win:Show()
+    check(not subTab("Journal").shown and not subTab("Achievements").shown,
+      "no Journal nor Achievements sub-tab where " .. other)
+    printed = {}
+    check(not UI:OpenWindow("journal") and not UI:OpenWindow("achievements") and said("Not available on this client."),
+      "and their deep links say they are not on this client (" .. other .. ")")
+    guild.SelectSub("journal")
+    check(guild.activeSub == "calendar", "nor does the hub open one there (" .. other .. ")")
+    AmazingHub.Client[other] = nil
+  end
+  win:Hide()
+  AmazingHub.Journal, AmazingHub.Achievements = nil, nil
 end
 
 -- The Call to Arms tab (issue #108), through the real Helpers.
@@ -1296,9 +1594,9 @@ do
   win:Hide()
   CTA.recent[1].title = "Later"
   CTA.uiRefresh()
-  check(not find(p, "|cffFF8800Later|r  Go"), "with the window closed, an answer arriving repaints nothing")
+  check(not find(p, "Later  Go"), "with the window closed, an answer arriving repaints nothing")
   UI:OpenWindow("guild", "cta")
-  check(find(p, "|cffFF8800Later|r  Go"), "it catches up when the tab opens")
+  check(find(p, "Later  Go"), "it catches up when the tab opens")
   win:Hide()
   CTA.recent = {}
 
@@ -1316,7 +1614,7 @@ do
   saved[1] = { id = "c1", name = "A very long template nam", text = "x", kind = "pvp" }
   for i = 2, CTA.TEMPLATES_MAX do saved[i] = { id = "c" .. i, name = "t" .. i, text = "x", kind = "rally" } end
   win, p = open()
-  local wb = find(p, "> World Boss")
+  local wb = find(p, "World Boss")   -- the chosen template is marked by UI:SetSelected, not "> " (#371)
   local row = wb.parent.parent
   local function laid()
     local cells, lines = {}, {}
@@ -1599,6 +1897,42 @@ do
   check(edge.titleBar.h == 30 and point(edge.content, 1) == "TOPLEFT,12," .. -(70 + topInset) and edge.band == "narrow",
     "at exactly 620px: the 30px title bar, 12px padding, and 596px of content, so narrow")
   edge:Hide()
+end
+
+-- ── The title bar at every width (#377) ─────────────────────────────────
+-- With labels as long as a translation's, the sync time goes first, then Search, then Sync, and
+-- nothing runs under the minimise button down to MIN_W, where only the three numbers stay.
+do
+  rawset(AmazingHub.L, "Search", "Rechercher dans la guilde")
+  rawset(AmazingHub.L, "Sync", "Synchroniser maintenant")
+  AmazingHub.RosterFrame, AmazingHub.db.settings.window = nil, nil
+  local win = UI:GetMainWindow()
+  win:Show()
+  local misfit, disorder
+  for w = 320, 1000 do
+    resize(win, w, 620)
+    local ok, key = titleFits(win)
+    if not ok then misfit = misfit or (w .. "px: " .. tostring(key)) end
+    local t, s, y = win.syncText.shown, win.searchButton.shown, win.syncButton.shown
+    if (t and not s) or (s and not y) then disorder = disorder or w end
+  end
+  check(misfit == nil, "from 320px to 1000px nothing on the title bar overlaps or runs under minimise: " .. tostring(misfit))
+  check(disorder == nil, "and what goes, goes in order: the sync time, then Search, then Sync: " .. tostring(disorder))
+  resize(win, 1000, 620)
+  check(win.syncText.shown and win.searchButton.shown and win.syncButton.shown, "at 1000px the long labels all fit")
+  resize(win, 560, 620)
+  check(not win.syncText.shown and win.searchButton.shown and win.syncButton.shown and win.metaText.shown,
+    "at 560px the sync time has gone")
+  resize(win, 480, 620)
+  check(not win.searchButton.shown and win.syncButton.shown and win.metaText.shown and win.band ~= "bar",
+    "at 480px Search has too, Sync and the meta line stay")
+  resize(win, 320, 620)
+  check(win.band == "bar" and win.summaryText.shown and point(win.summaryText, 2) == "RIGHT,-6,0"
+    and not (win.metaText.shown or win.syncText.shown or win.searchButton.shown or win.syncButton.shown),
+    "at MIN_W, folded to the bar, the three numbers end short of minimise and the buttons wait")
+  win:Hide()
+  rawset(AmazingHub.L, "Search", nil)
+  rawset(AmazingHub.L, "Sync", nil)
 end
 
 -- ── What is gone, and who opens what ────────────────────────────────────

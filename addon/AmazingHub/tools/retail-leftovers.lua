@@ -179,7 +179,8 @@ check(audit:find("local hasAttune, hasCons = AmazingHub.AttunementTracker ~= nil
   and audit:find('if hasCons then hcol(L["CONSUMES"]', 1, true),
   "readiness offers a raid target and the attunement and consumables columns only with their modules")
 local fp = src("UI/FeaturePanels.lua")
-check(fp:find('if AmazingHub.ConsumableChecker then\n?%s*penalties%[#penalties %+ 1%] = { key = "NO_CONSUMES"')
+-- The guild's penalties are Settings > Guild rules since issue #367.
+check(src("UI/SettingsPanel.lua"):find('if AmazingHub.ConsumableChecker then\n?%s*penalties%[#penalties %+ 1%] = { key = "NO_CONSUMES"')
   and fp:find("pen.NO_CONSUMES > 0 and AmazingHub.ConsumableChecker", 1, true)
   and fp:find('if AmazingHub.ConsumableChecker then Hdr(L["NO CONS"]', 1, true),
   "the raid settings, the attendance tooltip and the session detail offer consumables only with the checker")

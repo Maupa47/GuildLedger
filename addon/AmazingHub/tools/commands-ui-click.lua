@@ -53,14 +53,13 @@ date = os.date
 function strtrim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 local reloaded = 0
 function ReloadUI() reloaded = reloaded + 1 end
-StaticPopupDialogs = {}
 local popped, poppedData
-function StaticPopup_Show(name, _, _, data) popped, poppedData = name, data end
 SlashCmdList = {}
 C_Timer = { After = function() end, NewTicker = function() return { Cancel = function() end } end }
 Enum = { SendAddonMessageResult = {} }
 AmazingHub = { L = setmetatable({}, { __index = function(_, k) return k end }), VERSION = "test" }
 dofile(ADDON .. "/Core/Core.lua")
+function AmazingHub:ShowDialog(name, _, _, data) popped, poppedData = name, data end
 dofile(ADDON .. "/Core/Compat.lua")
 dofile(ADDON .. "/Core/Data.lua")
 dofile(ADDON .. "/Core/Commands.lua")
@@ -80,6 +79,7 @@ AmazingHub.UI = setmetatable({
   CreateCheckbox = function() return widget({ checkbox = widget({}) }) end,
 }, { __index = function() return function() return stub end end })
 dofile(ADDON .. "/UI/FeaturePanels.lua")
+dofile(ADDON .. "/UI/SettingsPanel.lua")
 AmazingHub.CreateRolePicker = function() return stub end
 
 local function button(text)
@@ -87,7 +87,7 @@ local function button(text)
 end
 local function open(category)
   buttons, printed = {}, {}
-  local ok, err = pcall(AmazingHub.RefreshSettingsPanel, AmazingHub, stub, category)
+  local ok, err = pcall(AmazingHub.RefreshSettingsPanel, AmazingHub, setmetatable({}, getmetatable(stub)), category)
   check(ok, "the " .. category .. " settings draw (" .. tostring(err) .. ")")
 end
 
@@ -106,8 +106,8 @@ AmazingHub.State.startup.failed["Modules/Broken.lua"] = "boom"
 AmazingHub.State.errors = { { msg = "late error" } }
 AmazingHub.db = { settings = {}, mentions = { watchWords = { "raid", "boss" }, log = { { ts = 0, sender = "Ana", msg = "oi Off" } } } }
 
--- ── Settings → About: diagnostics and erasing, for everyone ──────────────
-open("about")
+-- ── Settings → Data and support: diagnostics and erasing, for everyone (#367) ──
+open("data")
 for _, t in ipairs({ "Collect my data", "View Errors", "Self-test", "Probe the client", "Probe chat", "Style preview",
                      "Erase guild data" }) do
   check(button(t) and button(t).onClick, "About has " .. t)
@@ -121,15 +121,15 @@ button("Self-test").onClick(); button("Probe the client").onClick(); button("Sty
 check(did.selftest and did.probe and did.preview, "the diagnostics run what their commands run")
 button("Probe chat").onClick()
 check(popped == "AMAZINGHUB_PROBE_CHAT" and not did.probeChat, "the chat probe posts in guild chat: it asks first")
-StaticPopupDialogs.AMAZINGHUB_PROBE_CHAT.OnAccept()
+AmazingHub.Dialogs.AMAZINGHUB_PROBE_CHAT.OnAccept()
 check(did.probeChat, "and runs once confirmed")
 button("Erase guild data").onClick()
 check(popped == "AMAZINGHUB_ERASE_GUILD" and reloaded == 0 and AmazingHubDB["Guild-Realm"], "erasing asks first, and nothing is gone yet")
-StaticPopupDialogs.AMAZINGHUB_ERASE_GUILD.OnAccept()
+AmazingHub.Dialogs.AMAZINGHUB_ERASE_GUILD.OnAccept()
 check(AmazingHubDB["Guild-Realm"] == nil and AmazingHubDB["Other-Realm"] and reloaded == 1, "confirmed: this guild's data only, then a reload")
 
--- ── Settings → General: the mentions log and clearing the words ─────────
-open("general")
+-- ── Settings → Chat and alerts: the mentions log and clearing the words ─
+open("chat")
 check(button("Recent mentions") and button("Clear watch-words"), "Mentions has its log and its clear button")
 button("Recent mentions").onClick()
 check(said("--- Recent mentions ---") and said("oi Off") and not said("Usage:"), "the log, without the command's usage line")
@@ -137,7 +137,7 @@ button("Clear watch-words").onClick()
 check(popped == "AMAZINGHUB_CLEAR_WORDS" and #AmazingHub.db.mentions.watchWords == 2, "clearing every word asks first")
 local redrawn = false
 poppedData.after = function() redrawn = true end
-StaticPopupDialogs.AMAZINGHUB_CLEAR_WORDS.OnAccept({ data = poppedData })
+AmazingHub.Dialogs.AMAZINGHUB_CLEAR_WORDS.OnAccept({ data = poppedData })
 check(#AmazingHub.db.mentions.watchWords == 0 and redrawn, "confirmed: emptied, as /amazing mentions clearwords, and the chips redrawn")
 
 -- ── The commands still do the same, through the same functions ──────────
@@ -161,5 +161,15 @@ check(said("/amazing web on") and not shown, "/amazing web, the companion off: h
 AmazingHub.Companion.IsEnabled = function() return true end
 AmazingHub:ShowWebString()
 check(shown == "Web Companion (3 members)", "the Web tab's button shows the paste text")
+
+-- A bare /amazing signup opens the sign-up window (#377): with its button moved from the footer to the Raids tab,
+-- the command is the way in at any width and with Raids switched off.
+local opened = 0
+local realSignup = AmazingHub.ShowCoreSignupFrame
+AmazingHub.ShowCoreSignupFrame = function() opened = opened + 1 end
+printed = {}
+SlashCmdList.AMAZINGHUB("signup")
+check(opened == 1 and not said("Usage: /amazing signup"), "/amazing signup alone opens the sign-up window")
+AmazingHub.ShowCoreSignupFrame = realSignup
 
 print(("commands-ui-click: %d checks passed"):format(checks))

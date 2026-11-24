@@ -32,6 +32,7 @@ AllianceChat.DEFAULTS = {
     history     = true,   -- keep a rolling log in SavedVariables
     hideDefault = false,  -- suppress the channel from the default chat frame
     system      = true,   -- alliance events in the feed, not just conversation
+    guildBridge = true,   -- show the allied guilds' /g in our guild chat (issue #344)
 }
 
 -- Capped on purpose: this is plain text on the player's disk, and an
@@ -61,6 +62,12 @@ end
 -- Channel membership
 ----------------------------------------------------------------------
 function AllianceChat:ChannelName()
+    -- An alliance set in the guild info (issue #348) has its own, hidden,
+    -- passworded channel.
+    local link = AmazingHub.AllianceLink
+    if link and link:Active() then
+        return link:ChannelName()
+    end
     local ally = AmazingHub.Alliance
     local pact = ally and ally:Get()
     if not pact then
@@ -106,6 +113,10 @@ function AllianceChat:EnsureJoined()
     end
     if not self:Prefs().chat then
         return false
+    end
+    local link = AmazingHub.AllianceLink
+    if link and link:Active() then
+        return link:EnsureJoined()
     end
     local name = self:ChannelName()
     if not name then
@@ -505,6 +516,17 @@ function AllianceChat:Send(text)
     if clean == "" then
         return false
     end
+    -- On the hidden channel the room's lines are framed like /g's (issue #348),
+    -- and nothing prints them but the feed, so ours goes in here.
+    local link = AmazingHub.AllianceLink
+    if link and link:Active() then
+        if not link:Say("A", clean) then
+            return false
+        end
+        local ally = AmazingHub.Alliance
+        self:PushLine(AmazingHub.Compat.PlayerName(), ally and ally:MyGuildName(), clean)
+        return true
+    end
     local name = self:ChannelName()
     local index = name and GetChannelName and GetChannelName(name)
     if not index or index == 0 then
@@ -514,7 +536,16 @@ function AllianceChat:Send(text)
     return true
 end
 
+-- A line of the room, already decoded (Modules/AllianceLink.lua, issue #348).
+function AllianceChat:PushLine(name, guild, text)
+    self:Push({ t = GetServerTime(), n = name, g = guild, m = AmazingHub:SanitizeUserText(text, 240) })
+end
+
 function AllianceChat:_OnChannelMessage(msg, author, chanBaseName)
+    -- The hidden channel is read by AllianceLink, which decodes it.
+    if AmazingHub.AllianceLink and AmazingHub.AllianceLink:Active() then
+        return
+    end
     local mine = self:ChannelName()
     if not mine or not chanBaseName or chanBaseName:lower() ~= mine:lower() then
         return
@@ -543,6 +574,9 @@ function AllianceChat:_MakeFilter()
         end
         if not AmazingHub.db.alliancePrefs.tags then
             return false
+        end
+        if AmazingHub.AllianceLink and AmazingHub.AllianceLink:Active() then
+            return false   -- AllianceLink hides the hidden channel itself
         end
         local mine = AllianceChat:ChannelName()
         if not mine or not chanBaseName or chanBaseName:lower() ~= mine:lower() then

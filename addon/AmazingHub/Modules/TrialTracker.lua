@@ -339,7 +339,8 @@ function TrialTracker:CheckReady()
     if not AmazingHub:IsOfficer() then return end
     local n = self:CountReady()
     if n > 0 then
-        AmazingHub:Print(string.format(L["|cffFF6600%d trial(s) ready to review.|r Approve or deny them in the Trials tab."], n))
+        AmazingHub:Print(string.format(L["|cffFF6600%d trial(s) ready to review.|r Approve or deny them in %s > %s."], n,
+            L["Recruitment"], L["Trials"]))
     end
 end
 

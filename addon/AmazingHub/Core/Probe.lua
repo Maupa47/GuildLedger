@@ -40,7 +40,7 @@ Probe.APIS = {
     "IsQuestFlaggedCompleted", "IsShiftKeyDown", "JoinChannelByName", "LeaveChannelByName", "NotifyInspect",
     "PlaySound", "RaidNotice_AddMessage", "RandomRoll", "ReloadUI", "SendChatMessage", "SendWho",
     "SetChannelOwner", "SetGuildInfoText", "SetGuildTabardTextures", "SetRaidSubgroup", "SetWhoToUI",
-    "ShowUIPanel", "StaticPopup_Show", "TargetUnit", "ToggleDropDownMenu", "ToggleGuildFrame", "ToggleWorldMap",
+    "ShowUIPanel", "TargetUnit", "ToggleDropDownMenu", "ToggleGuildFrame", "ToggleWorldMap",
     "UIDropDownMenu_AddButton", "UIDropDownMenu_CreateInfo", "UIDropDownMenu_Initialize", "UIFrameFadeIn",
     "UnitBuff", "UnitClass", "UnitExists", "UnitFactionGroup", "UnitFullName", "UnitGUID", "UnitHealthMax", "UnitIsConnected",
     "UnitIsGroupAssistant", "UnitIsGroupLeader", "UnitIsPlayer", "UnitIsUnit", "UnitLevel", "UnitName", "UnitPlayerControlled",
@@ -63,7 +63,7 @@ Probe.APIS = {
     -- Frames, tables and constants
     "UIParent", "GameTooltip", "ItemRefTooltip", "ShoppingTooltip1", "ShoppingTooltip2", "Minimap",
     "WorldMapFrame", "GuildFrame", "CommunitiesFrame", "DEFAULT_CHAT_FRAME", "RaidWarningFrame",
-    "TradeFrameRecipientNameText", "UISpecialFrames", "StaticPopupDialogs", "SlashCmdList", "ChatTypeInfo",
+    "TradeFrameRecipientNameText", "UISpecialFrames", "SlashCmdList", "ChatTypeInfo",
     "GameFontNormalSmall", "STANDARD_TEXT_FONT", "RAID_CLASS_COLORS", "CLASS_ICON_TCOORDS",
     "LOCALIZED_CLASS_NAMES_MALE", "SOUNDKIT", "RANDOM_ROLL_RESULT", "RESISTANCE2_NAME", "RESISTANCE3_NAME",
     "RESISTANCE4_NAME", "RESISTANCE5_NAME", "RESISTANCE6_NAME",
@@ -110,6 +110,8 @@ Probe.APIS = {
     -- Retail (issue #185): the loot council by trade, a personal item's trade window on its tooltip.
     "C_TooltipInfo.GetBagItem", "GetTradePlayerItemLink", "Enum.TooltipDataLineType", "ERR_TRADE_COMPLETE",
     "INT_SPELL_DURATION_HOURS", "INT_SPELL_DURATION_MIN",
+    -- Starting the raid (issue #400): the party turned into a raid, and two raid members trading groups.
+    "C_PartyInfo.ConvertToRaid", "ConvertToRaid", "SwapRaidSubgroup",
 }
 
 -- Templates the addon inherits, with the frame type each one needs.
@@ -119,6 +121,8 @@ Probe.TEMPLATES = {
     { "UICheckButtonTemplate", "CheckButton" }, { "UIPanelButtonTemplate", "Button" },
     { "UIDropDownMenuTemplate", "Frame" }, { "OptionsSliderTemplate", "Slider" },
     { "GameTooltipTemplate", "GameTooltip" },
+    -- The bulk actions' Next button (issue #420).
+    { "SecureActionButtonTemplate", "Button" },
 }
 
 -- Tooltip scripts the addon hooks.
@@ -130,6 +134,7 @@ Probe.EVENTS = {
     "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "ADDON_LOADED",
     "CALENDAR_CLOSE_EVENT", "CALENDAR_NEW_EVENT", "CALENDAR_UPDATE_ERROR", "CALENDAR_UPDATE_EVENT_LIST",   -- the game's calendar (#263)
     "CHALLENGE_MODE_COMPLETED", "CHALLENGE_MODE_MAPS_UPDATE",
+    "MERCHANT_CLOSED", "MERCHANT_SHOW",   -- the guild bank cleanup sells at a vendor (#380)
     "CHANNEL_UI_UPDATE", "CHARACTER_POINTS_CHANGED", "CHAT_MSG_ADDON", "CHAT_MSG_CHANNEL",
     "CHAT_MSG_GUILD", "CHAT_MSG_OFFICER", "CHAT_MSG_SKILL", "CHAT_MSG_SYSTEM", "CHAT_MSG_WHISPER", "CLUB_MESSAGE_ADDED",
     "CLUB_MESSAGE_HISTORY_RECEIVED", "CLUB_STREAM_ADDED", "CLUB_STREAM_REMOVED", "CLUB_STREAMS_LOADED",
@@ -140,6 +145,7 @@ Probe.EVENTS = {
     "PLAYER_TARGET_CHANGED", "QUEST_TURNED_IN", "RAID_ROSTER_UPDATE", "READY_CHECK", "READY_CHECK_FINISHED",
     "SKILL_LINES_CHANGED",
     "TRADE_ACCEPT_UPDATE", "TRADE_PLAYER_ITEM_CHANGED", "TRADE_SHOW", "TRADE_SKILL_SHOW", "UI_INFO_MESSAGE",
+    "UI_ERROR_MESSAGE",   -- the game's "too fast": holds the officers' reminders (#422) and backs the WhisperQueue off (#393)
     "UPDATE_MOUSEOVER_UNIT", "WEEKLY_REWARDS_UPDATE", "WHO_LIST_UPDATE",
     "ZONE_CHANGED_NEW_AREA",
 }

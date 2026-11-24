@@ -153,7 +153,7 @@ printed = {}
 check(R:StartAutoRecruit() == false and R.ticker == nil and tickers == 0,
   "module off: /amazing recruit on starts no officer popups")
 check(AmazingHub.db.recruitment.enabled == false and printed[#printed]
-  and printed[#printed]:find("The Recruitment module is off. Turn it on in Settings > General > Modules.", 1, true),
+  and printed[#printed]:find("The Recruitment module is off. Turn it on in Settings > Modules.", 1, true),
   "and says why, leaving the officer's setting as it was")
 
 AmazingHub.db.settings.modules.recruitment = nil

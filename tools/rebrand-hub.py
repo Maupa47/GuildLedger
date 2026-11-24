@@ -19,13 +19,14 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PINNED = "80883a096cdf9fa1366fb1a248e99b4462d74a21"  # GuildOS 1.20.1, audited in docs/addon/HUB_AUDIT.md
-HUB_VERSION = "0.6.0"
+PINNED = "1f9fa9d"  # GuildOS 1.40.0, audited in docs/addon/HUB_AUDIT.md section 10
+PINNED_VERSION = "1.40.0"
+HUB_VERSION = "0.7.0"
 
 # What is not copied (not part of the addon, or replaced by our own files).
-SKIP_DIRS = {".git", ".github", "docs", "__pycache__"}
+SKIP_DIRS = {".git", ".github", "docs", "specs", "__pycache__"}  # specs: upstream's design notes (1.40)
 SKIP_FILES = {"README.md", "CHANGELOG.md", "CURSEFORGE.md", "RELEASE_NOTES.md", "chehulnet.lock", "GuildOSM.png"}
-TEXT_SUFFIXES = {".lua", ".toc", ".xml"}
+TEXT_SUFFIXES = {".lua", ".toc", ".xml", ".json"}  # json: upstream test data (1.40)
 
 # Strings that keep their original spelling. (The original author's credit stays where the MIT licence needs it:
 # LICENSE, THIRD_PARTY.md, and the TOC's X-Upstream line, none of which a player sees in game.)
@@ -163,12 +164,7 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "function GuildMap:HandlePosition(sender, data, channel)\n",
      "function GuildMap:HandlePosition(sender, data, channel)\n    do return end -- Amazing Hub: see Broadcast\n",
      "guild map ignores positions"),
-    ("UI/FeaturePanels.lua",
-     "    if AmazingHub.GuildMap then\n        local dotsCb",
-     "    if false and AmazingHub.GuildMap then -- Amazing Hub: the hub's map is off, so are its minimap dots\n"
-     "        local dotsCb",
-     "no minimap-dots switch for the switched-off hub map"),
-    ("UI/FeaturePanels.lua",
+    ("UI/SettingsPanel.lua",
      "            \"App:  the guild website\\n\"\n"
      "            .. \"GitHub:  https://github.com/danielcosta42/AmazingHub\\n\"\n"
      "            .. \"CurseForge:  https://www.curseforge.com/projects/1549177\\n\"\n"
@@ -177,6 +173,23 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "            .. \"Updates: search \\\"Amazing Forever Guild Pack\\\" on CurseForge or in your addon manager.\\n\"\n"
      "            .. \"Questions and bugs: ask in the guild Discord.\")",
      "About links: ours, not the upstream project's"),
+    ("tools/site-loot.lua",
+     "function UnitClass() return \"Chaupa\", \"WARRIOR\" end\n",
+     "function UnitClass() return \"Chaupa\", \"WARRIOR\" end\n"
+     "local OWN = string.char(67, 104, 101, 104, 117, 108) .. \" Costa\" -- Amazing Hub: as in the compressed fixture\n",
+     "test fixture (compressed, cannot be renamed) still holds the original test character"),
+    ("tools/style.lua",
+     "popups[#popups].text:find(\"WoW: Forever\", 1, true),\n  \"when combat ends",
+     "popups[#popups].text:find(\"Classic\", 1, true),\n  \"when combat ends",
+     "style test: the reload names the style Classic"),
+    ("tools/style.lua",
+     "  S = load(opts); S:Resolve()\n  function InCombatLockdown()",
+     "  S = load(opts)\n"
+     "  -- Amazing Hub: upstream's wizard check, with upstream's order and default (ours: Classic first and default)\n"
+     "  S.ORDER = { \"amazinghub\", \"forever\" }\n"
+     "  S.DEFAULT = \"amazinghub\"\n"
+     "  S:Resolve()\n  function InCombatLockdown()",
+     "style test: the wizard check with upstream's order"),
     ("tools/guild-block.lua",
      "table.concat(own.ct, \"+\") == \"Chaupa Costa+Mira Thornwood\"",
      "table.concat(own.ct, \"+\") == string.char(67, 104, 101, 104, 117, 108) .. \" Costa+Mira Thornwood\"",
@@ -265,71 +278,12 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "function Style:Apply(id)\n    id = self.ALIASES[id] or id\n",
      "style aliases in apply"),
     # --- 4. Version shown and synced --------------------------------------------------------------------------------
-    ("Core/Config.lua",
-     "AmazingHub.VERSION           = \"1.20.1\"",
-     f"AmazingHub.VERSION           = \"{HUB_VERSION}\"",
-     "hub version"),
     # --- 5. Slash command: /amazing and /amazinghub ----------------------------------------------------------------
     ("Core/Commands.lua", "SLASH_AMAZINGHUB2 = \"/amazing\"", "SLASH_AMAZINGHUB2 = \"/amazinghub\"",
      "second slash alias"),
     # --- 6. Small wishes (0.5.4) -------------------------------------------------------------------------------------
-    ("Modules/RecipeTracker.lua",
-     "        for _, c in ipairs(sorted) do\n"
-     "            local cc = c.class and AmazingHub.ClassColors[c.class] or C.white\n",
-     "        for i, c in ipairs(sorted) do\n"
-     "            -- Amazing Hub: at most 5 names (online first); the rest is counted (full list: Professions tab)\n"
-     "            if i > 5 then\n"
-     "                tooltip:AddLine(string.format(\"  +%d more (/amazing, Professions)\", #sorted - 5), 0.6, 0.6, 0.6)\n"
-     "                break\n"
-     "            end\n"
-     "            local cc = c.class and AmazingHub.ClassColors[c.class] or C.white\n",
-     "crafter lists on item tooltips: 5 names at most"),
     # Wishlist import from Discord (0.5.4, addon/hub-extra/WishImport.lua): a button in the title bar.
-    ("UI/FeaturePanels.lua",
-     "        AmazingHub:Print(L[\"[Wishlist] Sent to the guild.\"])\n"
-     "    end)\n"
-     "\n"
-     "    AmazingHub.WishlistFrame = f\n",
-     "        AmazingHub:Print(L[\"[Wishlist] Sent to the guild.\"])\n"
-     "    end)\n"
-     "    if AmazingHub.WishImport then -- Amazing Hub: paste the line from the bot's /wish export\n"
-     "        local importBtn = UI:CreateButton(f, \"Import from Discord\", 130, 22)\n"
-     "        importBtn:SetPoint(\"TOPRIGHT\", f, \"TOPRIGHT\", -130, -9) -- title bar, left of the item counter\n"
-     "        importBtn:SetScript(\"OnClick\", function() AmazingHub.WishImport.ShowPopup() end)\n"
-     "    end\n"
-     "\n"
-     "    AmazingHub.WishlistFrame = f\n",
-     "wishlist window: Import from Discord"),
     # Sortable columns (0.5.4, addon/hub-extra/TableSort.lua): DKP standings and the two Professions tables.
-    ("UI/PointsPanel.lua",
-     "    hcol(L[\"MEMBER\"], 4)\n"
-     "    hcol(L[\"CURRENT\"], 250)\n"
-     "    hcol(L[\"EARNED\"], 330)\n"
-     "    hcol(L[\"SPENT\"], 410)\n",
-     "    -- Amazing Hub: click a heading to sort, click again to flip (UI/TableSort.lua)\n"
-     "    local sortHeads = {\n"
-     "        { hcol(L[\"MEMBER\"], 4), \"name\", L[\"MEMBER\"] },\n"
-     "        { hcol(L[\"CURRENT\"], 250), \"current\", L[\"CURRENT\"], true },\n"
-     "        { hcol(L[\"EARNED\"], 330), \"earned\", L[\"EARNED\"], true },\n"
-     "        { hcol(L[\"SPENT\"], 410), \"spent\", L[\"SPENT\"], true },\n"
-     "    }\n",
-     "DKP standings headings are sort buttons"),
-    ("UI/PointsPanel.lua",
-     "        local list = AmazingHub.Points:GetStandings()\n",
-     "        local list = AmazingHub.Points:GetStandings()\n"
-     "        if AmazingHub.TableSort then -- Amazing Hub: the chosen column and direction\n"
-     "            AmazingHub.TableSort.Headers(\"dkp\", sortHeads, refresh)\n"
-     "            AmazingHub.TableSort.Apply(\"dkp\", list, AmazingHub.TableSort.POINTS)\n"
-     "        end\n",
-     "DKP standings sorted by the chosen column"),
-    ("UI/ProfessionsPanel.lua",
-     "            state.results = state.line and D.MemberRows(state.line) or {}\n"
-     "        end\n",
-     "            state.results = state.line and D.MemberRows(state.line) or {}\n"
-     "        end\n"
-     "        local TS = AmazingHub.TableSort -- Amazing Hub: the chosen column and direction\n"
-     "        if TS then TS.Apply(\"prof-\" .. state.mode, state.results, TS.PROFESSIONS[state.mode]) end\n",
-     "Professions tables sorted by the chosen column"),
     ("UI/ProfessionsPanel.lua",
      "                fs:SetText(HEADERS[state.mode][col.key])\n",
      "                fs:SetText(HEADERS[state.mode][col.key])\n"
@@ -360,17 +314,6 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "        end\n"
      "    elseif cfg.altTag and cfg.altShort then\n",
      "chat prefix: the author's own tag replaces the alt tag"),
-    ("UI/FeaturePanels.lua",
-     "            AmazingHub.db.chatTweaks.altShort = checked and true or false\n"
-     "        end\n"
-     "    end\n"
-     "    yOff = yOff + 26\n",
-     "            AmazingHub.db.chatTweaks.altShort = checked and true or false\n"
-     "        end\n"
-     "    end\n"
-     "    yOff = yOff + 26\n"
-     "    if AmazingHub.ChatTag then yOff = AmazingHub.ChatTag.BuildSettings(content, yOff) end -- Amazing Hub\n",
-     "Settings: what others see in the brackets"),
     # --- 7. Officer and window fixes (0.6.1) -------------------------------------------------------------------------
     # Rank arrows only where the game would allow the change: below your own rank (rank changes themselves are
     # Blizzard-protected; the hub hands them to the game's guild window).
@@ -399,15 +342,6 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "\n"
      "function GuildManager:CanKick()\n",
      "rank changes allowed only below your own rank; last login as a time"),
-    ("UI/ManagementPanel.lua",
-     "            if canDemote then\n",
-     "            if canDemote and GM:MayDemote(m.rankIndex) then -- Amazing Hub: only below your own rank\n",
-     "Ranks: demote arrow only where allowed"),
-    ("UI/ManagementPanel.lua",
-     "            if canPromote then\n                local upBtn",
-     "            if canPromote and GM:MayPromote(m.rankIndex) then -- Amazing Hub: never up to your rank\n"
-     "                local upBtn",
-     "Ranks: promote arrow only where allowed"),
     ("UI/ManagementPanel.lua",
      "                if canPromote then\n",
      "                if canPromote and AmazingHub.GuildManager:MayPromote(m.rankIndex) then -- Amazing Hub\n",
@@ -442,54 +376,311 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "    { key = \"blizzard\", label = \"Game guild window\", priority = 95, -- Amazing Hub: always shown\n",
      "bottom bar: Game guild window button stays"),
     # Loot equity: plain words.
-    ("UI/FeaturePanels.lua",
+    ("UI/LootWindow.lua",
      "countText:SetText(string.format(L[\"%d members with loot/raid history\"], #rows))",
      "countText:SetText(string.format(\"%d members: items received compared with raid attendance\", #rows))",
      "Loot equity: what the table compares"),
-    ("UI/FeaturePanels.lua", "L[\"dry\"]", "\"due loot\"", "Loot equity: 'dry' in plain words"),
-    ("UI/FeaturePanels.lua", "L[\"well-fed\"]", "\"lots of loot\"", "Loot equity: 'well-fed' in plain words"),
+    ("UI/LootWindow.lua", "L[\"dry\"]", "\"due loot\"", "Loot equity: 'dry' in plain words"),
+    ("UI/LootWindow.lua", "L[\"well-fed\"]", "\"lots of loot\"", "Loot equity: 'well-fed' in plain words"),
     # UI scale: five buttons. The slider sat inside the window it scaled, so every step moved it under the mouse.
-    ("UI/FeaturePanels.lua",
-     "    local scale = CreateFrame(\"Slider\", \"AmazingHubScaleSlider\", content, \"OptionsSliderTemplate\")\n",
+    # --- 8. Re-pin to GuildOS 1.40.0 (docs/addon/HUB_AUDIT.md section 10, 2026-11-24) ------------------------
+    # Developer features: what acts for the player is hidden unless the AmazingHubDev addon is installed (the
+    # admin's own install; tools/install.ps1 links addon/AmazingHubDev, the CurseForge pack never has it). It sets
+    # the global AmazingHubDevFeatures = true before the hub loads (OptionalDeps); the patches read that global, so
+    # upstream's own checks can switch it on too.
+    ("Core/Config.lua",
+     "AmazingHub.VERSION           = \"1.40.0\"",
+     "-- Amazing Hub: true only with the AmazingHubDev addon (never in the CurseForge pack): group posts and\n"
+     "-- auto-invite, reminder whispers, bulk rank changes, bank cleanup, warning whispers and chat alerts.\n"
+     "AmazingHub.DEV = AmazingHubDevFeatures == true\n"
+     f"AmazingHub.VERSION           = \"{HUB_VERSION}\"",
+     "hub version; developer features flag"),
+    ("Modules/AllianceLink.lua",
+     "function Link:Initialize()\n",
+     "function Link:Initialize()\n"
+     "    do return end -- Amazing Hub: no alliance: never joins its channel, never copies guild chat (HUB_AUDIT 10.2 A1)\n",
+     "alliance link never starts"),
+    ("Core/Compat.lua",
+     "function Compat.SendWhisper(text, target)\n",
+     "function Compat.SendWhisper(text, target)\n"
+     "    if not Compat.AllowedOutbound(\"WHISPER\", target) then return false end -- Amazing Hub: guild members only\n",
+     "whispers only to guild members"),
+    ("Core/Compat.lua",
+     "function Compat.SendChannelMessage(text, index)\n",
+     "function Compat.SendChannelMessage(text, index)\n"
+     "    do return false end -- Amazing Hub: never into a channel\n",
+     "never a line into a channel"),
+    ("Core/Compat.lua",
+     "function Compat.JoinPrivateChannel(name, password)\n",
+     "function Compat.JoinPrivateChannel(name, password)\n"
+     "    do return false end -- Amazing Hub: never joins a channel\n",
+     "never join a private channel"),
+    ("Modules/CommSystem.lua",
+     "CommSystem.LEGACY_ALT_MAX = \"1.38.0\"",
+     "CommSystem.LEGACY_ALT_MAX = \"0.6.99\" -- Amazing Hub: our last version before AltSync (pack 0.7.0 has it)",
+     "alt links: our own versions decide who is legacy"),
+    ("tools/whisper-not-found.lua",
+     "shipped verbatim from danielcosta42/maupanet",
+     "shipped verbatim from the upstream project",
+     "test comment without the upstream author's name"),
+    ("UI/SettingsPanel.lua",
+     "    if AmazingHub.GuildMap then\n"
+     "        F:Check(L[\"Show guildmates in your zone on the minimap\"]",
+     "    if false and AmazingHub.GuildMap then -- Amazing Hub: the hub's map is off, so are its minimap dots\n"
+     "        F:Check(L[\"Show guildmates in your zone on the minimap\"]",
+     "no minimap-dots switch for the switched-off hub map"),
+    ("UI/SettingsPanel.lua",
+     "setCt(\"altShort\"),\n"
+     "        { indent = 2 * SUB_INDENT, enabled = function() return annotating() and ct().altTag ~= false end })\n",
+     "setCt(\"altShort\"),\n"
+     "        { indent = 2 * SUB_INDENT, enabled = function() return annotating() and ct().altTag ~= false end })\n"
+     "    if AmazingHub.ChatTag then AmazingHub.ChatTag.BuildForm(F, SUB_INDENT, annotating) end -- Amazing Hub: own tag\n",
+     "Settings: what others see in the brackets"),
+    ("UI/SettingsPanel.lua",
+     "    local scale = CreateFrame(\"Slider\", \"AmazingHubScaleSlider\", scaleRow, \"OptionsSliderTemplate\")\n"
+     "    scale:SetMinMaxValues(0.8, 1.2)\n"
+     "    scale:SetValueStep(0.05)\n"
+     "    scale:SetObeyStepOnDrag(true)\n"
+     "    -- The template's three texts, by the names it gives them.\n"
+     "    local function say(suffix, text)\n"
+     "        local fs = _G[(scale:GetName() or \"\") .. suffix]\n"
+     "        if fs then fs:SetText(text) end\n"
+     "    end\n"
+     "    say(\"Low\", \"80%\")\n"
+     "    say(\"High\", \"120%\")\n"
+     "    scale:SetScript(\"OnValueChanged\", function(_, value)\n"
+     "        value = math.floor(value * 20 + 0.5) / 20   -- snap to the 0.05 step\n"
+     "        AmazingHub:SetSetting(\"uiScale\", value)\n"
+     "        say(\"Text\", string.format(\"%d%%\", value * 100))\n"
+     "        UI:ApplyScale()\n"
+     "    end)\n"
+     "    F:Sync(function()\n"
+     "        local v = AmazingHub:GetSetting(\"uiScale\") or 1\n"
+     "        scale:SetValue(v)\n"
+     "        say(\"Text\", string.format(\"%d%%\", v * 100))\n"
+     "    end)\n"
+     "    F:Row(scaleRow, { wide = true, place = function(_, w)\n"
+     "        local lw = labelColumn(w)\n"
+     "        scale:ClearAllPoints()\n"
+     "        scale:SetPoint(\"LEFT\", scaleRow, \"LEFT\", lw + 8, 2)\n"
+     "        scale:SetWidth(math.max(100, math.min(200, w - lw - 8 - 40)))\n"
+     "        return 34\n"
+     "    end })\n",
      "    -- Amazing Hub: five buttons instead of the slider (the slider moved with the window it scaled)\n"
      "    local scaleBtns = {}\n"
-     "    local function markScale()\n"
-     "        local cur = AmazingHub:GetSetting(\"uiScale\") or 1\n"
-     "        for v, b in pairs(scaleBtns) do\n"
-     "            local pct = string.format(\"%d%%\", v * 100 + 0.5)\n"
-     "            b.label:SetText(math.abs(cur - v) < 0.01 and (\"|cffFFD700\" .. pct .. \"|r\") or pct)\n"
-     "        end\n"
-     "    end\n"
      "    for i, v in ipairs({ 0.8, 0.9, 1.0, 1.1, 1.2 }) do\n"
-     "        local b = UI:CreateButton(content, \"\", 50, 20)\n"
-     "        b:SetPoint(\"TOPLEFT\", 120 + (i - 1) * 54, -yOff)\n"
+     "        local b = UI:CreateButton(scaleRow, \"\", 50, 20)\n"
      "        b:SetScript(\"OnClick\", function()\n"
      "            AmazingHub:SetSetting(\"uiScale\", v)\n"
-     "            markScale()\n"
      "            UI:ApplyScale()\n"
+     "            F:Refresh()\n"
      "        end)\n"
-     "        scaleBtns[v] = b\n"
+     "        scaleBtns[i] = { b = b, v = v }\n"
      "    end\n"
-     "    markScale()\n"
-     "    yOff = yOff + 30\n"
-     "    local scale = { SetPoint = function() end } -- the slider's lines below are left out\n"
-     "    if false then\n",
+     "    F:Sync(function()\n"
+     "        local cur = AmazingHub:GetSetting(\"uiScale\") or 1\n"
+     "        for _, e in ipairs(scaleBtns) do\n"
+     "            local pct = string.format(\"%d%%\", e.v * 100 + 0.5)\n"
+     "            e.b.label:SetText(math.abs(cur - e.v) < 0.01 and (\"|cffFFD700\" .. pct .. \"|r\") or pct)\n"
+     "        end\n"
+     "    end)\n"
+     "    F:Row(scaleRow, { wide = true, place = function(_, w)\n"
+     "        local lw = labelColumn(w)\n"
+     "        for i, e in ipairs(scaleBtns) do\n"
+     "            e.b:ClearAllPoints()\n"
+     "            e.b:SetPoint(\"LEFT\", scaleRow, \"LEFT\", lw + 8 + (i - 1) * 54, 2)\n"
+     "        end\n"
+     "        return 34\n"
+     "    end })\n",
      "UI scale: five buttons instead of the slider"),
     ("UI/FeaturePanels.lua",
-     "        UI:ApplyScale()\n    end)\n    yOff = yOff + 40\n",
-     "        UI:ApplyScale()\n    end)\n    end -- Amazing Hub: end of the unused slider\n",
-     "UI scale: the old slider is never built"),
+     "    f.syncBtn = syncBtn\n",
+     "    f.syncBtn = syncBtn\n"
+     "    if AmazingHub.WishImport then -- Amazing Hub: paste the line from the bot's /wish export\n"
+     "        local importBtn = UI:CreateButton(f, \"Import from Discord\", 130, 22)\n"
+     "        importBtn:SetPoint(\"TOPRIGHT\", f, \"TOPRIGHT\", -130, -9) -- title bar, left of the item counter\n"
+     "        importBtn:SetScript(\"OnClick\", function() AmazingHub.WishImport.ShowPopup() end)\n"
+     "    end\n",
+     "wishlist window: Import from Discord"),
+    ("UI/PointsPanel.lua",
+     "            fs:SetShown(at.shown)\n"
+     "        end\n"
+     "\n"
+     "        local list\n"
+     "        if account then\n",
+     "            fs:SetShown(at.shown)\n"
+     "        end\n"
+     "        if AmazingHub.TableSort and not account then -- Amazing Hub: click a heading to sort (UI/TableSort.lua)\n"
+     "            AmazingHub.TableSort.Headers(\"dkp\", { { heads.name, \"name\", TITLES.name },\n"
+     "                { heads.cur, \"current\", TITLES.cur, true }, { heads.earned, \"earned\", TITLES.earned, true },\n"
+     "                { heads.spent, \"spent\", TITLES.spent, true } }, refresh)\n"
+     "        end\n"
+     "\n"
+     "        local list\n"
+     "        if account then\n",
+     "DKP standings headings are sort buttons"),
+    ("UI/PointsPanel.lua",
+     "            list = inScope(P.GetStandings, P)\n",
+     "            list = inScope(P.GetStandings, P)\n"
+     "            if AmazingHub.TableSort then -- Amazing Hub: the chosen column and direction\n"
+     "                AmazingHub.TableSort.Apply(\"dkp\", list, AmazingHub.TableSort.POINTS)\n"
+     "            end\n",
+     "DKP standings sorted by the chosen column"),
+    ("UI/ProfessionsPanel.lua",
+     "            local at, n\n"
+     "            if UI.WithDetail then\n",
+     "            local TS = AmazingHub.TableSort -- Amazing Hub: the chosen column, before the detail row goes in\n"
+     "            if TS then TS.Apply(\"prof-recipes\", out, TS.PROFESSIONS.recipes) end\n"
+     "            local at, n\n"
+     "            if UI.WithDetail then\n",
+     "Professions recipes sorted by the chosen column"),
+    ("UI/ProfessionsPanel.lua",
+     "            state.results = state.line and D.MemberRows(state.line) or {}\n"
+     "            state.detailAt, state.detailRows = nil, nil\n",
+     "            state.results = state.line and D.MemberRows(state.line) or {}\n"
+     "            state.detailAt, state.detailRows = nil, nil\n"
+     "            local TS = AmazingHub.TableSort -- Amazing Hub: the chosen column and direction\n"
+     "            if TS then TS.Apply(\"prof-crafters\", state.results, TS.PROFESSIONS.crafters) end\n",
+     "Professions crafters sorted by the chosen column"),
+    ("UI/ManagementPanel.lua",
+     "        row.downBtn:SetShown(canDemote)\n"
+     "        row.upBtn:SetShown(canPromote)\n",
+     "        -- Amazing Hub: only below your own rank\n"
+     "        row.downBtn:SetShown(canDemote and AmazingHub.GuildManager:MayDemote(m.rankIndex))\n"
+     "        row.upBtn:SetShown(canPromote and AmazingHub.GuildManager:MayPromote(m.rankIndex))\n",
+     "Ranks: arrows only where allowed"),
+    ("Modules/LFGBoard.lua",
+     "LFGBoard.DEFAULTS = { notify = true, postToGuild = true, lastRole = \"ANY\", lastNote = \"\",\n",
+     "LFGBoard.DEFAULTS = { notify = true, postToGuild = false, lastRole = \"ANY\", lastNote = \"\", -- Amazing Hub: off\n",
+     "group lines in guild chat start off"),
+    ("Modules/LFGBoard.lua",
+     "                      autoInvite = true, toast = true, filterCat = \"all\", filterLevel = false }\n",
+     "                      autoInvite = false, toast = true, filterCat = \"all\", filterLevel = false } -- Amazing Hub\n"
+     "-- Amazing Hub: posting in guild chat and inviting whoever whispers only with the developer addon (decision 7)\n"
+     "local DEV_PREFS = { postToGuild = true, autoInvite = true }\n",
+     "auto-invite starts off; developer-only prefs"),
+    ("Modules/LFGBoard.lua",
+     "function LFGBoard:Pref(key)\n",
+     "function LFGBoard:Pref(key)\n"
+     "    if DEV_PREFS[key] and not AmazingHubDevFeatures then return false end\n",
+     "group prefs: guild posts and auto-invite read off without the developer addon"),
+    ("Modules/LFGBoard.lua",
+     "function LFGBoard:_SayInGuild(role, note, acts, line)\n",
+     "function LFGBoard:_SayInGuild(role, note, acts, line)\n"
+     "    if not AmazingHubDevFeatures then return false end -- Amazing Hub: no group lines in guild chat (decision 7)\n",
+     "no group lines in guild chat"),
+    ("Modules/Groups.lua",
+     "local function pref(key)\n",
+     "local function pref(key)\n"
+     "    if (key == \"autoInvite\" or key == \"postToGuild\") and not AmazingHubDevFeatures then return false end -- Amazing Hub\n",
+     "groups: no auto-invite without the developer addon"),
+    ("UI/GroupsPanel.lua",
+     "    auto.checkbox.onChanged = function(_, checked) B:SetPref(\"autoInvite\", checked and true or false) end\n"
+     "    y = y - 26\n",
+     "    auto.checkbox.onChanged = function(_, checked) B:SetPref(\"autoInvite\", checked and true or false) end\n"
+     "    y = y - 26\n"
+     "    if not AmazingHubDevFeatures then -- Amazing Hub: neither option in the CurseForge pack (decision 7)\n"
+     "        chat:Hide()\n"
+     "        auto:Hide()\n"
+     "        y = y + 52\n"
+     "    end\n",
+     "groups: guild-post and auto-invite switches hidden"),
+    ("UI/ManagementPanel.lua",
+     "    { key = \"alertrules\", label = L[\"Alert rules\"] },\n"
+     "}\n",
+     "    { key = \"alertrules\", label = L[\"Alert rules\"] },\n"
+     "}\n"
+     "-- Amazing Hub: officer tools that act for the player only with the developer addon (decision 7)\n"
+     "if not AmazingHubDevFeatures then\n"
+     "    local DEV_ONLY = { bulk = true, remind = true, alerts = true, alertrules = true }\n"
+     "    for i = #SUBTABS, 1, -1 do\n"
+     "        if DEV_ONLY[SUBTABS[i].key] then table.remove(SUBTABS, i) end\n"
+     "    end\n"
+     "end\n",
+     "Leadership: bulk actions, reminders and chat alerts only for developers"),
+    ("Modules/AddonReminder.lua",
+     "function Reminder:Remind(key)\n",
+     "function Reminder:Remind(key)\n"
+     "    if not AmazingHubDevFeatures then return false, \"officer\" end -- Amazing Hub: no reminder whispers (decision 7)\n",
+     "no addon reminder whispers"),
+    ("Core/Commands.lua",
+     "        if AmazingHub.BulkActions then\n"
+     "            AmazingHub.BulkActions:Command(",
+     "        if AmazingHub.BulkActions and AmazingHubDevFeatures then -- Amazing Hub: developers only\n"
+     "            AmazingHub.BulkActions:Command(",
+     "/amazing bulk only for developers"),
+    ("Core/Commands.lua",
+     "        if AmazingHub.BulkActions then\n"
+     "            AmazingHub.BulkActions:CommandGroup(",
+     "        if AmazingHub.BulkActions and AmazingHubDevFeatures then -- Amazing Hub: developers only\n"
+     "            AmazingHub.BulkActions:CommandGroup(",
+     "/amazing altgroup only for developers"),
+    ("UI/MemberDetail.lua",
+     "        if AmazingHub:IsOfficer() and AmazingHub.BulkActions and #linkedKeys > 1 then\n",
+     "        if AmazingHub:IsOfficer() and AmazingHub.BulkActions and AmazingHubDevFeatures and #linkedKeys > 1 then -- Amazing Hub\n",
+     "member window: alt group promote/demote only for developers"),
+    ("Modules/GuildBankCleanup.lua",
+     "AmazingHub.GuildBankCleanup = Cleanup\n",
+     "if AmazingHubDevFeatures then AmazingHub.GuildBankCleanup = Cleanup end -- Amazing Hub: bank cleanup for developers only\n",
+     "bank cleanup only for developers"),
+    ("Modules/Discipline.lua",
+     "    if opts.silent then return w, \"silent\" end\n",
+     "    if opts.silent or not AmazingHubDevFeatures then return w, \"silent\" end -- Amazing Hub: recorded, never whispered\n",
+     "warnings are recorded, not whispered"),
+    ("UI/WarnDialog.lua",
+     "    local silent = UI:CreateCheckbox(f, L[\"Only record it, without a whisper\"])\n"
+     "    silent:SetPoint(\"TOPLEFT\", 14, -228)\n",
+     "    local silent = UI:CreateCheckbox(f, L[\"Only record it, without a whisper\"])\n"
+     "    silent:SetPoint(\"TOPLEFT\", 14, -228)\n"
+     "    if not AmazingHubDevFeatures then -- Amazing Hub: a warning is recorded only (decision 7)\n"
+     "        silent:Hide()\n"
+     "        msgLabel:SetText(\"The text, kept with the warning (this pack never whispers it)\")\n"
+     "    end\n",
+     "warn window: no whisper option"),
+    ("Modules/ModAlerts.lua",
+     "AmazingHub.ModAlerts = ModAlerts\n",
+     "if AmazingHubDevFeatures then AmazingHub.ModAlerts = ModAlerts end -- Amazing Hub: chat alerts for developers only\n",
+     "ModAlerts: chat alerts only for developers"),
+    ("Modules/ModFlood.lua",
+     "AmazingHub.ModFlood = ModFlood\n",
+     "if AmazingHubDevFeatures then AmazingHub.ModFlood = ModFlood end -- Amazing Hub: chat alerts for developers only\n",
+     "ModFlood: chat alerts only for developers"),
+    ("Modules/Newcomer.lua",
+     "AmazingHub.Newcomer = Newcomer\n",
+     "if AmazingHubDevFeatures then AmazingHub.Newcomer = Newcomer end -- Amazing Hub: chat alerts for developers only\n",
+     "Newcomer: chat alerts only for developers"),
+    ("Modules/RecruitmentSystem.lua",
+     "    welcomeEnabled = true,\n",
+     "    welcomeEnabled = false, -- Amazing Hub: no welcome lines in guild chat, even with recruitment on\n",
+     "welcome lines start off"),
+    ("Core/Core.lua",
+     "    if not AmazingHubDB[dbKey] then\n"
+     "        AmazingHubDB[dbKey] = {}\n"
+     "    end\n",
+     "    -- Amazing Hub: data the 0.6 hub saved under \"<guild>-\" (no realm) is copied over once (UI/PackMigrate.lua)\n"
+     "    if guilded and AmazingHub.PackMigrate then\n"
+     "        AmazingHub:SafeCall(AmazingHub.PackMigrate.MergeRealmless, AmazingHub.PackMigrate, dbKey, realmName)\n"
+     "    end\n"
+     "    if not AmazingHubDB[dbKey] then\n"
+     "        AmazingHubDB[dbKey] = {}\n"
+     "    end\n",
+     "saved data without the realm is copied to the realm's key"),
 ]
 
 # Patches whose anchor occurs a known number of times: (file, old, new, why, times).
 PATCHES_ALL: list[tuple[str, str, str, str, int]] = [
+    ("tools/site-loot.lua", "== \"Chaupa Costa\"", "== OWN",
+     "test fixture: the original test character's name", 4),
+    ("tools/site-loot.lua", "wl[\"chaupa costa\"]", "wl[OWN:lower()]", "test fixture: the same name as a key", 4),
     ("tools/style.lua", "S = load({ db = {} }); S:Resolve()",
      "S = load({ db = { style = \"amazinghub\" } }); S:Resolve()",
-     "style test: blocks that check the flat look pick Modern (nothing saved is Classic now)", 3),
+     "style test: blocks that check the flat look pick Modern (nothing saved is Classic now)", 5),
 ]
 
-# Our own hub files: (file in addon/hub-extra, folder in the hub). Appended to the TOC in this order.
-EXTRAS = [("PackTweaks.lua", "UI"), ("TableSort.lua", "UI"), ("ChatTag.lua", "UI"), ("WishImport.lua", "UI"), ("LedgerPanel.lua", "UI"), ("SettingsPlus.lua", "UI")]
+# Our own hub files: (file in addon/hub-extra, folder in the hub). Appended to the TOC in this order. The item
+# catalogue's data (tools/build-catalog.py) comes before the file that hands it to the wishlist.
+EXTRAS = [("PackMigrate.lua", "UI"), ("PackTweaks.lua", "UI"), ("TableSort.lua", "UI"), ("ChatTag.lua", "UI"), ("WishImport.lua", "UI"), ("LedgerPanel.lua", "UI"), ("SettingsPlus.lua", "UI"),
+          ("Data/ItemCatalog.lua", "Data"), ("ItemCatalog.lua", "UI")]
 
 # Files that call the chat globals directly get guarded file-locals in front, so no code path sends past the guard.
 # (Replacing the globals themselves would taint Blizzard's chat frame; file-locals touch only this addon.)
@@ -522,10 +713,10 @@ TOC_HEADER =f"""## Interface: 16001
 ## SavedVariables: AmazingHubDB
 ## DefaultState: enabled
 ## IconTexture: Interface\\AddOns\\AmazingHub\\Media\\minimap-logo
-## OptionalDeps: GuildLedger
+## OptionalDeps: GuildLedger, AmazingHubDev
 ## X-License: MIT
 ## X-Category: Guild
-## X-Upstream: GuildOS 1.20.1 ({PINNED[:7]}) https://github.com/danielcosta42/GuildOS
+## X-Upstream: GuildOS {PINNED_VERSION} ({PINNED[:7]}) https://github.com/danielcosta42/GuildOS
 """
 
 
@@ -556,7 +747,7 @@ def rewrite_toc(text: str) -> str:
 
 def build(src: Path, out: Path, any_commit: bool) -> int:
     head = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-    if head != PINNED and not any_commit:
+    if not head.startswith(PINNED) and not any_commit:
         sys.exit(f"{src} is at {head or '?'}, not the audited {PINNED[:7]}. Audit the difference, update PINNED,"
                  " or pass --any-commit.")
     out.mkdir(parents=True, exist_ok=True)
@@ -599,8 +790,9 @@ def build(src: Path, out: Path, any_commit: bool) -> int:
     toc = out / "AmazingHub.toc"
     toc_text = toc.read_bytes().decode("utf-8").rstrip("\n") + "\n\n# Amazing Forever Guild Pack (addon/hub-extra)\n"
     for name, folder in EXTRAS:
-        shutil.copy2(ROOT / "addon" / "hub-extra" / name, out / folder / name)
-        toc_text += f"{folder}\\{name}\n"
+        base = Path(name).name
+        shutil.copy2(ROOT / "addon" / "hub-extra" / name, out / folder / base)
+        toc_text += f"{folder}\\{base}\n"
         count += 1
     toc.write_bytes(toc_text.encode("utf-8"))
     for f in sorted(out.rglob("*.lua")):

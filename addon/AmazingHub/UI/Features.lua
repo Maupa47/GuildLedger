@@ -5,6 +5,7 @@
 -- means adding one entry here.
 --
 --   tab = false  -> a background module with a Settings toggle only
+--   tab = false, opens = { tab, sub } -> another tab's sub-tab, with its own Settings toggle
 ----------------------------------------------------------------------
 local UI = AmazingHub.UI
 local L  = AmazingHub.L
@@ -27,50 +28,71 @@ UI:RegisterFeature({
     build = function(c, win) AmazingHub:CreateRaidHubPanel(c, win) end,
 })
 
+-- One Loot window for every member (issue #346): the rule, the accounts, the lists and the history.
+-- On retail too since issue #183: the history and the equity of personal loot, no soft reserves.
 UI:RegisterFeature({
-    -- On retail too since issue #183: the history and the equity of personal loot, no soft reserves.
-    id = "loot", label = L["Loot"], order = 30, officerOnly = true,
-    build = function(c, win) AmazingHub:CreateLootPanel(c, win) end,
+    id = "loot", label = L["Loot"], order = 30,
+    subs = { "rule", "accounts", "lists", "history" },
+    build = function(c, win) AmazingHub:CreateLootWindow(c, win) end,
 })
 
+-- The DKP and the guild's wishlists are the Loot window's Accounts and Lists (issue #346): their
+-- switches stay in Settings, and /amazing open dkp or wishlist opens the sub-tab.
 UI:RegisterFeature({
-    id = "dkp", label = L["DKP"], order = 35,   -- on retail too since issue #185
+    id = "dkp", label = L["DKP"], order = 35, tab = false, opens = { "loot", "accounts" },   -- retail too since #185
     condition = function() return AmazingHub:LootSystemShowsDKP() end,
-    build = function(c, win) AmazingHub:CreateDKPPanel(c, win) end,
 })
 
 UI:RegisterFeature({
-    id = "wishlist", label = L["Wishlist"], order = 38,   -- on retail too since issue #185
+    id = "wishlist", label = L["Wishlist"], order = 38, tab = false, opens = { "loot", "lists" },   -- retail too since #185
     condition = function() return AmazingHub:IsOfficer() and AmazingHub:LootSystemShowsWishlist() end,
-    build = function(c, win) AmazingHub:CreateWishlistGuildPanel(c, win) end,
 })
 
--- On WoW: Forever the Professions panel (issue #33) takes the Recipes tab: the whole catalog,
--- who covers it and who does not. Anniversary keeps the recipe search.
+-- The Crafts tab (issue #389): the guild's professions and its craft orders in one place. The
+-- catalog is the Professions panel on WoW: Forever and retail (issue #33: the whole catalog, who
+-- covers it and who does not) and the recipe search on Anniversary; the order queue sits beside it.
 UI:RegisterFeature({
-    id = "recipes", label = AmazingHub.CreateProfessionsPanel and L["Professions"] or L["Recipes"], order = 40,
-    build = function(c, win)
-        if AmazingHub.CreateProfessionsPanel then return AmazingHub:CreateProfessionsPanel(c, win) end
-        return AmazingHub:CreateRecipesPanel(c, win)
-    end,
+    id = "recipes", label = L["Crafts"], order = 40,
+    build = function(c, win) return AmazingHub:CreateCraftsTab(c, win) end,
 })
 
+-- Journal and Achievements are its last two sub-tabs on WoW: Forever (issue #367), each where its
+-- feature is present and switched on.
 UI:RegisterFeature({
     id = "guild", label = L["Guild"], order = 50,
-    subs = { "calendar", "activity", "cta" },
+    subs = { "achievements", "calendar", "activity", "bulletin", "cta", "polls", "chat", "journal" },
     build = function(c, win) AmazingHub:CreateGuildHub(c, win) end,
 })
 
--- WoW: Forever only (issue #211): the guild's journal, where the module exists.
+-- The guild bank (issue #380): what it holds, seen from anywhere, each tab, its ledger, what it
+-- needs and what members asked for. Only where the client has a guild bank (WoW: Forever's servers may not).
 UI:RegisterFeature({
-    id = "journal", label = L["Journal"], order = 55, tbc = false, retail = false, restart = true,
-    build = function(c, win) AmazingHub:CreateJournalPanel(c, win) end,
+    id = "bank", label = L["Bank"], order = 45,
+    subs = { "inventory", "tabs", "ledger", "needs", "requests", "cleanup" },
+    condition = function() return AmazingHub.GuildBank ~= nil and AmazingHub.GuildBank:Available() end,
+    build = function(c, win) AmazingHub:CreateGuildBankPanel(c, win) end,
 })
 
--- WoW: Forever only (issue #216): what the guild earned, as the guild website says it.
+-- The guild's own group finder (issue #341): what is being formed, who is looking, and the game's
+-- activities as tiles. /amazing avail opens it.
 UI:RegisterFeature({
-    id = "achievements", label = L["Achievements"], order = 56, tbc = false, retail = false,
-    build = function(c, win) AmazingHub:CreateAchievementsPanel(c, win) end,
+    id = "groups", label = L["Groups"], order = 52,
+    subs = { "active", "dungeon", "raid", "other" },
+    build = function(c, win) AmazingHub:CreateGroupsPanel(c, win) end,
+})
+
+-- WoW: Forever only (issue #211): the guild's journal, where the module exists. The Guild tab's
+-- Journal sub-tab since issue #367: its switch stays in Settings, and /amazing open journal opens it.
+UI:RegisterFeature({
+    id = "journal", label = L["Journal"], order = 55, tab = false, opens = { "guild", "journal" },
+    tbc = false, retail = false, restart = true,
+})
+
+-- WoW: Forever only (issue #216): what the guild earned, as the guild website says it. The Guild tab's
+-- Achievements sub-tab since issue #367.
+UI:RegisterFeature({
+    id = "achievements", label = L["Achievements"], order = 56, tab = false, opens = { "guild", "achievements" },
+    tbc = false, retail = false,
 })
 
 UI:RegisterFeature({
@@ -81,14 +103,18 @@ UI:RegisterFeature({
     build = function(c, win) AmazingHub:CreateAlliancePanel(c, win) end,
 })
 
+-- An officer's view has sub-tabs; Trials only for officers, while its feature is on (issue #367).
 UI:RegisterFeature({
     id = "recruitment", label = L["Recruitment"], order = 70,
+    subs = { "recruiting", "scanner", "trials" },
     build = function(c, win) AmazingHub:CreateRecruitmentPanel(c, win) end,
 })
 
+-- The Recruitment tab's Trials sub-tab since issue #367: its switch stays in Settings, and
+-- /amazing open trials opens it.
 UI:RegisterFeature({
-    id = "trials", label = L["Trials"], order = 80, officerOnly = true,
-    build = function(c, win) AmazingHub:CreateTrialsPanel(c, win) end,
+    id = "trials", label = L["Trials"], order = 80, tab = false, opens = { "recruitment", "trials" },
+    officerOnly = true,
 })
 
 UI:RegisterFeature({

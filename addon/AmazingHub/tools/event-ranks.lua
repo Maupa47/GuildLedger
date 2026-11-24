@@ -127,4 +127,84 @@ check(not Cal.MayWriteRemote({ author = "Off" }, { author = "Mem" }, "Mem-Realm"
 check(not Cal.MayWriteRemote({ id = "web:abc", author = "Mem" }, nil, "Mem-Realm", false), "never a raid from the site")
 check(Cal.MayWriteRemote({ author = "Off" }, nil, "Off2-Realm", true), "an officer writes any event")
 
+-- ── 5. The open calendar follows the limit; an old client's copy is no officer change (#331) ──
+client("Off")
+now = now + 10
+AmazingHub:SetEventMaxRank(5)
+local limit = sent[1]
+client("Mem")
+local refreshed = 0
+local realRefresh = Cal.Refresh
+Cal.Refresh = function() refreshed = refreshed + 1 end
+deliver(limit, "Off")
+check(refreshed == 1, "the calendar is redrawn when the limit arrives, so the New Event button shows")
+Cal.Refresh = realRefresh
+-- A 1.12 officer re-sends the event limit as the officer threshold, with the same stamp.
+client("Off")
+SS:Publish("guildcfg", "officers", { max = 5 }, { rev = now })
+local relayed = sent[1]
+client("Mem")
+deliver(limit, "Off")
+deliver(relayed, "Off")
+check(AmazingHub.db.settings.officerMaxRank == 1 and not AmazingHub:IsOfficer(),
+  "the old client's copy does not make every rank up to the event limit an officer")
+client("Mem")
+deliver(relayed, "Off")
+check(AmazingHub.db.settings.officerMaxRank == 5, "heard first, the copy cannot be told apart yet")
+deliver(limit, "Off")
+check(AmazingHub.db.settings.officerMaxRank == 1 and not AmazingHub:IsOfficer() and AmazingHub:MayCreateEvents(),
+  "the event limit arriving after it puts the officers back")
+client("Off")
+now = now + 10
+AmazingHub:SetOfficerMaxRank(2)
+local real = sent[1]
+client("Mem")
+deliver(limit, "Off")
+deliver(real, "Off")
+check(AmazingHub.db.settings.officerMaxRank == 2, "a real officer change still goes through")
+
+-- An old client re-sending an event limit that has since been replaced is a copy all the same.
+client("Off")
+now = now + 10
+AmazingHub:SetEventMaxRank(5)
+local older = sent[1]
+local olderAt = now
+now = now + 10
+sent = {}
+AmazingHub:SetEventMaxRank(3)
+local newest = sent[1]
+client("Off")
+SS:Publish("guildcfg", "officers", { max = 5 }, { rev = olderAt })
+local staleCopy = sent[1]
+client("Mem")
+deliver(older, "Off")
+deliver(newest, "Off")
+deliver(staleCopy, "Off")
+check(AmazingHub.db.settings.officerMaxRank == 1, "the copy of a replaced event limit is no officer change either")
+client("Off")
+SS:Publish("guildcfg", "officers", { max = 5 }, { rev = olderAt })
+local staleCopy2 = sent[1]                       -- a fresh envelope: the wire drops ids it has seen
+client("Mem")
+deliver(newest, "Off")
+deliver(staleCopy2, "Off")
+check(AmazingHub.db.settings.officerMaxRank == 5, "a copy of a limit never heard cannot be told apart")
+deliver(older, "Off")
+check(AmazingHub.db.settings.officerMaxRank == 1 and AmazingHub.db.settings.eventMaxRank == 3,
+  "the older limit, heard late, still puts the officers back and leaves the newest limit")
+
+-- An officer setting both to the same ranks in the same second: the two stamps never collide.
+client("Off")
+now = now + 10
+AmazingHub:SetOfficerMaxRank(2)
+local o2 = sent[1]
+sent = {}
+AmazingHub:SetEventMaxRank(2)
+local e2 = sent[1]
+check(AmazingHub.db.settings.officerMaxRankAt ~= AmazingHub.db.settings.eventMaxRankAt, "the event limit takes the next stamp")
+for _, order in ipairs({ { o2, e2 }, { e2, o2 } }) do
+  client("Mem")
+  deliver(order[1], "Off"); deliver(order[2], "Off")
+  check(AmazingHub.db.settings.officerMaxRank == 2, "the real officer change holds whatever arrives first")
+end
+
 print(string.format("event-ranks: %d checks passed", checks))

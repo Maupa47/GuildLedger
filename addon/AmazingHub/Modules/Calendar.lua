@@ -70,6 +70,123 @@ function Calendar:KindLabel(k)
     return map[k] or k
 end
 
+----------------------------------------------------------------------
+-- The kinds a creator who is not an officer may create (issue #308)
+----------------------------------------------------------------------
+-- The guild's, as the ranks that create events are: an officer's choice, stamped and published on
+-- guildcfg (`eventkinds`, newest wins, two in one second settle on the fewer kinds) and re-sent with
+-- the ranks. Unset, every kind, as before #308; an officer always creates every kind. Held when an
+-- event is created or changed here and again when one arrives (OnSync). The payload carries no `max`:
+-- a client before this reads an unknown guildcfg action as the officer threshold, and one with no
+-- `max` it ignores, so it goes on taking every kind from a member, as it always did.
+local KINDS_FUTURE_SLACK = 300   -- seconds a stamp may run ahead of this client's clock, as the ranks'
+
+-- Known kinds only, once each, in KINDS order; nil when `list` is no list.
+function Calendar.CleanKinds(list)
+    if type(list) ~= "table" then return nil end
+    local want = {}
+    for _, k in pairs(list) do
+        if type(k) == "string" and KIND_SET[k] then want[k] = true end
+    end
+    local out = {}
+    for _, k in ipairs(Calendar.KINDS) do
+        if want[k] then out[#out + 1] = k end
+    end
+    return out
+end
+
+local function settings() return AmazingHub.db and AmazingHub.db.settings end
+
+-- The kinds open to members, as a set; nil when the guild never chose (every kind).
+function Calendar:MemberKinds()
+    local s = settings()
+    local list = s and Calendar.CleanKinds(s.eventKinds)
+    if not list then return nil end
+    local set = {}
+    for _, k in ipairs(list) do set[k] = true end
+    return set
+end
+
+function Calendar:KindOpenToMembers(kind)
+    local set = self:MemberKinds()
+    return set == nil or set[normalizeKind(kind)] == true
+end
+
+-- Whether this client creates an event of `kind`: an officer every kind, a rank that creates events
+-- only a kind open to members.
+function Calendar:MayCreateKind(kind)
+    if AmazingHub:IsOfficer() then return true end
+    return AmazingHub:MayCreateEvents() and self:KindOpenToMembers(kind)
+end
+
+-- The kinds this client creates, in KINDS order: the editor's pills.
+function Calendar:CreatableKinds()
+    local out = {}
+    for _, k in ipairs(self.KINDS) do
+        if self:MayCreateKind(k) then out[#out + 1] = k end
+    end
+    return out
+end
+
+-- Only an officer changes it; the stamp only moves forward. Whether it was taken.
+function Calendar:SetMemberKinds(list)
+    if not AmazingHub:IsOfficer() then return false end
+    local kinds = Calendar.CleanKinds(list)
+    local s = settings()
+    if not (kinds and s) then return false end
+    s.eventKinds = kinds
+    s.eventKindsAt = math.max(GetServerTime(), (s.eventKindsAt or 0) + 1)
+    self:PublishMemberKinds()
+    return true
+end
+
+-- To the guild when it changes, and on the officers' regular sync and their answer to a request. Only
+-- a choice somebody made: a guild that never chose sends nothing.
+function Calendar:PublishMemberKinds()
+    local s = settings()
+    local kinds = s and s.eventKindsAt and Calendar.CleanKinds(s.eventKinds)
+    if not (kinds and AmazingHub.SyncService and AmazingHub:IsOfficer()) then return end
+    AmazingHub.SyncService:Publish("guildcfg", "eventkinds", { kinds = kinds }, { rev = s.eventKindsAt })
+end
+
+-- From an officer over GUILD (SyncService checked both). Two changes in the same second settle on the
+-- fewer kinds, then on the list that, written in KINDS order and joined by commas, sorts first as text
+-- ("DUNGEON" before "RAID"): the same answer on every client whatever the order.
+function Calendar:OnMemberKindsSync(env)
+    local data = type(env) == "table" and env.data
+    local s = settings()
+    if type(data) ~= "table" or not s then return end
+    local kinds = Calendar.CleanKinds(data.kinds)
+    local at = tonumber(env.rev)
+    -- `at > 0` also turns away NaN, which compares false to everything.
+    if not (kinds and at and at > 0 and at < math.huge) then return end
+    at = math.min(at, GetServerTime() + KINDS_FUTURE_SLACK)
+    local held, heldKinds = s.eventKindsAt, Calendar.CleanKinds(s.eventKinds)
+    if held and at < held then return end
+    if held and at == held and heldKinds then
+        if #kinds > #heldKinds then return end
+        if #kinds == #heldKinds and table.concat(kinds, ",") >= table.concat(heldKinds, ",") then return end
+    end
+    s.eventKinds, s.eventKindsAt = kinds, at
+    self:Refresh()
+end
+
+-- The dungeons the editor offers for a Dungeon event (issue #308), as the guild website offers them to book
+-- (#491): the game's own that have a boss to clear, by name, then the classic ones guilds book most.
+-- Names only: a pick becomes the title, and "Other" leaves the title to be typed. Empty where the game
+-- has no catalogue (Anniversary, retail), where the title is typed as before.
+function Calendar:DungeonChoices()
+    local cat = AmazingHub.ForeverDungeons
+    if not cat then return {} end
+    local out = {}
+    for _, d in pairs(cat.byInstance or {}) do
+        if type(d.name) == "string" and type(d.bosses) == "table" and #d.bosses > 0 then out[#out + 1] = d.name end
+    end
+    table.sort(out)
+    for _, name in ipairs(cat.classic or {}) do out[#out + 1] = name end
+    return out
+end
+
 function Calendar:Initialize()
     AmazingHub.db.calendar = AmazingHub.db.calendar or { events = {} }
     AmazingHub.db.calendar.events = AmazingHub.db.calendar.events or {}
@@ -210,6 +327,7 @@ function Calendar:GetEvents() return AmazingHub.db.calendar.events end
 -- the guild channel, and so old events truly disappear instead of lingering
 -- forever as canceled records. Pruned after TOMBSTONE_TTL.
 local TOMBSTONE_TTL = 30 * 86400
+local YEARLY_DAYS = 733   -- how far ahead a yearly series is filled in (#358)
 function Calendar:Tombstones() return AmazingHub.db.calendar.deleted end
 function Calendar:IsDeleted(id) return self:Tombstones()[id] ~= nil end
 
@@ -225,7 +343,15 @@ function Calendar:IsSeriesEnded(sid) return sid ~= nil and self:EndedSeries()[si
 function Calendar:PruneTombstones()
     local now = GetServerTime()
     for id, ts in pairs(self:Tombstones()) do
-        if (ts or 0) < now - TOMBSTONE_TTL then self:Tombstones()[id] = nil end
+        -- A series date deleted ahead of time stays deleted until its day has passed: a yearly date
+        -- is filled in up to a year ahead, far past TOMBSTONE_TTL (#358).
+        -- Only a real date, no further ahead than a series is ever filled in.
+        local y, m, d = tostring(id):match(":(%d%d%d%d)(%d%d)(%d%d)$")
+        y, m, d = tonumber(y), tonumber(m), tonumber(d)
+        local dayOf = y and m >= 1 and m <= 12 and d >= 1 and d <= 31
+            and time({ year = y, month = m, day = d, hour = 23, min = 59 })
+        local ahead = dayOf and dayOf > now and dayOf <= now + YEARLY_DAYS * 86400
+        if (ts or 0) < now - TOMBSTONE_TTL and not ahead then self:Tombstones()[id] = nil end
     end
     for sid, ts in pairs(self:EndedSeries()) do
         if (ts or 0) < now - ENDED_TTL then self:EndedSeries()[sid] = nil end
@@ -268,6 +394,11 @@ function Calendar:GetComposition(e)
     local comp = { yes = 0, tentative = 0, no = 0, roles = { TANK = 0, HEALER = 0, DPS = 0 }, classes = {} }
     -- A raid planned on the site counts the site's answers: nobody signs up for it in the game (#146).
     -- An allied seat is still approved in the game, and counts with them.
+    -- One of the site's events that is not a raid (#652): the site's counts, with nobody's name or role.
+    if self:IsSiteEvent(e) then
+        comp.yes, comp.tentative = e.site.going or 0, e.site.maybe or 0
+        return comp
+    end
     local answers
     if self:IsWebEvent(e) then
         answers = self:WebSignups(e)
@@ -294,7 +425,7 @@ function Calendar:GetDigestLines()
     local nowT = GetServerTime()
     local dt = (e.when or 0) - nowT
     if dt > 0 and dt < 24 * 3600 then
-        return { string.format(L["%s soon: %s at %s"], self:KindLabel(e.kind), e.title, date("%a %H:%M", e.when)) }
+        return { string.format(L["%s soon: %s at %s"], self:KindLabel(e.kind), e.title, AmazingHub:LocalDate("%a %H:%M", e.when)) }
     end
     return nil
 end
@@ -328,10 +459,15 @@ function Calendar:_Add(e)
     end
 end
 
--- The officer and the fields every new event needs; nil, with the reason said, when one is missing.
-local function validNew(title, when)
+-- The rank, the kind (issue #308) and the fields every new event needs; nil, with the reason said, when
+-- one is missing.
+local function validNew(title, when, kind)
     if not AmazingHub:MayCreateEvents() then
         AmazingHub:Print(L["|cffFF4444Your rank cannot create events.|r"])
+        return nil
+    end
+    if not Calendar:MayCreateKind(kind) then
+        AmazingHub:Print(L["|cffFF4444Your rank cannot create this type of event.|r"])
         return nil
     end
     title = strtrim(title or "")
@@ -344,7 +480,7 @@ local function validNew(title, when)
 end
 
 function Calendar:Create(title, when, size, note, kind, shareAlliance)
-    title, when = validNew(title, when)
+    title, when = validNew(title, when, kind)
     if not title then return end
     local e = newEvent(title, when, size, note, kind, shareAlliance)
     self:_Add(e)
@@ -360,11 +496,17 @@ end
 -- client fills the rest in as days pass (TopUpSeries). A date deleted by hand leaves a tombstone, which
 -- outlives the window, so it is not brought back.
 ----------------------------------------------------------------------
-Calendar.REPEATS = { "none", "weekly", "biweekly", "daily", "everyother", "monthnth", "monthday" }
+Calendar.REPEATS = { "none", "weekly", "biweekly", "daily", "everyother", "monthnth", "monthday", "yearly" }
 local SERIES_DAYS = 28    -- under TOMBSTONE_TTL
 local SERIES_CAP = 16     -- dates per fill, whatever the rule
 local STEP_DAYS = { weekly = 7, biweekly = 14, daily = 1, everyother = 2 }
 local MONTHLY = { monthnth = true, monthday = true }
+-- A yearly date (#358) is a year apart: the window reaches two years and a fill makes the next two,
+-- so a birthday is always on the calendar, and skipping one year (deleting that date) still leaves the
+-- series a date to be found by and filled in from. A client from before this reads the rule as unknown
+-- and keeps the date as an ordinary event.
+local YEARLY_CAP = 2
+local function knownRep(rep) return STEP_DAYS[rep] or MONTHLY[rep] or rep == "yearly" end
 
 local function noonOf(y, m, d) return time({ year = y, month = m, day = d, hour = 12 }) end
 local function daysIn(y, m) return date("*t", noonOf(y, m + 1, 0)).day end
@@ -405,6 +547,15 @@ function Calendar._Occurrences(rule, first, fromT, toT, cap)
                 keep(ts)
             end
         end
+    elseif rule.rep == "yearly" then
+        -- The same day every year; 29 February falls on the 28th when the year has none.
+        for k = 0, 200 do
+            local y = base.year + k
+            local day = math.min(base.day, daysIn(y, base.month))
+            local ts = time({ year = y, month = base.month, day = day, hour = hour, min = min })
+            if ts > toT or #out >= cap then break end
+            keep(ts)
+        end
     else
         keep(first)
     end
@@ -416,7 +567,7 @@ local function occurrenceId(sid, ts) return sid .. ":" .. date("%Y%m%d", ts) end
 -- A series' rule, cleaned like anything off the guild channel, or nil.
 local function cleanSeries(s)
     if type(s) ~= "table" or type(s.id) ~= "string" or not tonumber(s.first) then return nil end
-    if not (STEP_DAYS[s.rep] or MONTHLY[s.rep]) then return nil end
+    if not knownRep(s.rep) then return nil end
     local function n(v, lo, hi) v = tonumber(v); return (v and v >= lo and v <= hi) and math.floor(v) or nil end
     return { id = s.id:sub(1, 40), rep = s.rep, first = tonumber(s.first), hour = n(s.hour, 0, 23),
              min = n(s.min, 0, 59), untilT = tonumber(s.untilT) }
@@ -427,10 +578,11 @@ end
 function Calendar:_FillSeries(template, now)
     local s = template.series
     local from = math.max(now, s.first)
-    local to = from + SERIES_DAYS * 86400 - 1   -- four weeks, the fifth week's date not yet
+    local yearly = s.rep == "yearly"
+    local to = from + (yearly and YEARLY_DAYS or SERIES_DAYS) * 86400 - 1   -- four weeks, the fifth week's date not yet
     if s.untilT then to = math.min(to, s.untilT) end
     local n = 0
-    for _, ts in ipairs(Calendar._Occurrences(s, s.first, from, to, SERIES_CAP)) do
+    for _, ts in ipairs(Calendar._Occurrences(s, s.first, from, to, yearly and YEARLY_CAP or SERIES_CAP)) do
         local id = occurrenceId(s.id, ts)
         if not self:GetEvents()[id] and not self:IsDeleted(id) then
             local e = newEvent(template.title, ts, template.size, template.note, template.kind, template.shareAlliance)
@@ -446,10 +598,10 @@ end
 -- An officer's event that repeats: `rep` one of REPEATS. "none" is an ordinary event. Returns how
 -- many dates were created, nil when nothing could be.
 function Calendar:CreateSeries(title, when, size, note, kind, shareAlliance, rep)
-    if not (STEP_DAYS[rep] or MONTHLY[rep]) then
+    if not knownRep(rep) then
         return self:Create(title, when, size, note, kind, shareAlliance) and 1 or nil
     end
-    title, when = validNew(title, when)
+    title, when = validNew(title, when, kind)
     if not title then return nil end
     local t = date("*t", when)
     local template = newEvent(title, when, size, note, kind, shareAlliance)
@@ -625,11 +777,16 @@ end
 -- client. Left out, a field goes: the site's list once did, and what the raid was put in the game's
 -- calendar as would (#263).
 local function wireOf(e)
+    local site, canceled = type(e.site) == "table" and e.site or nil, nil
+    if site then canceled = e.canceled == true end
     return {
         id = e.id, title = e.title, when = e.when, size = e.size,
         note = e.note, kind = e.kind, author = e.author, createdAt = e.createdAt,
         shareAlliance = e.shareAlliance, signups = e.signups, signupsAt = e.signupsAt,
         game = e.game, gameAt = e.gameAt, clock = e.clock, series = e.series,
+        -- An event from the site that is not a raid (#652): its place and counts, and whether it is cancelled, so
+        -- one the site sends again after it left comes back on every client, not only on the importing officer's.
+        site = site, canceled = canceled,
     }
 end
 
@@ -654,6 +811,30 @@ local function cleanGame(g)
     if g == false then return false end
     if type(g) ~= "table" or type(g.title) ~= "string" or not tonumber(g.at) then return nil end
     return { title = AmazingHub:SanitizeUserText(g.title, 64), at = tonumber(g.at) }
+end
+
+-- What an event from the site that is not a raid carries beside a raid's fields (#652): { where?, going, maybe },
+-- cleaned like anything off the guild channel; nil when it is none.
+local SITE_COUNT_MAX = 100000
+local function cleanSite(v)
+    if type(v) ~= "table" then return nil end
+    local function count(n)
+        n = AmazingHub.Finite(n)
+        return n and n == math.floor(n) and n >= 0 and n <= SITE_COUNT_MAX and n or 0
+    end
+    local where = type(v.where) == "string" and AmazingHub:SanitizeUserText(v.where, 240) or ""
+    return { where = where ~= "" and where or nil, going = count(v.going), maybe = count(v.maybe) }
+end
+
+local function sameSite(a, b)
+    if type(a) ~= "table" or type(b) ~= "table" then return false end
+    return a.where == b.where and a.going == b.going and a.maybe == b.maybe
+end
+
+--- Whether an event is one of the site's that is not a raid (#652): a site event (`web:<id>`) with what only those
+--- carry. Its answers are the site's counts, it has nobody to invite and it never goes to the game's own calendar.
+function Calendar:IsSiteEvent(e)
+    return self:IsWebEvent(e) and type(e.site) == "table"
 end
 
 function Calendar:WebEventId(roster)
@@ -732,6 +913,74 @@ function Calendar:UpsertWebRaid(roster, answeredAt)
     return e
 end
 
+--- Create or refresh the guild event for one of the site's events that is not a raid (amazinghub-web #652, the
+--- GOSGILD1's `events`, read by CompanionImport:SiteEvents): of its type (SOCIAL, PVP, OTHER), from the site, with
+--- its place and "N going · N maybe", nobody to invite and no list of names. Officers only, like UpsertWebRaid, and
+--- forward only by `answeredAt` (the companion's ack): an older inbox than the one that brought what is here
+--- changes nothing. Returns the event, or nil.
+function Calendar:UpsertSiteEvent(ev, answeredAt)
+    if type(ev) ~= "table" or type(ev.id) ~= "string" or ev.id == "" then return nil end
+    if not AmazingHub:IsOfficer() then return nil end
+    local id = WEB_ID_PREFIX .. ev.id
+    local when = tonumber(ev.startsAt) or 0
+    if when <= 0 or self:IsDeleted(id) then return nil end
+
+    local events = self:GetEvents()
+    local e = events[id]
+    -- The site's id names a raid or an event, never both: a raid of this id is left as it is.
+    if e and not self:IsSiteEvent(e) then return nil end
+    answeredAt = math.min(tonumber(answeredAt) or 0, GetServerTime())
+    if e and (tonumber(e.signupsAt) or 0) > answeredAt then return e end
+
+    local kind = normalizeKind(ev.kind)
+    local title = AmazingHub:SanitizeUserText(ev.title, 192)
+    if title == "" then title = self:KindLabel(kind) end
+    local clock = cleanClock(ev.clock)
+    local site = cleanSite(ev)
+
+    -- Nothing moved: the same event said again later only moves its time. The note is this client's language and
+    -- is not compared, or two officers reading two languages would republish it at every login.
+    if e and not e.canceled and e.title == title and e.when == when and e.kind == kind and sameClock(e.clock, clock)
+        and sameSite(e.site, site) then
+        e.signupsAt = math.max(tonumber(e.signupsAt) or 0, answeredAt)
+        return e
+    end
+
+    local isNew = (e == nil)
+    if isNew then
+        e = {
+            id = id, author = AmazingHub.Compat.PlayerName(), createdAt = GetServerTime(),
+            rsvps = {}, shareAlliance = false, size = AmazingHub.Client.defaultRaidSize,
+        }
+        events[id] = e
+    end
+    e.canceled = false
+    e.title, e.when, e.clock, e.kind = title, when, clock, kind
+    e.note = site.where and string.format(L["From the website. Where: %s"], site.where) or L["From the website."]
+    -- Answered on the site, counted there: no names travel, and nobody answers it in the game.
+    e.signups, e.signupsAt, e.site = {}, answeredAt, site
+
+    if AmazingHub.SyncService then
+        local rev = AmazingHub.SyncService:NextRevision("event", id)
+        AmazingHub.SyncService:Publish("event", isNew and "create" or "update", { event = wireOf(e) }, { rev = rev })
+    end
+    self:Refresh()
+    return e
+end
+
+--- Takes off the calendar the site's events that are not raids which the site no longer sends (#652), where the
+--- inbox can tell (`info`, CompanionImport:SiteEventsInfo; the reasoning is GameCalendar.SiteEventGone). Cancelled,
+--- as an officer cancels one, so it goes on every client; it comes back if the site sends it again.
+function Calendar:DropSiteEvents(info)
+    local GC = AmazingHub.GameCalendar
+    if not (AmazingHub:IsOfficer() and GC and GC.SiteEventGone and type(info) == "table") then return end
+    local now, gone = GetServerTime(), {}
+    for id, e in pairs(self:GetEvents()) do
+        if not e.canceled and self:IsSiteEvent(e) and GC.SiteEventGone(e, info, now) then gone[#gone + 1] = id end
+    end
+    for _, id in ipairs(gone) do self:Cancel(id) end
+end
+
 --- What a site raid was put in the game's calendar as ({ title, at }), or false once taken out of it,
 --- shared with the other officers (#263). Stamped with the time, so on another client the newer
 --- answer wins and an update from a client before this, which carries none, takes nothing back.
@@ -768,6 +1017,12 @@ function Calendar:Update(id, title, when, size, note, kind, shareAlliance)
     end
     local e = self:GetEvents()[id]
     if not e or e.canceled then return end
+    -- An event becomes only a kind its creator may create (#308). Kept as it is, it stays theirs to edit,
+    -- reschedule and end, whatever the officers closed since.
+    if normalizeKind(kind) ~= normalizeKind(e.kind) and not self:MayCreateKind(kind) then
+        AmazingHub:Print(L["|cffFF4444Your rank cannot create this type of event.|r"])
+        return
+    end
     title = strtrim(title or "")
     when = tonumber(when)
     if title == "" or not when then
@@ -853,6 +1108,11 @@ function Calendar:OnSync(env, sender)
         local existing = id and (self:GetEvents()[id] or (d.series and self:AnyOfSeries(id))) or nil
         local incoming = type(d) == "table" and d.event or nil
         if not Calendar.MayWriteRemote(existing, incoming, sender, false) then return end
+        -- And only a kind the officers opened to them (#308), unless the event is one this client holds
+        -- already and keeps its kind: editing, rescheduling, ending, cancelling or deleting it stays theirs.
+        local keeps = type(existing) == "table" and type(incoming) == "table"
+            and normalizeKind(existing.kind) == normalizeKind(incoming.kind)
+        if type(incoming) == "table" and not keeps and not self:KindOpenToMembers(incoming.kind) then return end
     end
     if (env.act == "create" or env.act == "update") and d and d.event then
         local e = d.event
@@ -866,6 +1126,7 @@ function Calendar:OnSync(env, sender)
         -- A new date of a series this client knows is ended: a stale officer filled it in. Dropped.
         local ended = series and not existing and self:IsSeriesEnded(series.id)
         if not ended and not self:IsDeleted(e.id) and AmazingHub.SyncService:ShouldApply("event", e.id, env.rev) then
+            local wireCanceled = e.canceled == true
             e.rsvps    = (existing and existing.rsvps) or {}
             e.canceled = (existing and existing.canceled) or false
             e.shareAlliance = e.shareAlliance and true or false
@@ -888,9 +1149,17 @@ function Calendar:OnSync(env, sender)
                     e.game, e.gameAt = existing and existing.game, existing and existing.gameAt
                 end
                 e.clock = cleanClock(e.clock)
+                -- One of the site's events that is not a raid (#652): its counts, no names, never in the game's own
+                -- calendar; and cancelled or not as the officer who sent it has it, so one the site sends again after
+                -- it left comes back here too.
+                e.site = cleanSite(e.site)
+                if e.site then
+                    e.signups, e.game, e.gameAt = {}, nil, nil
+                    e.canceled = wireCanceled
+                end
             else
                 e.signups, e.signupsAt = nil, nil
-                e.game, e.gameAt, e.clock = nil, nil, nil
+                e.game, e.gameAt, e.clock, e.site = nil, nil, nil, nil
             end
             e.series = cleanSeries(e.series)   -- #267: the rule of a repeating event, checked
             self:GetEvents()[e.id] = e

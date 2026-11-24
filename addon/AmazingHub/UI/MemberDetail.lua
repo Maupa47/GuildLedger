@@ -149,7 +149,7 @@ function CreateDetailFrame()
     outerBorder:SetPoint("BOTTOMRIGHT", 2, -2)
     outerBorder:SetBackdrop({
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(outerBorder),
     })
     outerBorder:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 0.3)
     outerBorder:SetFrameLevel(19)
@@ -188,7 +188,7 @@ function CreateDetailFrame()
     classIconFrame:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(classIconFrame),
     })
     classIconFrame:SetBackdropColor(0, 0, 0, 0.8)
     classIconFrame:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.8)
@@ -249,6 +249,7 @@ end
 ----------------------------------------------------------------------
 function PopulateDetail(frame, data)
     local child = frame.content
+    frame._sheetRedraw = nil   -- set again below when this member's card has the officers' sheet
     -- Initialise or reset the FontString/Texture pool. Pooled objects are
     -- hidden and their cursors reset so the current populate reuses them
     -- in order rather than accumulating fresh C-level objects each call.
@@ -405,7 +406,8 @@ function PopulateDetail(frame, data)
                         local div = barFrame:CreateTexture(nil, "OVERLAY")
                         div:SetTexture("Interface\\Buttons\\WHITE8x8")
                         div:SetPoint("TOPLEFT", xPos, 0)
-                        div:SetSize(1, 18)
+                        div:SetHeight(18)
+                        AmazingHub.UI:Hairline(div, "Width")
                         div:SetVertexColor(0, 0, 0, 0.7)
                         div:Show()
                     end
@@ -798,7 +800,7 @@ function PopulateDetail(frame, data)
             local addNoteBox = CreateFrame("EditBox", nil, child, "BackdropTemplate")
             addNoteBox:SetSize(contentWidth - 100, 22)
             addNoteBox:SetPoint("TOPLEFT", 15, yOff - 8)
-            addNoteBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+            addNoteBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(addNoteBox) })
             addNoteBox:SetBackdropColor(0.050, 0.050, 0.066, 1)
             addNoteBox:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
             AmazingHub:ApplyFont(addNoteBox, 10)
@@ -845,6 +847,41 @@ function PopulateDetail(frame, data)
     end
 
     ----------------------------------------------------------------
+    -- Section: Membership history (officer only, issue #425): every passage, then the rank changes.
+    ----------------------------------------------------------------
+    local MH = AmazingHub.MemberHistory
+    if MH and AmazingHub:IsOfficer() then
+        local hkey = data.key or AmazingHub:GetPlayerKey(data.name, data.realm or GetRealmName())
+        local stints, ranks = MH:Stints(hkey), MH:Ranks(hkey)
+        if #stints > 0 or #ranks > 0 then
+            yOff = yOff - 10
+            local total = MH:TenureDays(hkey)
+            yOff = CreateSectionHeader(child, string.format(L["MEMBERSHIP  --  %s days in the guild"],
+                total and tostring(total) or "?"), yOff, contentWidth)
+            local lines = {}
+            for i = #stints, 1, -1 do lines[#lines + 1] = MH:StintLine(stints[i]) end
+            for i = #ranks, math.max(1, #ranks - 4), -1 do
+                local rk = ranks[i]
+                local line = string.format(L["%s: rank %s"], AmazingHub:DateText(rk.at, "/%Y"), rk.to)
+                if rk.from then line = line .. " (" .. string.format(L["was %s"], rk.from) .. ")" end
+                if rk.by then line = line .. " — " .. string.format(L["by %s"], rk.by) end
+                lines[#lines + 1] = "|cffAAAAAA" .. line .. "|r"
+            end
+            for _, text in ipairs(lines) do
+                local fs = _pFS(child)
+                AmazingHub:ApplyFont(fs, 9)
+                fs:SetPoint("TOPLEFT", 15, yOff - 3)
+                fs:SetWidth(contentWidth - 30)
+                fs:SetJustifyH("LEFT")
+                fs:SetWordWrap(true)
+                fs:SetText(text)
+                fs:Show()
+                yOff = yOff - (fs:GetStringHeight() + 4)
+            end
+        end
+    end
+
+    ----------------------------------------------------------------
     -- Section: Officer Notes (officer only)
     ----------------------------------------------------------------
     if AmazingHub.OfficerNotes and AmazingHub:IsOfficer() then
@@ -870,6 +907,58 @@ function PopulateDetail(frame, data)
             yOff = yOff - 16
         end
 
+        -- The member's sheet, whole (issue #427), and the button that edits it.
+        local sheet = AmazingHub.OfficerNotes:GetSheet(playerKey)
+        if sheet then
+            local by = _pFS(child)
+            AmazingHub:ApplyFont(by, 9)
+            by:SetPoint("TOPLEFT", 15, yOff - 3)
+            by:SetText("|cffAAAAAA" .. string.format(L["Officer sheet (%s, %s):"], sheet.author or "?",
+                AmazingHub:DateText(sheet.ts or 0, "/%Y")) .. "|r")
+            by:Show()
+            yOff = yOff - 16
+            local body = _pFS(child)
+            AmazingHub:ApplyFont(body, 9)
+            body:SetPoint("TOPLEFT", 15, yOff - 3)
+            body:SetWidth(contentWidth - 30)
+            body:SetJustifyH("LEFT")
+            body:SetWordWrap(true)
+            body:SetText(sheet.text)   -- kept without "|" (OfficerNotes.CleanSheetText)
+            body:Show()
+            yOff = yOff - (body:GetStringHeight() + 6)
+        end
+        local sheetKey, sheetName = playerKey, data.name
+        -- One button for the panel's life (#427): a redraw per backfill envelope made a new one each time.
+        local editSheet = child._editSheet
+        if not editSheet then
+            editSheet = UI:CreateButton(child, L["Edit sheet"], 100, 20)
+            child._editSheet = editSheet
+        end
+        editSheet:ClearAllPoints()
+        editSheet:SetPoint("TOPLEFT", 15, yOff - 4)
+        editSheet:SetScript("OnClick", function() AmazingHub:ShowOfficerSheetEditor(sheetKey, sheetName) end)
+        editSheet:Show()
+        yOff = yOff - 28
+        -- A sheet saved here or by another officer redraws the card, unless the officer is typing in it. Only
+        -- when this member's sheet changed, and at most once per SHEET_GAP + 1 seconds: a backfill sends an
+        -- envelope every SHEET_GAP seconds, most of them other members' sheets (#427).
+        local drawn = sheet and (tostring(sheet.rev) .. "\0" .. sheet.text) or ""
+        local function redraw()
+            if not frame:IsShown() then return end
+            local now = AmazingHub.OfficerNotes:GetSheet(sheetKey)
+            if (now and (tostring(now.rev) .. "\0" .. now.text) or "") == drawn then return end
+            local focus = GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus()
+            if focus and focus.IsVisible and focus:IsVisible() then return end
+            PopulateDetail(frame, data)
+        end
+        -- Through the frame: a redraw held back by the coalescing runs for whoever the panel shows then.
+        frame._sheetRedraw = redraw
+        AmazingHub.OfficerNotes.uiRefresh = function()
+            AmazingHub:Coalesce("memberDetail.sheet", AmazingHub.OfficerNotes.SHEET_GAP + 1, function()
+                if frame._sheetRedraw then frame._sheetRedraw() end
+            end)
+        end
+
         -- Show last 3 notes
         for i = 1, math.min(3, #notes) do
             local note = notes[i]
@@ -884,6 +973,104 @@ function PopulateDetail(frame, data)
             noteStr:Show()
             yOff = yOff - (noteStr:GetStringHeight() + 4)
         end
+    end
+
+    ----------------------------------------------------------------
+    -- Section: Disciplinary record (officer only, issue #402)
+    ----------------------------------------------------------------
+    if AmazingHub.Discipline and AmazingHub:IsOfficer() then
+        yOff = yOff - 10
+        playerKey = AmazingHub:GetPlayerKey(data.name, data.realm or GetRealmName())
+        local D = AmazingHub.Discipline
+        local now = GetServerTime()
+        local term = D:GetTerm()
+        local record = D:Record(playerKey)
+        local step = D.Step(record, term, now)
+        yOff = CreateSectionHeader(child, format(L["RECORD  --  step %d  (%d days term)"], step, term), yOff, contentWidth)
+        if #record == 0 then
+            local none = _pFS(child)
+            AmazingHub:ApplyFont(none, 9)
+            none:SetPoint("TOPLEFT", 15, yOff - 3)
+            none:SetTextColor(C.silver.r, C.silver.g, C.silver.b)
+            none:SetText(L["No warnings."])
+            none:Show()
+            yOff = yOff - 16
+        end
+        for i = 1, math.min(10, #record) do
+            local w = record[i]
+            local active = D.Active(w, term, now)
+            local state = w.revokedAt and L["revoked"] or (active and L["standing"] or L["lapsed"])
+            local row = _pFS(child)
+            AmazingHub:ApplyFont(row, 9)
+            row:SetPoint("TOPLEFT", 15, yOff - 3)
+            row:SetWidth(contentWidth - 100)
+            row:SetJustifyH("LEFT")
+            row:SetWordWrap(true)
+            local color = active and C.white or C.silver
+            row:SetTextColor(color.r, color.g, color.b)
+            row:SetText(format("|cffAAAAAA[%s %s]|r %s%s — %s%s",
+                w.by or "?", AmazingHub:DateText(w.at or 0), D.ReasonText(w.reason), w.discord and (" |cff7289DA" .. L["(Discord)"] .. "|r") or "",
+                state, w.note and ("  |cffAAAAAA" .. AmazingHub:SanitizeUserText(w.note, 200) .. "|r") or ""))
+            row:Show()
+            if active and not w.discord then
+                local revoke = UI:CreateButton(child, L["Revoke"], 70, 18)
+                revoke:SetPoint("TOPRIGHT", child, "TOPLEFT", contentWidth - 10, yOff - 1)
+                local id = w.id
+                revoke:SetScript("OnClick", function()
+                    D:Revoke(id)   -- the sheet redraws through D.uiRefresh
+                end)
+            end
+            yOff = yOff - math.max(20, row:GetStringHeight() + 6)
+        end
+
+        -- Warn (issue #403): the window files it, whispers on the click and suggests the step's rung.
+        local who = data.name
+        local warnBtn = UI:CreateButton(child, L["Warn"], 80, 20)
+        warnBtn:SetPoint("TOPLEFT", 15, yOff - 6)
+        warnBtn:SetScript("OnClick", function() AmazingHub:ShowWarnDialog(playerKey, who) end)
+        yOff = yOff - 30
+        -- A warning or a setting that changes (here or from another officer) redraws the sheet, unless the
+        -- officer is typing in it: the sheet would scroll back to the top and lose what they typed.
+        D.uiRefresh = function()
+            if not frame:IsShown() then return end
+            local focus = GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus()
+            if focus and focus.IsVisible and focus:IsVisible() then return end
+            PopulateDetail(frame, data)
+        end
+
+        -- The guild's term, which every warning on every sheet counts by.
+        local termBox = CreateFrame("EditBox", nil, child, "BackdropTemplate")
+        termBox:SetSize(50, 20)
+        termBox:SetPoint("TOPLEFT", 15, yOff - 6)
+        termBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(termBox) })
+        termBox:SetBackdropColor(0.050, 0.050, 0.066, 1)
+        termBox:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
+        AmazingHub:ApplyFont(termBox, 10)
+        termBox:SetTextColor(C.white.r, C.white.g, C.white.b)
+        termBox:SetTextInsets(6, 6, 2, 2)
+        termBox:SetAutoFocus(false)
+        termBox:SetNumeric(true)
+        termBox:SetMaxLetters(3)
+        termBox:SetText(tostring(term))
+        termBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        local setTerm = UI:CreateButton(child, L["Set term (days)"], 110, 20)
+        setTerm:SetPoint("LEFT", termBox, "RIGHT", 6, 0)
+        local function applyTerm()
+            termBox:ClearFocus()
+            if not D:SetTerm(termBox:GetText()) then termBox:SetText(tostring(D:GetTerm())) end   -- taken: D.uiRefresh redraws
+        end
+        setTerm:SetScript("OnClick", applyTerm)
+        termBox:SetScript("OnEnterPressed", function(self) self:ClearFocus(); applyTerm() end)
+        termBox:Show()
+
+        -- The guild's punishment rank, which a rung of the ladder may suggest (issue #403).
+        local rankBox = UI:CreateInput(child, 120, 20, { max = 48, placeholder = L["Punishment rank"] })
+        rankBox:SetPoint("LEFT", setTerm, "RIGHT", 16, 0)
+        rankBox:SetText(D:GetPunishRank() or "")
+        local setRank = UI:CreateButton(child, L["Set rank"], 80, 20)
+        setRank:SetPoint("LEFT", rankBox, "RIGHT", 6, 0)
+        setRank:SetScript("OnClick", function() D:SetPunishRank(rankBox:GetText()) end)
+        yOff = yOff - 30
     end
 
     ----------------------------------------------------------------
@@ -1012,11 +1199,31 @@ function PopulateDetail(frame, data)
             end
         end
 
+        -- The group's alts to the main's rank (issue #424): a queue in Leadership > Bulk actions, one alt per
+        -- click of its Next button; the game's rank commands only ever run from that click.
+        if AmazingHub:IsOfficer() and AmazingHub.BulkActions and AmazingHubDevFeatures and #linkedKeys > 1 then -- Amazing Hub
+            local promoteBtn = UI:CreateButton(child, L["Promote alts"], 110, 20)
+            promoteBtn:SetPoint("TOPLEFT", 12, yOff)
+            promoteBtn:SetScript("OnClick", function() AmazingHub.BulkActions:StartGroupAndSay(playerKey, "promote") end)
+            local demoteBtn = UI:CreateButton(child, L["Demote alts"], 110, 20)
+            demoteBtn:SetPoint("LEFT", promoteBtn, "RIGHT", 6, 0)
+            demoteBtn:SetScript("OnClick", function() AmazingHub.BulkActions:StartGroupAndSay(playerKey, "demote") end)
+            for _, b in ipairs({ promoteBtn, demoteBtn }) do
+                b:HookScript("OnEnter", function(self)
+                    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+                    GameTooltip:SetText(L["To the main's rank, one alt per click of Next in Leadership > Bulk actions."], 1, 1, 1, 1, true)
+                    GameTooltip:Show()
+                end)
+                b:HookScript("OnLeave", function() GameTooltip:Hide() end)
+            end
+            yOff = yOff - 26
+        end
+
         -- Input to add a new link
         local addLinkBox = CreateFrame("EditBox", nil, child, "BackdropTemplate")
         addLinkBox:SetSize(contentWidth - 110, 22)
         addLinkBox:SetPoint("TOPLEFT", 12, yOff - 6)
-        addLinkBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+        addLinkBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(addLinkBox) })
         addLinkBox:SetBackdropColor(0.050, 0.050, 0.066, 1)
         addLinkBox:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
         AmazingHub:ApplyFont(addLinkBox, 10)
@@ -1094,7 +1301,8 @@ function CreateSectionHeader(parent, text, yOff, width)
     local line = _pBG(parent)
     line:SetTexture("Interface\\Buttons\\WHITE8x8")
     line:SetPoint("TOPLEFT", 0, yOff - 22)
-    line:SetSize(width, 1)
+    -- A pooled texture (_pBG) comes back as a band or a row later: size it, never register it (#369).
+    line:SetSize(width, AmazingHub.UI:Px(line))
     line:SetVertexColor(C.accent.r, C.accent.g, C.accent.b, 0.4)
     line:Show()
 
@@ -1228,7 +1436,7 @@ function CreateGearRow(parent, slotId, item, yOff, width)
     local sep = _pBG(parent)
     sep:SetTexture("Interface\\Buttons\\WHITE8x8")
     sep:SetPoint("TOPLEFT", 10, yOff - totalH)
-    sep:SetSize(width - 20, 1)
+    sep:SetSize(width - 20, AmazingHub.UI:Px(sep))   -- pooled, like the line above: not registered
     sep:SetVertexColor(C.separator.r, C.separator.g, C.separator.b, 0.2)
     sep:Show()
 
@@ -1396,7 +1604,7 @@ local function CreateTalentViewerFrame()
     titleLine:SetTexture("Interface\\Buttons\\WHITE8x8")
     titleLine:SetPoint("TOPLEFT",  0, -36)
     titleLine:SetPoint("TOPRIGHT", 0, -36)
-    titleLine:SetHeight(1)
+    AmazingHub.UI:Hairline(titleLine, "Height")
     titleLine:SetVertexColor(C.accent.r, C.accent.g, C.accent.b, 0.8)
 
     ----------------------------------------------------------------
@@ -1411,7 +1619,7 @@ local function CreateTalentViewerFrame()
         tab:SetBackdrop({
             bgFile   = "Interface\\Buttons\\WHITE8x8",
             edgeFile = "Interface\\Buttons\\WHITE8x8",
-            edgeSize = 1,
+            edgeSize = AmazingHub.UI:Edge(tab),
         })
         tab:SetBackdropColor(C.row2.r, C.row2.g, C.row2.b, 1)
         tab:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.5)
@@ -1450,7 +1658,7 @@ local function CreateTalentViewerFrame()
             slot:SetBackdrop({
                 bgFile   = "Interface\\Buttons\\WHITE8x8",
                 edgeFile = "Interface\\Buttons\\WHITE8x8",
-                edgeSize = 1,
+                edgeSize = AmazingHub.UI:Edge(slot),
             })
             slot:SetBackdropColor(0, 0, 0, 0.7)
             slot:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)

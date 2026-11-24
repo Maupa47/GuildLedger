@@ -95,6 +95,11 @@ function UI:IsFeatureAllowed(def)
     if not AmazingHub:IsFeatureEnabled(def.id) then return false end
     -- A tab whose module failed to start would error while it builds.
     if AmazingHub:FeatureStartFailed(def.id) then return false end
+    -- Another tab's sub-tab (issue #367) goes with its host: with Recruitment off, Trials is nowhere.
+    if def.opens and not def.tab then
+        local host = self:GetFeature(def.opens[1])
+        if host and host ~= def and not self:IsFeatureAllowed(host) then return false end
+    end
     if def.condition then return def.condition() end
     if def.officerOnly then return AmazingHub:IsOfficer() end
     return true
@@ -184,23 +189,27 @@ function UI:_RegisterFeatureTests()
             return true
         end)
 
-        S:Register("companion.can_invite_needs_roster", function()
+        -- No roster at all: neither the kept one nor this session's inbox, both of which the active
+        -- roster reads (issue #400). Put back as they were whatever `fn` answers.
+        local function withNoRoster(fn)
             local I = AmazingHub.CompanionImport
-            local saved = AmazingHub.db.companionRoster
-            AmazingHub.db.companionRoster = nil
-            local ok, reason = I:CanInvite()
-            AmazingHub.db.companionRoster = saved
+            local kept, inbox = AmazingHub.db.companionRoster, I._webRaids
+            AmazingHub.db.companionRoster, I._webRaids = nil, nil
+            local ok, a, b, c = pcall(fn, I)
+            AmazingHub.db.companionRoster, I._webRaids = kept, inbox
+            if not ok then error(a, 0) end
+            return a, b, c
+        end
+
+        S:Register("companion.can_invite_needs_roster", function()
+            local ok, reason = withNoRoster(function(I) return I:CanInvite() end)
             if ok then return false, "allowed inviting with no roster loaded" end
             if not reason or reason == "" then return false, "refused without saying why" end
             return true
         end)
 
         S:Register("companion.can_organize_needs_roster", function()
-            local I = AmazingHub.CompanionImport
-            local saved = AmazingHub.db.companionRoster
-            AmazingHub.db.companionRoster = nil
-            local ok, reason = I:CanOrganize()
-            AmazingHub.db.companionRoster = saved
+            local ok, reason = withNoRoster(function(I) return I:CanOrganize() end)
             if ok then return false, "allowed organising with no roster loaded" end
             if not reason or reason == "" then return false, "refused without saying why" end
             return true
@@ -222,12 +231,11 @@ function UI:_RegisterFeatureTests()
         -- InviteAll must not re-implement its own gate: it has to answer with
         -- exactly what the predicate said, or the button and the command disagree.
         S:Register("companion.action_agrees_with_predicate", function()
-            local I = AmazingHub.CompanionImport
-            local saved = AmazingHub.db.companionRoster
-            AmazingHub.db.companionRoster = nil
-            local ok, want = I:CanInvite()
-            local _, _, got = I:InviteAll()
-            AmazingHub.db.companionRoster = saved
+            local ok, want, got = withNoRoster(function(I)
+                local can, why = I:CanInvite()
+                local _, _, said = I:InviteAll()
+                return can, why, said
+            end)
             if ok then return false, "expected the no-roster case to refuse" end
             if got ~= want then
                 return false, string.format("InviteAll said [%s], predicate said [%s]",

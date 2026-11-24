@@ -14,7 +14,7 @@ local WHITE = "Interface\\Buttons\\WHITE8x8"
 local function makeInput(parent, w, placeholder)
     local b = CreateFrame("EditBox", nil, parent, "BackdropTemplate")
     b:SetSize(w, 22)
-    b:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 })
+    b:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = (UI.Edge and UI:Edge(b)) or 1 })
     b:SetBackdropColor(0.05, 0.05, 0.066, 1)
     b:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
     AmazingHub:ApplyFont(b, 11)

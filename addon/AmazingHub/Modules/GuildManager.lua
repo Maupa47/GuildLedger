@@ -26,15 +26,15 @@ end
 
 ----------------------------------------------------------------------
 -- Permission helpers
--- The Can* guild globals may be absent on some clients, so each is
--- nil-guarded; a missing API resolves to "permission denied".
+-- The Can* guild globals may be absent on some clients: Compat nil-guards
+-- them, and a missing API resolves to "permission denied".
 ----------------------------------------------------------------------
 function GuildManager:CanPromote()
-    return (CanGuildPromote and CanGuildPromote()) and true or false
+    return AmazingHub.Compat.CanGuildPromote()
 end
 
 function GuildManager:CanDemote()
-    return (CanGuildDemote and CanGuildDemote()) and true or false
+    return AmazingHub.Compat.CanGuildDemote()
 end
 
 -- Amazing Hub: the game lets you move only members below your own rank, and never past it
@@ -59,7 +59,7 @@ function GuildManager:LastOnlineTime(rosterIndex)
 end
 
 function GuildManager:CanKick()
-    return (CanGuildRemove and CanGuildRemove()) and true or false
+    return AmazingHub.Compat.CanGuildRemove()
 end
 
 function GuildManager:CanSetMOTD()
@@ -172,9 +172,20 @@ function GuildManager:Kick(name)
 end
 
 -- Set the guild Message of the Day.
+-- On WoW: Forever only the game's own guild panel may set it: an addon's GuildSetMOTD is
+-- ADDON_ACTION_FORBIDDEN, seen in game (#377). There the panel opens instead, as for a rank change.
+function GuildManager:MOTDNeedsGamePanel()
+    return AmazingHub.Client and AmazingHub.Client.game == "FOREVER" or false
+end
+
 function GuildManager:SetMOTD(text)
     if not self:CanSetMOTD() then
         AmazingHub:Print(L["|cffFF4444No permission to edit the MOTD.|r"])
+        return false
+    end
+    if self:MOTDNeedsGamePanel() then
+        AmazingHub:Print(L["On WoW: Forever only the game's guild panel can change the message of the day."])
+        self:OpenNativeGuild()
         return false
     end
     if GuildSetMOTD then GuildSetMOTD(text or "") end

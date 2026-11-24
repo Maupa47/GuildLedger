@@ -545,11 +545,24 @@ function AllianceSync:Tick()
     for guildName in pairs(pact.guilds) do
         if guildName ~= mine and not ally:IsBlocked(guildName) then
             -- Presence evidence only. Never whisper blind on a timer: an offline
-            -- target prints a system message in the user's chat frame.
+            -- target is a whisper spent on nobody. The one who logged off since
+            -- presence saw them answers "No player named", and Alliance:Send hides it.
             local target = ally:PeerTarget(guildName)
             if target then
                 self.stats.headOut = self.stats.headOut + 1
                 mark(guildName, "headOut")
+                ally:Send("HEAD", head, target)
+            end
+        end
+    end
+    -- Under an open alliance code the guilds are not listed: whoever the mesh
+    -- says runs our tag gets a HEAD, and its answer, proved with the key, is
+    -- what makes it one of ours (issue #431).
+    local link = AmazingHub.AllianceLink
+    if pact.open and link then
+        for guildName, target in pairs(link:Candidates()) do
+            if not ally:IsBlocked(guildName) then
+                self.stats.headOut = self.stats.headOut + 1
                 ally:Send("HEAD", head, target)
             end
         end
@@ -563,9 +576,10 @@ end
 -- bus is YELL: zone-local, layer-local, and only about a third of clients emit
 -- per cycle. A guild can therefore stay invisible and never sync at all. Once
 -- per session, for guilds we have heard nothing from in STALE_PROBE seconds,
--- whisper their ambassadors blind. This is the ONE place that accepts the
--- "no player named X is currently playing" system message, and it is bounded:
--- one round, at most two ambassadors per stale guild.
+-- whisper their ambassadors blind. It is the one place that expects the
+-- "no player named X is currently playing" answer, and it is bounded: one round,
+-- at most two ambassadors per stale guild. The line itself no longer reaches the
+-- chat: Alliance:Send notes every target (issue #326).
 ----------------------------------------------------------------------
 function AllianceSync:ProbeStaleGuilds()
     local ally = Ally()

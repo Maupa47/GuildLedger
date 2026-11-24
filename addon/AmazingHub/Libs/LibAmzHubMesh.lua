@@ -92,8 +92,11 @@ local JoinTemporaryChannel = nil
 --     peer exchange use heard peers only, until the count drops.
 --   * WRONG_PASSWORD or BANNED (someone took the channel and locked it) lead to the same name with a number (…2, up
 --     to DIR_MAX_NUM), one step per refusal. INVALID_NAME still ends the directory for the session, no other name.
+-- v10 (maupanet#9): Warmth, the family's campfire addon, announces a camp on the realm bus under AmzHubCamp. The
+-- prefix joins the family's relayed prefixes, so a client that runs AmazingHub, Lodestar or PartyLens and not Warmth
+-- still passes a camp's announce on. Low rate by design: one announce per camp every four minutes.
 
-local VERSION = 9
+local VERSION = 10
 if _G.AmzHubMesh and (_G.AmzHubMesh.version or 0) >= VERSION then
     return
 end
@@ -204,9 +207,9 @@ M.PEX_EAGER          = 3    -- exchanges a minute with peers heard for the first
 M.RELAY_PER_ORIGIN   = 5    -- items of one claimed origin a client passes on a minute
 M.RELAY_PER_SENDER   = 10   -- items one whisperer (the real sender, not the claimed origin) gets passed on a minute
 -- What the family relays even where no host takes it (the opaque hop): AmazingHub craft and recruitment, Lodestar quests
--- and races, PartyLens's board, AmzHubNet's trace. A host adds its own with :Relayable.
+-- and races, PartyLens's board, AmzHubNet's trace, Warmth's camps (v10). A host adds its own with :Relayable.
 M.FAMILY = { AmzHubCraft = true, AmzHubRecruit = true, AmzHubQuest = true, LSRace = true, PartyLens = true,
-    AmzHubTrace = true }
+    AmzHubTrace = true, AmzHubCamp = true }
 -- Never relayed nor handed over relayed: what these carry rests on who sent it.
 M.CONTROL = { AmzHubAlert = true, AmzHubPing = true, AmzHubPeers = true, AmzHubProbe = true, AmzHubRelay = true }
 

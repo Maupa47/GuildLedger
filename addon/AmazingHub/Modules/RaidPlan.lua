@@ -32,10 +32,34 @@ local CHAT_LINE = 240
 
 local function inCombat() return InCombatLockdown ~= nil and InCombatLockdown() and true or false end
 
---- The plan of the roster in hand, or nil.
+--- The plan of the roster in hand, or nil: the raid the Web tab's buttons act on (ActiveRoster, the raid of the
+--- window when there is one; issue #400), so the Raid plan button never opens another night's plan.
 function Plan:Current()
-    local roster = AmazingHub.CompanionImport and AmazingHub.CompanionImport:Current()
+    local I = AmazingHub.CompanionImport
+    local roster = I and I:ActiveRoster()
     return roster and roster.plan or nil, roster
+end
+
+--- What the plan window says of the loot rule the raid plays by (the site's #516), or nil when the
+--- roster carries none: the line to show and whether it is a warning. A rule this client cannot read
+--- is not applied in part, and the window says so in one line.
+function Plan:LootRuleLine()
+    local LR = AmazingHub.LootRule
+    if not (LR and LR.NightStatus) then return nil end
+    local state, rule, piece = LR:NightStatus()
+    if not state then return nil end
+    if state == "refused" then
+        local what = piece and LR:UnsupportedText(piece)
+        if what then
+            return string.format(L["This raid's loot rule needs a newer AmazingHub (%s). The guild's own rule stays in force."], what), true
+        end
+        return L["This raid's loot rule needs a newer AmazingHub. The guild's own rule stays in force."], true
+    end
+    local name = LR:ModelName(rule)
+    if state == "active" then
+        return string.format(L["Loot rule: %s (in force for this raid)"], name), false
+    end
+    return string.format(L["Loot rule: %s (in force once the raid is on)"], name), false
 end
 
 --- The plan's bosses: those with a note in the site's order (the catalogue's), then any boss only a

@@ -37,11 +37,20 @@ SyncService.OFFICER_DOMAINS = {
     bulletin = true,   -- officer announcements
     cta      = true,   -- an officer's call to arms (answering it is a member action, issue #108)
     ban      = true,   -- blacklist add/remove (officer-authoritative)
+    alt      = true,   -- alt links, one entry per alt with a tombstone on unlink (issue #424)
+    osheet   = true,   -- a member's officer sheet, the long text (issue #427): officers write, and only officers keep it
+    discipline = true, -- the disciplinary record (issue #402): officers write, and only officers keep it
+    reminder  = true,  -- when an officer reminded a member to install AmazingHub (issue #422)
+    modalert  = true,  -- an officer claiming a flagged chat line, so the others do not alert (issue #404)
     audit    = true,   -- guild audit trail (officer-authoritative, id-deduped)
     allyboard = true,  -- alliance bulletin posts this guild authored (ambassadors)
     allyhide  = true,  -- chat lines an ambassador pulled from the alliance feed
     guildcfg  = true,  -- the guild's officer threshold (issue #81), on retail its loot system (#185), its trials (#249)
     founding  = true,  -- WoW: Forever's founding and an officer's suggested date (issue #208)
+    allylink  = true,  -- the alliance code an officer saved (issue #348); ask/have are member relays
+    gbankneed = true,  -- how much of each item the guild bank should hold (issue #380)
+    gbankclean = true, -- what officers marked to take out of the guild bank and sell (issue #380)
+    marks     = true,  -- the officers' safe list and nicknames (issue #429)
 }
 
 -- Domains outside OFFICER_DOMAINS whose handlers trust IsOfficerByName(sender) themselves.
@@ -51,6 +60,18 @@ SyncService.GUILD_ONLY_DOMAINS = {
     ["core.roster"] = true,  -- CoreManager's officer roster updates
     journal        = true,   -- each member's own journal (#205): from the guild, never a whisper
     foundingSelf   = true,   -- each member's own join date (#208), filed under its sender
+    birthday       = true,   -- a member's birthday, for their own characters; officers correct it (#428)
+    gbank          = true,   -- the guild bank's picture, its ledger and asks for them (#380)
+    gbankreq       = true,   -- a member's request for an item; officers close it (#380)
+    craftorder     = true,   -- a member's craft order and its crafter's answers (#389)
+}
+
+-- Officer domains that travel only over the game's OFFICER addon channel (issue #427): free text about a person,
+-- whose bytes a member's client must never get. Published there, accepted only from there; never over GUILD or a
+-- whisper. On a client without that channel (Compat.OfficerAddonChannel) they are not sent at all.
+SyncService.OFFICER_CHANNEL_DOMAINS = {
+    osheet = true,
+    marks  = true,   -- the safe list and nicknames (#429): what officers call a member
 }
 
 -- Actions any guild member may perform inside an officer domain, over GUILD. Keyed by domain:
@@ -58,6 +79,7 @@ SyncService.GUILD_ONLY_DOMAINS = {
 -- dressed as an RSVP, and so become an officer everywhere (issue #108).
 SyncService.MEMBER_ACTIONS = {
     event = { rsvp = true },    -- event signup
+    allylink = { ask = true, have = true },   -- asking for the alliance code, and relaying an officer's
     poll  = { vote = true },    -- poll vote
     cta   = { going = true },   -- "On my way" to an officer's call to arms (issue #108)
 }
@@ -87,6 +109,11 @@ function SyncService:Initialize()
     -- loot system (issue #185). A client before #185 reads a loot system as a threshold with no `max`.
     self:On("guildcfg", function(env)
         if env.act == "lootsys" then return AmazingHub:OnLootSystemSync(env) end
+        -- The guild's own loot rule (issue #333); a client before it reads a threshold with no `max`.
+        if env.act == "lootrule" then
+            if AmazingHub.LootRule then AmazingHub.LootRule:OnSync(env) end
+            return
+        end
         -- WoW: Forever's minimum item level for a 60 (issue #206); a client before it reads a
         -- threshold with no `max`, which it ignores.
         if env.act == "readymin" then
@@ -98,9 +125,39 @@ function SyncService:Initialize()
             if AmazingHub.TrialTracker then AmazingHub.TrialTracker:OnConfigSync(env) end
             return
         end
+        -- The disciplinary record's term and ladder (issue #402); neither carries `max`.
+        if env.act == "discterm" or env.act == "discladder" or env.act == "disctpl" or env.act == "discrank" then
+            if AmazingHub.Discipline then AmazingHub.Discipline:OnConfigSync(env) end
+            return
+        end
+        -- The officers' list of chat alerts (issue #404); it carries no `max`.
+        if env.act == "modrules" then
+            if AmazingHub.ModAlerts then AmazingHub.ModAlerts:OnConfigSync(env) end
+            return
+        end
+        -- And the anti-flood's limits (issue #405); it carries no `max`.
+        if env.act == "modflood" then
+            if AmazingHub.ModFlood then AmazingHub.ModFlood:OnConfigSync(env) end
+            return
+        end
+        -- And the newcomer's quarantine (issue #406); it carries no `max`.
+        if env.act == "newcomer" then
+            if AmazingHub.Newcomer then AmazingHub.Newcomer:OnConfigSync(env) end
+            return
+        end
+        -- The guild's rules (issue #407), kept on every client; it carries no `max`.
+        if env.act == "rules" then
+            if AmazingHub.GuildRules then AmazingHub.GuildRules:OnConfigSync(env) end
+            return
+        end
         -- Who creates calendar events (issue #283).
         if env.act == "events" then
             AmazingHub:OnEventMaxRankSync(env)
+            return
+        end
+        -- And which kinds of event the ranks below the officers create (issue #308); it carries no `max`.
+        if env.act == "eventkinds" then
+            if AmazingHub.Calendar then AmazingHub.Calendar:OnMemberKindsSync(env) end
             return
         end
         AmazingHub:OnOfficerMaxRankSync(env)
@@ -150,11 +207,25 @@ function SyncService:Publish(domain, action, data, opts)
         env.ack = true
     end
 
+    local officersOnly = self.OFFICER_CHANNEL_DOMAINS[domain]
+    if officersOnly then
+        -- No channel, or a rank that may not speak there (told once a session, shared with the notes, #430).
+        local chan = AmazingHub.CommSystem and AmazingHub.CommSystem:OfficerChannel()
+        if opts.target or not chan then return nil end
+    end
+
     local ok, serialized = pcall(function() return LibSerialize:Serialize(env) end)
     if not ok or type(serialized) ~= "string" then return nil end
     if not AmazingHub.CommSystem then return nil end
 
-    AmazingHub.CommSystem:SendMessage(self.ENVELOPE_MSGTYPE, serialized, opts.target, opts.priority)
+    if officersOnly then
+        AmazingHub.CommSystem:SendToOfficers(self.ENVELOPE_MSGTYPE, serialized, opts.priority,
+            self.ENVELOPE_MSGTYPE .. " " .. tostring(domain))
+        return env.id
+    end
+
+    AmazingHub.CommSystem:SendMessage(self.ENVELOPE_MSGTYPE, serialized, opts.target, opts.priority,
+        self.ENVELOPE_MSGTYPE .. " " .. tostring(domain))   -- /amazing perf counts it by domain (issue #324)
 
     if env.ack then
         self.pendingAcks[env.id] = {
@@ -196,6 +267,7 @@ end
 function SyncService:OnEnvelope(sender, raw, channel)
     local ok, env = LibSerialize:Deserialize(raw)
     if not ok or type(env) ~= "table" then return end
+    if AmazingHub.State.comm then AmazingHub.State.comm.recvKind = self.ENVELOPE_MSGTYPE .. " " .. tostring(env.dom) end
 
     -- ACK frames clear a pending entry and never dispatch.
     if env.dom == "ack" then
@@ -231,7 +303,7 @@ function SyncService:Validate(env, sender, channel)
     if env.v > self.PROTOCOL_VERSION then return false end   -- newer protocol than we speak
     if self.GUILD_ONLY_DOMAINS[env.dom] and channel ~= "GUILD" then return false end
     if self.OFFICER_DOMAINS[env.dom] then
-        if channel ~= "GUILD" then return false end
+        if channel ~= (self.OFFICER_CHANNEL_DOMAINS[env.dom] and "OFFICER" or "GUILD") then return false end
         local member = self.MEMBER_ACTIONS[env.dom]
         local ranked = self.RANKED_ACTIONS[env.dom]
         if not (member and member[env.act]) and not AmazingHub:IsOfficerByName(sender)

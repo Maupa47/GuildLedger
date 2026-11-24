@@ -465,8 +465,23 @@ end
 ----------------------------------------------------------------------
 -- Live state
 ----------------------------------------------------------------------
+-- The pact. The alliance code the guild's officers saved (Modules/AllianceLink.lua,
+-- issue #348) comes first: every member holds it, nobody has to send it across
+-- guilds. Without one, the pact made by invitation between ambassadors.
 function Alliance:Get()
+    local link = AmazingHub.AllianceLink
+    local fromInfo = link and AmazingHub.db and link:Pact()
+    if fromInfo then
+        return fromInfo
+    end
     return (AmazingHub.db and AmazingHub.db.alliance) or nil
+end
+
+-- Is the pact in force the alliance code? Then it changes only in Alliance >
+-- Setup, and the ops that build a pact by whisper do nothing.
+function Alliance.InLink()
+    local link = AmazingHub.AllianceLink
+    return (link and AmazingHub.db and link:Active()) and true or false
 end
 
 function Alliance:MyGuildName()
@@ -518,6 +533,41 @@ function Alliance:GuildOfSender(sender, pact)
         end
     end
     return nil
+end
+
+-- Pure. The guild a data op from `sender` speaks for under the alliance
+-- code, or nil: not ours, not blocked, in the pact (an open code, which lists
+-- no guild, takes any: the proof is the membership, issue #431), and the proof
+-- must be the one the key makes for that sender.
+function Alliance.VerifyProof(pact, claimed, proof, sender, myGuild)
+    if type(pact) ~= "table" or type(pact.guilds) ~= "table" or type(claimed) ~= "string" or claimed == "" then
+        return nil
+    end
+    if claimed == myGuild or (not pact.open and not pact.guilds[claimed])
+        or (pact.blocked and pact.blocked[claimed]) then
+        return nil
+    end
+    if type(proof) ~= "string" or proof ~= AmazingHub.AllianceLink.Proof(pact.key, sender) then
+        return nil
+    end
+    return claimed
+end
+
+-- The member guild a character is on the synced roster of, or nil. Never our
+-- own guild, and never a guild that left the pact. Only the data ops take it
+-- (see OnMessage): the pact's own ops stay with the ambassadors.
+function Alliance:GuildOfRosterMember(name)
+    local sync = AmazingHub.AllianceSync
+    local short = shortName(name or ""):lower()
+    if not sync or not sync.MemberIndex or short == "" then
+        return nil
+    end
+    local hit = sync:MemberIndex()[short]
+    local guild = hit and hit.guild
+    if not guild or guild == self:MyGuildName() or not self:IsMemberGuild(guild) then
+        return nil
+    end
+    return guild
 end
 
 -- Every online guildmate we know runs Amazing Hub, as "Name-Realm" keys. This is
@@ -606,9 +656,11 @@ function Alliance:MemberInfo(name)
 end
 
 -- A player of `guildName` we have positive evidence is online RIGHT NOW, so a
--- whisper does not print "No player named X is currently playing" to the user.
--- Evidence comes from the realm-wide presence mesh, where Amazing Hub clients in an
--- alliance advertise their guild (see Mesh:BuildCaps).
+-- whisper is not spent on somebody gone. Evidence comes from the realm-wide
+-- presence mesh, where Amazing Hub clients in an alliance advertise their guild
+-- (see Mesh:BuildCaps). It is up to AmzHubNet.PEER_TTL old: whoever logged
+-- off since still gets the whisper, and Alliance:Send hides the "No player
+-- named" line that answers it.
 function Alliance:PeerTarget(guildName)
     if not guildName or guildName == "" then
         return nil
@@ -629,18 +681,38 @@ function Alliance:PeerTarget(guildName)
 end
 
 ----------------------------------------------------------------------
--- Sending
+-- Sending. Every op of the alliance leaves here, so here is where its target is
+-- noted: somebody who logged off a moment ago, which presence cannot rule out,
+-- costs the user no "No player named" line in the chat (issue #326).
 ----------------------------------------------------------------------
 function Alliance:Send(op, tbl, target)
     local mesh = _G.AmzHubMesh
     if not mesh or not target or target == "" then
         return false
     end
+    -- Under the alliance code nobody is on a list of names, so every
+    -- op says which guild it speaks for and proves it read the key (issue #348).
+    local pact = self:Get()
+    if pact and pact.source == "link" and type(tbl) == "table" then
+        local signed = {}
+        for k, v in pairs(tbl) do signed[k] = v end
+        signed._g = self:MyGuildName()
+        signed._k = AmazingHub.AllianceLink.Proof(pact.key, AmazingHub.Compat.PlayerName())
+        tbl = signed
+    end
     local blob = Alliance.Encode(tbl)
     if not blob then
         return false
     end
-    return mesh:Whisper(self.PREFIX, self.PROTO .. "|" .. op .. "|" .. blob, target) and true or false
+    local payload = self.PROTO .. "|" .. op .. "|" .. blob
+    local function send()
+        AmazingHub:NoteWhisper(target)
+        return mesh:Whisper(self.PREFIX, payload, target) and true or false
+    end
+    -- In the WhisperQueue, which WoW: Forever's whisper limit needs (issue #393): true when it went or waits.
+    local queue = AmazingHub.WhisperQueue
+    if not queue then return send() end
+    return queue:PushAddon(self.PREFIX, payload, target, "normal", send) ~= false
 end
 
 -- Whisper an op to the ambassadors of `guildName` that the presence mesh says
@@ -692,6 +764,9 @@ end
 -- Officer actions
 ----------------------------------------------------------------------
 function Alliance:Create(tag, name)
+    if Alliance.InLink() then
+        return false, L["This alliance is set in Alliance > Setup. Change it there."]
+    end
     if not AmazingHub:IsOfficer() then
         return false, L["Only officers can do that."]
     end
@@ -724,6 +799,9 @@ function Alliance:Create(tag, name)
 end
 
 function Alliance:Invite(officerName)
+    if Alliance.InLink() then
+        return false, L["This alliance is set in Alliance > Setup. Change it there."]
+    end
     if not AmazingHub:IsOfficer() then
         return false, L["Only officers can do that."]
     end
@@ -760,6 +838,9 @@ function Alliance:Invite(officerName)
 end
 
 function Alliance:Leave()
+    if Alliance.InLink() then
+        return false, L["This alliance is set in Alliance > Setup. Change it there."]
+    end
     local pact = self:Get()
     if not pact then
         return false, L["This guild is not in an alliance yet."]
@@ -790,6 +871,9 @@ function Alliance:Leave()
 end
 
 function Alliance:RemoveGuild(guildName)
+    if Alliance.InLink() then
+        return false, L["This alliance is set in Alliance > Setup. Change it there."]
+    end
     local pact = self:Get()
     if not pact then
         return false, L["This guild is not in an alliance yet."]
@@ -883,6 +967,22 @@ function Alliance:OnMessage(payload, sender, dist)
         return
     end
 
+    -- Under the alliance code (issue #348) nothing builds or changes the pact by
+    -- whisper, and a data op is believed for the guild it names only with the
+    -- proof made from the key and the sender's own name.
+    local pact = self:Get()
+    if pact and pact.source == "link" then
+        local fn = Alliance.ops[op]
+        local guild = Alliance.VerifyProof(pact, data._g, data._k, sender, self:MyGuildName())
+        if guild and pact.open then
+            AmazingHub.AllianceLink:Learn(guild)
+        end
+        if fn and guild then
+            AmazingHub:SafeCall(fn, data, sender, guild)
+        end
+        return
+    end
+
     -- INV and ACK are the two ops that CANNOT be gated on pact membership: an
     -- invite arrives before any pact exists, and the accepting guild is by
     -- definition not in our pact yet. Their authority comes from a human
@@ -907,6 +1007,14 @@ function Alliance:OnMessage(payload, sender, dist)
     end
 
     local senderGuild = self:GuildOfSender(sender)
+    -- The pact itself (PACT, LEAVE, EJECT) is the ambassadors' alone. The data
+    -- ops are sent by the bridge, which is anybody online, so for those a name on
+    -- a member guild's synced roster speaks for that guild too: until now a
+    -- HEAD from a bridge that was not an ambassador was dropped here, and the
+    -- guilds only synced while ambassadors happened to be both ends (issue #344).
+    if not senderGuild and Alliance.ops[op] then
+        senderGuild = self:GuildOfRosterMember(sender)
+    end
     if not senderGuild or self:IsBlocked(senderGuild) then
         return
     end
@@ -968,7 +1076,7 @@ function Alliance:_OnInvite(raw, sender)
         return
     end
 
-    StaticPopup_Show("AMAZINGHUB_ALLY_INVITE",
+    AmazingHub:ShowDialog("AMAZINGHUB_ALLY_INVITE",
         string.format(L["%s of %s invites your guild into the alliance %s."],
             short, theirGuild, pact.name or pact.tag),
         nil, { pact = pact, sender = sender })
@@ -1152,6 +1260,9 @@ function Alliance:_MyEntry()
 end
 
 function Alliance:AddAmbassador(name)
+    if Alliance.InLink() then
+        return false, L["This alliance is set in Alliance > Setup. Change it there."]
+    end
     local entry = self:_MyEntry()
     if not entry then
         return false, L["This guild is not in an alliance yet."]
@@ -1181,6 +1292,9 @@ function Alliance:AddAmbassador(name)
 end
 
 function Alliance:RemoveAmbassador(name)
+    if Alliance.InLink() then
+        return false, L["This alliance is set in Alliance > Setup. Change it there."]
+    end
     local entry = self:_MyEntry()
     if not entry then
         return false, L["This guild is not in an alliance yet."]
@@ -1205,6 +1319,9 @@ function Alliance:RemoveAmbassador(name)
 end
 
 function Alliance:ClaimAmbassador()
+    if Alliance.InLink() then
+        return false, L["This alliance is set in Alliance > Setup. Change it there."]
+    end
     local entry = self:_MyEntry()
     if not entry then
         return false, L["This guild is not in an alliance yet."]
@@ -1424,6 +1541,10 @@ function Alliance:CanAdminister()
     if not pact or not AmazingHub:IsOfficer() then
         return false
     end
+    -- Under the alliance code there are no ambassadors: the guild's officers speak for it.
+    if pact.source == "link" then
+        return true
+    end
     return Alliance.IsAmbassador(pact, self:MyGuildName(), AmazingHub.Compat.PlayerName())
 end
 
@@ -1453,6 +1574,9 @@ end
 -- found. Still ends in the normal human-approved invite flow.
 ----------------------------------------------------------------------
 function Alliance:RequestJoin(tag, officerName)
+    if Alliance.InLink() then
+        return false, L["This alliance is set in Alliance > Setup. Change it there."]
+    end
     if not AmazingHub:IsOfficer() then
         return false, L["Only officers can do that."]
     end
@@ -1507,6 +1631,9 @@ end
 -- false, reason, "needContact" when nobody from that alliance is visible, so
 -- the UI can ask for a name only then instead of always.
 function Alliance:JoinWithToken(token, contactName)
+    if Alliance.InLink() then
+        return false, L["This alliance is set in Alliance > Setup. Change it there."]
+    end
     if not AmazingHub:IsOfficer() then
         return false, L["Only officers can do that."]
     end
@@ -1545,6 +1672,9 @@ function Alliance:JoinWithToken(token, contactName)
 end
 
 function Alliance:JoinWithCode(tag, code, contactName)
+    if Alliance.InLink() then
+        return false, L["This alliance is set in Alliance > Setup. Change it there."]
+    end
     if not AmazingHub:IsOfficer() then
         return false, L["Only officers can do that."]
     end
@@ -1632,6 +1762,9 @@ function Alliance:JoinToken()
 end
 
 function Alliance:RegenerateCode()
+    if Alliance.InLink() then
+        return false, L["This alliance is set in Alliance > Setup. Change it there."]
+    end
     local pact = self:Get()
     if not pact then
         return false, L["This guild is not in an alliance yet."]
@@ -1664,7 +1797,7 @@ function Alliance:_OnJoinRequest(data, sender)
         return
     end
     self._reqPrompts[shortName(sender):lower()] = now
-    StaticPopup_Show("AMAZINGHUB_ALLY_REQUEST",
+    AmazingHub:ShowDialog("AMAZINGHUB_ALLY_REQUEST",
         string.format(L["%s of %s asks to join the alliance. Invite them?"],
             shortName(sender), guild),
         nil, { sender = sender })
@@ -2000,6 +2133,17 @@ function Alliance:HandleCommand(args)
         if ok then
             AmazingHub:Print(string.format(L["No longer ignoring %s."], rest))
         end
+    elseif verb == "gchat" then
+        -- The allied guilds' /g (issue #344): on, off, or how it is doing.
+        local chat, agc = AmazingHub.AllianceChat, AmazingHub.AllianceLink
+        if not chat or not agc then return end
+        local sub = rest:lower()
+        if sub == "on" or sub == "off" then
+            chat:Prefs().guildBridge = (sub == "on")
+        end
+        AmazingHub:Print((chat:Prefs().guildBridge and L["Allied /g: shown"] or L["Allied /g: hidden"])
+            .. " · " .. agc:StatusLine())
+        return
     else
         return AmazingHub:Print(L["Usage: /amazing ally [create|invite|code|join|request|amb|leave|kick|block|unblock]"])
     end
@@ -2013,10 +2157,10 @@ end
 -- Lifecycle
 ----------------------------------------------------------------------
 local function registerPopups()
-    if StaticPopupDialogs["AMAZINGHUB_ALLY_INVITE"] then
+    if AmazingHub.Dialogs["AMAZINGHUB_ALLY_INVITE"] then
         return
     end
-    StaticPopupDialogs["AMAZINGHUB_ALLY_INVITE"] = {
+    AmazingHub.Dialogs["AMAZINGHUB_ALLY_INVITE"] = {
         text = "%s",
         button1 = L["Accept"],
         button2 = L["Decline"],
@@ -2031,7 +2175,7 @@ local function registerPopups()
         hideOnEscape = true,
         preferredIndex = 3,
     }
-    StaticPopupDialogs["AMAZINGHUB_ALLY_REQUEST"] = {
+    AmazingHub.Dialogs["AMAZINGHUB_ALLY_REQUEST"] = {
         text = "%s",
         button1 = L["Invite"],
         button2 = L["Decline"],

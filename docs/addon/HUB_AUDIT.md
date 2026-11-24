@@ -477,3 +477,37 @@ Risk from 10.5, which exists already with the current fork:
    (H6 claim marker: not needed, decision 8 answered 2026-11-24.)
 5. Then: `PINNED`, the TOC `X-Upstream` line, THIRD_PARTY (IBM Plex), `EXPECTED_FAIL` in `addon/tests/test_hub.py`,
    and guard tests for the new Compat senders.
+
+### 10.11 U2 done (2026-11-24, branch `repin-140`)
+
+The hub is built from 1.40.0 (`PINNED = "1f9fa9d"`, hub version 0.7.0): 87 patches, 3 counted (`PATCHES_ALL`).
+- **A1/A2:** `AllianceLink:Initialize` returns at once; `Compat.SendWhisper` goes through `AllowedOutbound`
+  (guild members only); `Compat.SendChannelMessage` and `Compat.JoinPrivateChannel` do nothing.
+- **Decision 7 (admin, 2026-11-24): hidden in the CurseForge pack, available in the admin's own install.** The
+  new addon folder `addon/AmazingHubDev` (linked by `tools/install.ps1`, never packed by
+  `tools/package-collector.ps1`) sets the global `AmazingHubDevFeatures = true`; the hub lists it under
+  `OptionalDeps`, so it loads first. Without it:
+  - Groups: `postToGuild` and `autoInvite` read as off (`LFGBoard:Pref`, `Groups` `pref`), `_SayInGuild` says
+    nothing, both switches are hidden. Defaults are off in both cases.
+  - Leadership: the sub-tabs `bulk`, `remind`, `alerts`, `alertrules` are taken out of `SUBTABS`;
+    `Reminder:Remind` refuses; `/amazing bulk` and `/amazing altgroup` say "Not available"; the member window
+    has no "Promote/Demote alts".
+  - Bank: `AmazingHub.GuildBankCleanup` is not set (the sub-tab is absent, the bank bar has no Cleanup button).
+  - Warn: always recorded only (`Discipline:Warn` returns "silent"); the window hides the whisper box.
+  - Chat alerts: `ModAlerts`, `ModFlood`, `Newcomer` are not set, so nothing starts and nothing syncs.
+  - Also, for everybody: `RecruitmentSystem` `welcomeEnabled = false`.
+- **Decision 8:** both kinds of alt link count the same; no marker (10.8).
+- **Saved data (10.5):** `addon/hub-extra/PackMigrate.lua`, called from `ResolveGuildDB` before the realm key is
+  used: once per guild it copies `"<guild>-"` into `"<guild>-<realm>"` (newer wins, lists get the missing
+  entries, member keys get the realm); nothing is deleted. The companion skips the stale `"<guild>-"` key when
+  the realm key exists (`loot.hub_guilds`).
+- **Reworked:** #15, #16, #35, #38–#41, #46, #48+#49, #56–#60 as in 10.3; #37 dropped. `LEGACY_ALT_MAX` = 0.6.99.
+  `SettingsPlus.lua` rebuilt on upstream's Form (our sections on the Chat, Interface and Profile pages; fold-out
+  through the rows' `shown`); `ChatTag.BuildForm`. Upstream's new `specs/` folder is not copied; its JSON test
+  data is renamed like the Lua.
+- **Tests:** `addon/tests/test_hub.py` runs upstream's checks; `DEV_ONLY` lists the ten that must fail without
+  the developer addon and pass with it. New expected failures are listed with their reasons (`EXPECTED_FAIL`).
+  `hub_settings.lua` tests our sections on a fake Form; a test covers `PackMigrate`.
+- **C3 (item catalogue):** `addon/hub-extra/Data/ItemCatalog.lua` + `ItemCatalog.lua` fill `Wishlist.catalog` on
+  Forever (5,217 items), so the wishlist box and search find every wishable item by name.
+- **Open:** in-game round U3 (docs/dev/INGAME_TESTS.md "Hub round U3"). Then H1–H10.

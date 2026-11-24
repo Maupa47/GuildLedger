@@ -28,36 +28,46 @@ end
 -- with their verb. A subcommand (`ally request`, `mentions add`) is reached from its verb's place.
 local IN_UI = {
   open        = { { "UI/Window.lua", "SetActiveTab" } },
-  scan        = { { "UI/FeaturePanels.lua", "AmazingHub:CollectMyDataNow()" } },
-  selftest    = { { "UI/FeaturePanels.lua", "AmazingHub.SelfTest:Run()" } },
+  scan        = { { "UI/SettingsPanel.lua", "AmazingHub:CollectMyDataNow()" } },
+  selftest    = { { "UI/SettingsPanel.lua", "AmazingHub.SelfTest:Run()" } },
   myalts      = { { "UI/MemberDetail.lua", "AmazingHub.AltAutoDetect:PromptNow()" } },
   sync        = { { "UI/Window.lua", "AmazingHub.CommSystem:FullSync()" } },
-  points      = { { "UI/Features.lua", 'id = "dkp"' } },
-  equity      = { { "UI/FeaturePanels.lua", 'showView("equity")' } },
-  digest      = { { "UI/FeaturePanels.lua", "AmazingHub.Digest:Show()" } },
-  backup      = { { "UI/FeaturePanels.lua", "AmazingHub.Backup:ShowExport()" } },
-  restore     = { { "UI/FeaturePanels.lua", "AmazingHub.Backup:ShowRestore()" } },
+  -- The points and the equity are the Loot window's Accounts and History (issue #346).
+  points      = { { "UI/Features.lua", 'id = "dkp"' }, { "UI/PointsPanel.lua", "function AmazingHub:BuildLootAccounts" } },
+  equity      = { { "UI/LootWindow.lua", 'show("equity")' } },
+  -- The record is a section of the member's sheet, with its term (issue #402).
+  record      = { { "UI/MemberDetail.lua", "D:Record(playerKey)" }, { "UI/MemberDetail.lua", "D:SetTerm(" } },
+  warn        = { { "UI/MemberDetail.lua", "AmazingHub:ShowWarnDialog(playerKey, who)" } },
+  digest      = { { "UI/SettingsPanel.lua", "AmazingHub.Digest:Show()" } },
+  backup      = { { "UI/SettingsPanel.lua", "AmazingHub.Backup:ShowExport()" } },
+  restore     = { { "UI/SettingsPanel.lua", "AmazingHub.Backup:ShowRestore()" } },
   bulletin    = { { "UI/CommunityPanel.lua", "BuildBulletinSub" } },
+  -- The guild's rules are the Guild hub's Rules sub-tab, for every member (issue #407).
+  rules       = { { "UI/CommunityPanel.lua", "BuildGuildRulesSub" } },
   polls       = { { "UI/CommunityPanel.lua", "BuildPollsSub" } },
   calendar    = { { "UI/CommunityPanel.lua", "CreateCalendarSub" } },
   cta         = { { "UI/CommunityPanel.lua", "BuildCallToArmsSub" } },
   analytics   = { { "UI/RosterFrame.lua", "AmazingHub.GuildAnalytics:Show()" } },
   find        = { { "UI/Window.lua", "AmazingHub.Search:Show()" } },
+  order       = { { "UI/CraftOrdersPanel.lua", "function AmazingHub:CreateCraftsTab" },
+                  { "UI/CraftFinder.lua", "AmazingHub:ShowCraftOrderDialog(" } },
   craft       = { { "UI/RecipesPanel.lua", "AmazingHub:ShowCraftFinder()" },
                   { "UI/ProfessionsPanel.lua", "AmazingHub:ShowCraftFinder()" } },
   scout       = { { "UI/RosterFrame.lua", "AmazingHub.RecruitScanner:BuildInto(" } },
   beacon      = { { "UI/RosterFrame.lua", 'L["Edit Beacon"]' } },
   map         = { { "UI/Minimap.lua", "AmazingHub:ToggleGuildMap()" } },
   pug         = { { "UI/Minimap.lua", "AmazingHub:TogglePugInspector()" } },
-  minimap     = { { "UI/FeaturePanels.lua", 'L["Show minimap button"]' } },
-  guildbutton = { { "UI/FeaturePanels.lua", "hijackGuildButton" } },
-  debug       = { { "UI/FeaturePanels.lua", "AmazingHub.Logger.debug = checked" } },
-  errors      = { { "UI/FeaturePanels.lua", "AmazingHub:ShowErrors()" } },
-  style       = { { "UI/StylePreview.lua", "self:Apply(id)" }, { "UI/FeaturePanels.lua", "AmazingHub.Style:ShowPreview()" } },
-  probe       = { { "UI/FeaturePanels.lua", "AmazingHub.Probe:Run()" } },
-  ["probe chat"] = { { "UI/FeaturePanels.lua", "AmazingHub.Probe:RunChat()" } },
+  minimap     = { { "UI/SettingsPanel.lua", 'L["Show minimap button"]' } },
+  guildbutton = { { "UI/SettingsPanel.lua", "hijackGuildButton" } },
+  debug       = { { "UI/SettingsPanel.lua", "AmazingHub.Logger.debug = checked" } },
+  errors      = { { "UI/SettingsPanel.lua", "AmazingHub:ShowErrors()" } },
+  style       = { { "UI/StylePreview.lua", "self:Apply(id)" }, { "UI/SettingsPanel.lua", "AmazingHub.Style:ShowPreview()" } },
+  probe       = { { "UI/SettingsPanel.lua", "AmazingHub.Probe:Run()" } },
+  ["probe chat"] = { { "UI/SettingsPanel.lua", "AmazingHub.Probe:RunChat()" } },
   ["probe channel"] = { { "UI/AuditPanel.lua", "AmazingHub.Probe:RunChannel()" } },
-  reset       = { { "UI/FeaturePanels.lua", "AmazingHub:EraseGuildData()" } },
+  perf        = { { "UI/AuditPanel.lua", "AmazingHub.Perf:Print()" } },
+  ["perf reset"] = { { "UI/AuditPanel.lua", "AmazingHub.Perf:Reset()" } },
+  reset       = { { "UI/SettingsPanel.lua", "AmazingHub:EraseGuildData()" } },
   recruit     = { { "UI/RosterFrame.lua", 'L["Invite players who whisper the keyword"]' } },
   autoinvite  = { { "UI/RosterFrame.lua", 'L["Invite players who whisper the keyword"]' } },
   -- The Raid HUD is TBC's; on retail the readiness tab is the way in (issue #187).
@@ -66,27 +76,43 @@ local IN_UI = {
   consreport  = { { "UI/RaidHUD.lua", 'AmazingHub.ConsumableChecker:ReportToChat("RAID")' } },
   trial       = { { "UI/RosterFrame.lua", "AmazingHub.TrialTracker:AddTrial(key)" } },
   note        = { { "UI/RosterFrame.lua", "AmazingHub.OfficerNotes:AddNote(" } },
-  lm          = { { "UI/FeaturePanels.lua", "AmazingHub:LootMasterStatus()" } },
+  lm          = { { "UI/LootWindow.lua", "AmazingHub:LootMasterStatus()" } },
   -- The Master Loot window's own button (issue #294).
   ["lm undo"] = { { "Modules/LootMaster.lua", "LootMaster:UndoLastAward()" } },
   -- Retail's loot council (issue #185): an Offer button by each tradeable item and on my own loot
-  -- history rows, and the council in Settings' quick access.
-  offer       = { { "UI/TradeCouncil.lua", "AmazingHub.TradeCouncil:Offer(" }, { "UI/FeaturePanels.lua", "AmazingHub.TradeCouncil:Offer(entry.itemLink)" },
-                  { "UI/FeaturePanels.lua", "AmazingHub:ShowTradeCouncil()" } },
+  -- history rows, and the council's own button in the Loot window (#367).
+  offer       = { { "UI/TradeCouncil.lua", "AmazingHub.TradeCouncil:Offer(" }, { "UI/LootWindow.lua", "AmazingHub.TradeCouncil:Offer(link)" },
+                  { "UI/LootWindow.lua", "AmazingHub:ShowTradeCouncil()" } },
   web         = { { "UI/WebPanel.lua", "AmazingHub:ShowWebString()" }, { "UI/WebPanel.lua", "co:SetEnabled(" } },
   roster      = { { "UI/WebPanel.lua", 'L["Bring roster"]' } },
-  exportatt   = { { "UI/FeaturePanels.lua", 'L["Test Attendance Export"]' } },
-  export      = { { "UI/FeaturePanels.lua", 'L["Export Data"]' } },
+  -- The Iniciar raide button, on the Web tab, the Now tab and the owner's prompt (issue #400).
+  ["raid start"] = { { "UI/WebPanel.lua", "AmazingHub.RaidStart:Click(" }, { "UI/Agora.lua", "UI:CreateRaidStepper(" } },
+  exportatt   = { { "UI/SettingsPanel.lua", 'L["Test Attendance Export"]' } },
+  export      = { { "UI/SettingsPanel.lua", 'L["Export Data"]' } },
   wish        = { { "UI/RosterFrame.lua", 'L["My Wishlist"]' } },
   mergeraids  = { { "UI/AuditPanel.lua", "AmazingHub:MergeRaidSessions()" } },
   specs       = { { "UI/AuditPanel.lua", "AmazingHub.SpecChecker:ScanGroup()" } },
   attune      = { { "UI/AuditPanel.lua", "BuildAttuneSub" } },
-  signup      = { { "UI/Window.lua", "AmazingHub:ShowCoreSignupFrame()" } },
+  signup      = { { "UI/RosterFrame.lua", "AmazingHub:ShowCoreSignupFrame()" } },   -- the Raids screen's button (#377)
   ban         = { { "UI/ManagementPanel.lua", "AmazingHub.BanList:Add(" } },
-  mentions    = { { "UI/FeaturePanels.lua", "AmazingHub.Mentions:PrintLog()" },
-                  { "UI/FeaturePanels.lua", 'AmazingHub.Mentions:HandleCommand({ "clearwords" })' } },
-  notecmd     = { { "UI/FeaturePanels.lua", "AmazingHub.db.noteCommand.enabled = checked" } },
+  -- Leadership > Bulk actions (issue #420): its Next, Skip and Stop are the panel's buttons.
+  bulk        = { { "UI/ManagementPanel.lua", "AmazingHub:BuildBulkSub(p)" }, { "UI/BulkPanel.lua", "BA:Skip()" },
+                  { "UI/BulkPanel.lua", "BA:Stop()" }, { "UI/BulkPanel.lua", "AmazingHub.BulkActions:Arm(down)" } },
+  -- A member's alts to the main's rank (issue #424): the buttons on the member's sheet.
+  altgroup    = { { "UI/MemberDetail.lua", "AmazingHub.BulkActions:StartGroupAndSay(playerKey" } },
+  -- My birthday (issue #428): Settings > Profile's Birthday, its box and its "Show my birthday".
+  birthday    = { { "UI/SettingsPanel.lua", "AmazingHub.Birthdays:SetMineText(" }, { "UI/SettingsPanel.lua", "AmazingHub.Birthdays:ClearMine()" } },
+  -- Leadership > Notes and marks (issue #429): its buttons call what the commands call.
+  joindate    = { { "UI/ManagementPanel.lua", "AmazingHub:BuildMarksSub(p)" }, { "UI/MarksPanel.lua", "ND:WriteOne(" },
+                  { "UI/MarksPanel.lua", "ND:ImportPlan()" }, { "UI/MarksPanel.lua", "ND:Plan()" } },
+  safe        = { { "UI/MarksPanel.lua", "MM:CommandSafe(" } },
+  nick        = { { "UI/MarksPanel.lua", "MM:CommandNick(" } },
+  mentions    = { { "UI/SettingsPanel.lua", "AmazingHub.Mentions:PrintLog()" },
+                  { "UI/SettingsPanel.lua", 'AmazingHub.Mentions:HandleCommand({ "clearwords" })' } },
+  notecmd     = { { "UI/SettingsPanel.lua", "AmazingHub.db.noteCommand.enabled = checked" } },
   avail       = { { "UI/CommunityPanel.lua", "AmazingHub.LFGBoard:Show()" } },
+  -- The Bank tab (issue #380); its sort and stop are the bar under the game's bank.
+  bank        = { { "UI/Features.lua", 'id = "bank"' }, { "UI/GuildBankPanel.lua", "B:StartSort(B:OrganizableTabs())" } },
   ally        = { { "UI/AlliancePanel.lua", "ALLY():Create(" }, { "UI/AlliancePanel.lua", "ALLY():RequestJoin(" } },
 }
 local ALIAS = {
@@ -95,13 +121,14 @@ local ALIAS = {
   beacon = { "recruitbeacon" }, map = { "guildmap" }, recruit = { "recruiting" }, autoinvite = { "ai" },
   cons = { "consumables" }, lm = { "lootmaster" }, web = { "companion" }, exportatt = { "exportattendance" },
   attune = { "attunements" }, signup = { "unsignup" }, ban = { "tempban", "unban", "banlist" },
-  ally = { "alliance" },
+  ally = { "alliance" }, birthday = { "aniversario" },
 }
 -- Chat-only, and why.
 local CHAT_ONLY = {
   help = "prints the list of commands", commands = "help's alias",
   lfg = "opens by itself for a player with no guild",
   resscan = "debug: the resistance scan, printed",
+  altlimit = "an audit printed in chat, as GRM's /grm altlimit (issue #424)",
   ["attune debug"] = "debug", ["attunements debug"] = "debug", ["attune dumpquests"] = "debug: a quest-id dump",
 }
 

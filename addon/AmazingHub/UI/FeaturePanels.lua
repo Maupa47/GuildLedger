@@ -15,20 +15,20 @@ end
 local _raidFilter25 = true
 
 ----------------------------------------------------------------------
--- Core Sign-up Frame — footer button opens this for any player
+-- Core Sign-up Frame: the Raids tab's button and /amazing signup open it, for any player (#377)
 ----------------------------------------------------------------------
 local _coreSignupFrame = nil
 
 local WHITE8 = "Interface\\Buttons\\WHITE8x8"
 
-local function TimeAgo(ts)
-    if not ts or ts == 0 then return "" end
-    local d = time() - ts
-    if d < 60 then return "just now"
-    elseif d < 3600 then return math.floor(d / 60) .. "m ago"
-    elseif d < 86400 then return math.floor(d / 3600) .. "h ago"
-    else return math.floor(d / 86400) .. "d ago"
-    end
+-- The space between blocks and under a sub-tab bar (UI.GAP, #371), read the way Layout.lua reads
+-- UI.SCROLL_GUTTER: a stubbed UI in the tools answers a function for it.
+local GAP = type(UI.GAP) == "number" and UI.GAP or 8
+
+-- A numeric cell: IBM Plex Mono through the tableNum role (#363).
+local function Num(fs)
+    AmazingHub:ApplyFont(fs, nil, "tableNum")
+    return fs
 end
 
 local function RefreshCoreSignupFrame()
@@ -84,51 +84,79 @@ local function RefreshCoreSignupFrame()
         return
     end
 
+    -- One card a core (issue #346, Inscricao.dc.html): its name and size and where the player
+    -- stands with it, always in sight; when it raids and who leads it; its loot rule in one line;
+    -- the role coverage; and the one action that applies, Cancel request as visible as Ask.
     local y = 0
-
+    local CARD_PAD = 8
+    local function line(text, size, col, x, yy, w)
+        local fs = UI:CreateText(content, text, size, col.r, col.g, col.b)
+        fs:SetPoint("TOPLEFT", x, yy)
+        if w then fs:SetWidth(w) end
+        fs:SetJustifyH("LEFT")
+        if fs.SetWordWrap then fs:SetWordWrap(false) end
+        return fs
+    end
     for _, coreName in ipairs(coreNames) do
         local comp     = CM:GetComposition(coreName)
-        local signups  = CM:GetSignups(coreName) or {}
         local roles    = comp.roleCounts or {}
-        local isMember = CM:GetMembers(coreName)[playerKey] ~= nil   -- on as many cores as they joined (#132)
-        local isPending= (signups[playerKey] ~= nil)
-
-        -- ── Header ───────────────────────────────────────────
-        local hdrBg = content:CreateTexture(nil, "BACKGROUND")
-        hdrBg:SetTexture(WHITE8)
-        hdrBg:SetPoint("TOPLEFT", 0, y)
-        hdrBg:SetSize(W, 24)
-        hdrBg:SetVertexColor(C.headerBg.r, C.headerBg.g, C.headerBg.b, 0.88)
-
-        local hdrLbl = content:CreateFontString(nil, "OVERLAY")
-        AmazingHub:ApplyFont(hdrLbl, 11)
-        hdrLbl:SetPoint("TOPLEFT", 8, y - 5)
-        hdrLbl:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-        hdrLbl:SetText(coreName)
-
-        local cntLbl = content:CreateFontString(nil, "OVERLAY")
-        AmazingHub:ApplyFont(cntLbl, 9)
-        cntLbl:SetPoint("TOPRIGHT", -8, y - 6)
-        cntLbl:SetTextColor(0.5, 0.5, 0.5)
-        local sz = CM:GetRaidSize(coreName)
-        cntLbl:SetText(comp.total .. "/" .. sz .. " " .. L["members"]
-            .. ((comp.bench or 0) > 0 and ("  " .. string.format(L["%d in reserve"], comp.bench)) or ""))
-
-        local hdrLine = content:CreateTexture(nil, "ARTWORK")
-        hdrLine:SetTexture(WHITE8); hdrLine:SetHeight(1)
-        hdrLine:SetPoint("BOTTOMLEFT", 0, y - 23)
-        hdrLine:SetPoint("BOTTOMRIGHT", 0, y - 23)
-        hdrLine:SetVertexColor(C.accent.r, C.accent.g, C.accent.b, 0.25)
-        y = y - 24
-
-        -- ── Role coverage row ─────────────────────────────────
-        local rowBg = content:CreateTexture(nil, "BACKGROUND")
-        rowBg:SetTexture(WHITE8)
-        rowBg:SetPoint("TOPLEFT", 0, y)
-        rowBg:SetSize(W, 30)
-        rowBg:SetVertexColor(0.04, 0.04, 0.06, 1)
-
+        local st       = CM:SignupState(coreName, playerKey) or { missing = {} }
         local raidSize = CM:GetRaidSize(coreName)
+        local top      = y
+
+        -- The card's surface: a panel with a 1px line, gold when the player is on the core.
+        local card = CreateFrame("Frame", nil, content, "BackdropTemplate")
+        card:SetPoint("TOPLEFT", 0, y)
+        card:SetWidth(W)
+        if AmazingHub.Style then AmazingHub.Style:Paint(card, "panel") end
+        if st.member then card:SetBackdropBorderColor(C.gold.r, C.gold.g, C.gold.b, 1) end
+        card:SetFrameLevel(content:GetFrameLevel())
+
+        -- Name, size, and the state on the right.
+        local nameFS = line(coreName, nil, C.text, CARD_PAD, y - CARD_PAD)
+        AmazingHub:ApplyFont(nameFS, nil, "sectionTitle")
+        local sizeBadge = UI:CreateBadge(content, tostring(raidSize))
+        sizeBadge:SetPoint("LEFT", nameFS, "RIGHT", 8, 0)
+        local state, stateCol
+        if st.member then
+            state, stateCol = st.bench and L["you are in reserve"] or L["you are a starter"], C.ok
+        elseif st.pending then
+            state, stateCol = type(st.pending) == "number" and string.format(L["request sent %s"], AmazingHub:TimeAgo(st.pending))
+                or L["request sent"], C.textSoft
+        elseif st.full then
+            state, stateCol = L["full"], C.labelDim
+        else
+            local short = {}
+            for _, role in ipairs({ "tank", "healer", "mdps", "rdps" }) do
+                local n = st.missing[role] or 0
+                if n > 0 then short[#short + 1] = string.format(L["%d %s"], n, CM.ROLE_LABELS[role] or role) end
+            end
+            state, stateCol = #short > 0 and string.format(L["missing %s"], table.concat(short, ", ")) or "", C.silver
+        end
+        local stateFS = UI:CreateText(content, state, 10, stateCol.r, stateCol.g, stateCol.b)
+        stateFS:SetPoint("TOPRIGHT", -CARD_PAD, y - CARD_PAD - 2)
+        stateFS:SetJustifyH("RIGHT")
+        f.states = f.states or {}
+        f.states[coreName] = state
+        y = y - 26
+
+        -- When it raids and who leads it, as far as the site said.
+        line((st.schedule or L["no schedule set"]) .. "  \194\183  "
+            .. (st.leader and string.format(L["leader %s"], st.leader) or L["no leader set"]), 10, C.textDim, CARD_PAD, y)
+        y = y - 16
+        -- The core's loot rule, in one line, and the player's presence on its nights.
+        local LR = AmazingHub.LootRule
+        if LR then
+            local site = CM.LootRuleFromSite and CM:LootRuleFromSite(coreName)
+            line(string.format(L["Loot: %s"], LR:ModelName(site or LR:For(coreName))), 10, C.text, CARD_PAD, y, W - 2 * CARD_PAD - 130)
+        end
+        if st.presence then
+            local presFS = UI:CreateText(content, string.format(L["your presence %d%%"], st.presence), 10, C.silver.r, C.silver.g, C.silver.b)
+            presFS:SetPoint("TOPRIGHT", -CARD_PAD, y)
+        end
+        y = y - 18
+
+        -- The role coverage, the player's own role larger and underlined.
         local T = CM:RaidTargets(raidSize)
         local ROLE_DEFS = {
             { key="tank",   short="T", target=T.tank },
@@ -136,123 +164,83 @@ local function RefreshCoreSignupFrame()
             { key="mdps",   short="M", target=T.mdps },
             { key="rdps",   short="R", target=T.rdps },
         }
-        local rx = 8
+        local rx = CARD_PAD
         for _, rd in ipairs(ROLE_DEFS) do
-            local cnt     = roles[rd.key] or 0
-            local rcol    = CM.ROLE_COLORS[rd.key] or { r=1, g=1, b=1 }
-            -- Highlight the player's role
-            local isMine  = (rd.key == playerRole)
+            local cnt  = roles[rd.key] or 0
+            local rcol = CM.ROLE_COLORS[rd.key] or C.text
+            local isMine = (rd.key == playerRole)
             local rlbl = content:CreateFontString(nil, "OVERLAY")
             AmazingHub:ApplyFont(rlbl, isMine and 12 or 10)
-            rlbl:SetPoint("TOPLEFT", rx, y - 8)
+            rlbl:SetPoint("TOPLEFT", rx, y - 2)
             rlbl:SetTextColor(rcol.r, rcol.g, rcol.b)
             rlbl:SetText(string.format("%s:%d/%d", rd.short, cnt, rd.target))
             if isMine then
-                -- Underline the player's own role column
                 local ul = content:CreateTexture(nil, "ARTWORK")
-                ul:SetTexture(WHITE8); ul:SetHeight(1)
-                ul:SetPoint("TOPLEFT", rx, y - 21)
+                ul:SetTexture(WHITE8); AmazingHub.UI:Hairline(ul, "Height")
+                ul:SetPoint("TOPLEFT", rx, y - 16)
                 ul:SetWidth(44)
                 ul:SetVertexColor(rcol.r, rcol.g, rcol.b, 0.7)
             end
             rx = rx + 56
         end
 
-        -- ── Note input + action button ────────────────────────
-        local NOTE_W, BTN_W = 110, 85
-        local noteInp = CreateFrame("EditBox", nil, content, "BackdropTemplate")
-        noteInp:SetSize(NOTE_W, 20)
-        noteInp:SetPoint("TOPRIGHT", -(BTN_W + 10), y - 5)
-        noteInp:SetBackdrop({ bgFile=WHITE8, edgeFile=WHITE8, edgeSize=1 })
-        noteInp:SetBackdropColor(0.05, 0.05, 0.07, 1)
-        noteInp:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
-        AmazingHub:ApplyFont(noteInp, 9)
-        noteInp:SetTextColor(C.white.r, C.white.g, C.white.b)
-        noteInp:SetTextInsets(4, 4, 0, 0)
-        noteInp:SetAutoFocus(false)
-        noteInp:SetMaxLetters(80)
-        noteInp:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-        -- Placeholder
-        local ph = noteInp:CreateFontString(nil, "OVERLAY")
-        AmazingHub:ApplyFont(ph, 9)
-        ph:SetPoint("LEFT", 4, 0)
-        ph:SetTextColor(0.35, 0.35, 0.35)
-        ph:SetText(L["Note (optional)"])
-        local noteCore = coreName
-        noteInp:SetScript("OnTextChanged", function(self)
-            if self:GetText() ~= "" then ph:Hide() else ph:Show() end
-            f.notes[noteCore] = self:GetText()   -- kept across a redraw, such as a role click (#94)
-        end)
-        noteInp:SetText(f.notes[coreName] or "")
-
-        local actBtn = CreateFrame("Button", nil, content, "BackdropTemplate")
-        actBtn:SetSize(BTN_W, 20)
-        actBtn:SetPoint("TOPRIGHT", -4, y - 5)
-        actBtn:SetBackdrop({ bgFile=WHITE8, edgeFile=WHITE8, edgeSize=1 })
-        local actLbl = actBtn:CreateFontString(nil, "OVERLAY")
-        AmazingHub:ApplyFont(actLbl, 10)
-        actLbl:SetPoint("CENTER")
-
-        if isMember then
-            noteInp:Hide()
-            actBtn:SetBackdropColor(0.04, 0.22, 0.06, 0.9)
-            actBtn:SetBackdropBorderColor(0.2, 0.7, 0.3, 0.4)
-            actLbl:SetTextColor(0.25, 0.85, 0.35)
-            actLbl:SetText(L["In Roster"])
-        elseif isPending then
-            noteInp:Hide()
-            actBtn:SetBackdropColor(C.accent.r*0.18, C.accent.g*0.18, C.accent.b*0.18, 0.9)
-            actBtn:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 0.45)
-            actLbl:SetTextColor(C.accent.r, C.accent.g, C.accent.b)
-            local pendTs   = signups[playerKey] and signups[playerKey].ts
-            local pendBase = pendTs and ("Pending " .. TimeAgo(pendTs)) or L["Pending"]
-            actLbl:SetText(pendBase .. "  ×")
-            local capCore = coreName
-            actBtn:SetScript("OnClick", function()
-                CM:DeclineSignup(playerKey, capCore)
-                if AmazingHub.coresPanelRefresh then AmazingHub.coresPanelRefresh() end
-                RefreshCoreSignupFrame()
+        -- The action: a note and Ask for a place, or Cancel request; nothing to do once on the core.
+        local capCore = coreName
+        if not st.member then
+            -- The shared field, its hint the component's placeholder (#371).
+            local noteInp = UI:CreateInput(content, math.max(90, math.min(160, W - rx - 150)), 22,
+                { max = 80, placeholder = L["Note (optional)"] })
+            noteInp:SetPoint("TOPRIGHT", -(CARD_PAD + 124), y + 2)
+            noteInp:HookScript("OnTextChanged", function(self)
+                f.notes[capCore] = self:GetText()   -- kept across a redraw, such as a role click (#94)
             end)
-            actBtn:SetScript("OnEnter", function(s)
-                s:SetBackdropColor(0.28, 0.04, 0.04, 0.9)
-                actLbl:SetText(L["Cancel signup"])
-            end)
-            actBtn:SetScript("OnLeave", function(s)
-                s:SetBackdropColor(C.accent.r*0.18, C.accent.g*0.18, C.accent.b*0.18, 0.9)
-                actLbl:SetText(pendBase .. "  ×")
-            end)
-        else
-            actBtn:SetBackdropColor(0.06, 0.06, 0.10, 0.9)
-            actBtn:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.45)
-            actLbl:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-            actLbl:SetText(L["Sign Up"])
-            local capCore = coreName
-            actBtn:SetScript("OnClick", function()
-                local note = strtrim(noteInp:GetText() or "")
-                CM:BroadcastSignup(capCore, note, playerRole)
-                f.notes[capCore] = nil
-                noteInp:SetText("")
-                if AmazingHub.coresPanelRefresh then AmazingHub.coresPanelRefresh() end
-                RefreshCoreSignupFrame()
-            end)
-            actBtn:SetScript("OnEnter", function(s)
-                s:SetBackdropColor(C.accent.r*0.22, C.accent.g*0.22, C.accent.b*0.22, 0.9)
-                s:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 0.65)
-            end)
-            actBtn:SetScript("OnLeave", function(s)
-                s:SetBackdropColor(0.06, 0.06, 0.10, 0.9)
-                s:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.45)
-            end)
+            noteInp:SetText(f.notes[coreName] or "")
+            if st.pending then noteInp:Hide() end
+            local actBtn = UI:CreateButton(content, st.pending and L["Cancel request"] or L["Ask for a place"], 120, 22)
+            actBtn:SetPoint("TOPRIGHT", -CARD_PAD, y + 2)
+            if st.pending then
+                UI:SetButtonVariant(actBtn, "danger")
+                actBtn:SetScript("OnClick", function()
+                    CM:DeclineSignup(playerKey, capCore)
+                    if AmazingHub.coresPanelRefresh then AmazingHub.coresPanelRefresh() end
+                    RefreshCoreSignupFrame()
+                end)
+            else
+                UI:SetButtonVariant(actBtn, "primary")
+                actBtn:SetScript("OnClick", function()
+                    local note = strtrim(noteInp:GetText() or "")
+                    CM:BroadcastSignup(capCore, note, playerRole)
+                    f.notes[capCore] = nil
+                    noteInp:SetText("")
+                    if AmazingHub.coresPanelRefresh then AmazingHub.coresPanelRefresh() end
+                    RefreshCoreSignupFrame()
+                end)
+            end
         end
-
-        y = y - 34   -- role row height + gap
+        -- The rule, read whole in the Loot window.
+        local ruleBtn = UI:CreateButton(content, L["See the rule"], 100, 20)
+        ruleBtn:SetPoint("TOPRIGHT", -CARD_PAD, y - 26)
+        UI:SetButtonVariant(ruleBtn, "ghost")
+        ruleBtn:SetScript("OnClick", function() UI:OpenWindow("loot", "rule", capCore) end)
+        y = y - 52
+        card:SetHeight(top - y)
+        y = y - 8
     end
 
+    -- Where the requests of a Discord core go, under the cards.
+    if CM:IsLinked() then
+        local foot = UI:CreateText(content, L["The requests for a Discord core go to Discord: its leader answers there and the answer comes back here."],
+            9, C.textDim.r, C.textDim.g, C.textDim.b)
+        foot:SetPoint("TOPLEFT", 2, y)
+        foot:SetWidth(W - 4)
+        foot:SetJustifyH("LEFT")
+        y = y - 30
+    end
     content:SetHeight(math.abs(y) + 8)
 end
 
 local function BuildCoreSignupFrame()
-    local FRAME_W, FRAME_H = 420, 460
+    local FRAME_W, FRAME_H = 460, 480
 
     local f = CreateFrame("Frame", "AmazingHubCoreSignupFrame", UIParent, "BackdropTemplate")
     f:SetSize(FRAME_W, FRAME_H)
@@ -262,44 +250,22 @@ local function BuildCoreSignupFrame()
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", function(s) s:StartMoving() end)
     f:SetScript("OnDragStop",  function(s) s:StopMovingOrSizing() end)
-    f:SetBackdrop({ bgFile=WHITE8, edgeFile=WHITE8, edgeSize=2 })
-    f:SetBackdropColor(C.bg0.r, C.bg0.g, C.bg0.b, 0.97)
-    f:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 0.75)
+    UI:StylePopup(f)
     f:Hide()
     table.insert(UISpecialFrames, "AmazingHubCoreSignupFrame")
 
     -- Title bar
-    local tBg = f:CreateTexture(nil, "BACKGROUND")
-    tBg:SetTexture(WHITE8)
-    tBg:SetPoint("TOPLEFT", 2, -2)
-    tBg:SetPoint("TOPRIGHT", -2, -2)
-    tBg:SetHeight(28)
-    tBg:SetVertexColor(C.headerBg.r, C.headerBg.g, C.headerBg.b, 0.92)
-
-    local tLine = f:CreateTexture(nil, "ARTWORK")
-    tLine:SetTexture(WHITE8); tLine:SetHeight(1)
+    local tTitle = UI:CreateTitle(f, L["Core Sign-ups"], 14)
+    tTitle:SetPoint("TOPLEFT", 12, -9)
+    local tLine = UI:CreateSeparator(f)
     tLine:SetPoint("TOPLEFT", 2, -30)
     tLine:SetPoint("TOPRIGHT", -2, -30)
-    tLine:SetVertexColor(C.accent.r, C.accent.g, C.accent.b, 0.5)
 
-    local tTitle = f:CreateFontString(nil, "OVERLAY")
-    AmazingHub:ApplyFont(tTitle, 13)
-    tTitle:SetPoint("TOPLEFT", 10, -7)
-    tTitle:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-    tTitle:SetText(L["Core Sign-ups"])
-
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", -2, -2)
-    closeBtn:SetSize(26, 26)
+    local closeBtn = UI:CreateCloseButton(f)
+    closeBtn:SetPoint("TOPRIGHT", -6, -5)
     closeBtn:SetScript("OnClick", function() f:Hide() end)
 
-    -- Player role strip
-    local roleBg = f:CreateTexture(nil, "BACKGROUND")
-    roleBg:SetTexture(WHITE8)
-    roleBg:SetPoint("TOPLEFT", 2, -32)
-    roleBg:SetPoint("TOPRIGHT", -2, -32)
-    roleBg:SetHeight(22)
-    roleBg:SetVertexColor(0.05, 0.05, 0.08, 1)
+    -- Player role strip: "I play as", and the roles the class can play.
 
     f.playerRoleLbl = f:CreateFontString(nil, "OVERLAY")
     AmazingHub:ApplyFont(f.playerRoleLbl, 10)
@@ -317,33 +283,36 @@ local function BuildCoreSignupFrame()
         for i = #roles, 1, -1 do
             local role = roles[i]
             local b = CreateFrame("Button", nil, f, "BackdropTemplate")
-            b:SetSize(54, 16)
-            b:SetPoint("TOPRIGHT", x, -35)
-            b:SetBackdrop({ bgFile=WHITE8, edgeFile=WHITE8, edgeSize=1 })
+            b:SetBackdrop({ bgFile=WHITE8, edgeFile=WHITE8, edgeSize = AmazingHub.UI:Edge(b) })
             b.lbl = b:CreateFontString(nil, "OVERLAY")
-            AmazingHub:ApplyFont(b.lbl, 9)
+            AmazingHub:ApplyFont(b.lbl, 10)
             b.lbl:SetPoint("CENTER")
             b.lbl:SetText(CM.ROLE_LABELS[role] or role)
+            -- As wide as its name ("Curandeiro" is wider than "Healer"), never less than 54.
+            local bw = math.max(54, math.ceil(b.lbl:GetStringWidth() or 0) + 14)
+            b:SetSize(bw, 18)
+            b:SetPoint("TOPRIGHT", x, -35)
             b:SetScript("OnClick", function()
                 f.pickedRole = role
                 RefreshCoreSignupFrame()
             end)
             f.roleBtns[role] = b
-            x = x - 58
+            x = x - bw - 4
         end
     end
 
     -- Scroll area for core list
     local scroll = CreateFrame("ScrollFrame", "AmazingHubCoreSignupScroll", f, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", 2, -58)
-    scroll:SetPoint("BOTTOMRIGHT", -20, 6)
+    scroll:SetPoint("TOPLEFT", 8, -60)
+    scroll:SetPoint("BOTTOMRIGHT", -14, 8)
     UI:SkinScrollBar(scroll, "AmazingHubCoreSignupScroll")
 
-    -- Explicit width so child buttons render correctly (avoids GetWidth()=0 bug)
+    -- The cards take the scroll area's width, whatever the frame's.
     local content = CreateFrame("Frame", nil, scroll)
-    content:SetWidth(FRAME_W - 26)   -- frame width minus scrollbar (18) and padding (8)
+    content:SetWidth(FRAME_W - 30)
     content:SetHeight(1)
     scroll:SetScrollChild(content)
+    UI:BindScrollChildWidth(scroll, content, 4)
 
     f.content = content
     return f
@@ -372,70 +341,89 @@ end
 ----------------------------------------------------------------------
 -- RAID ATTENDANCE PANEL
 ----------------------------------------------------------------------
-function AmazingHub:CreateRaidsPanel(parent, _mainFrame)
-    local scrollParent = CreateFrame("Frame", nil, parent)
-    scrollParent:SetPoint("TOPLEFT", 10, -10)
-    scrollParent:SetPoint("BOTTOMRIGHT", -10, 10)
+-- The attendance table's columns, shared by its header and its rows (#371: the header left the scroll
+-- child so it stays put while the rows scroll).
+local ATT_COLS = { player = 6, group = 145, pct = 240, raids = 295, avg = 355, last = 450, form = 540 }
+local ATT_LIST_H = 200   -- px the attendance list keeps under the sessions while there are sessions
 
-    -- Title
-    local title = UI:CreateTitle(scrollParent, L["Raid Attendance"], 14)
+function AmazingHub:CreateRaidsPanel(parent, _mainFrame)
+    -- Flush with the sub-tab bar's left edge, the first line UI.GAP under it (#371).
+    local scrollParent = CreateFrame("Frame", nil, parent)
+    scrollParent:SetPoint("TOPLEFT", 0, -GAP)
+    scrollParent:SetPoint("BOTTOMRIGHT", -GAP, GAP)
+
+    local title = UI:CreateSectionTitle(scrollParent, L["Raid Attendance"], true)
     title:SetPoint("TOPLEFT", 0, 0)
 
-    -- Status text
-    local statusText = UI:CreateText(scrollParent, "", 10, C.silver.r, C.silver.g, C.silver.b)
-    statusText:SetPoint("TOPLEFT", 200, -4)
+    -- The count and the tracker's state, under the title they qualify: it floated beside it at x = 200 (#371).
+    local statusText = UI:CreateText(scrollParent, "", 10, C.textSoft.r, C.textSoft.g, C.textSoft.b)
+    statusText:SetPoint("TOPLEFT", 0, -22)
 
     ----------------------------------------------------------------
-    -- Sessions section (top ~40%)
+    -- Sessions section
     ----------------------------------------------------------------
+    local FILTER_Y, LIST_TOP = -40, -40 - 20 - GAP
     local sessionsLabel = UI:CreateHeaderText(scrollParent, L["Sessions"], 11)
-    sessionsLabel:SetPoint("TOPLEFT", 0, -28)
+    sessionsLabel:SetPoint("LEFT", scrollParent, "TOPLEFT", 0, FILTER_Y - 10)
 
-    -- Filter toggle buttons
-    local filterAllBtn  = UI:CreateButton(scrollParent, L["All"], 58, 18)
-    local filter25Btn   = UI:CreateButton(scrollParent, Prog(L["25-man"]), 62, 18)
+    -- The filter: the shown one marked by UI:SetSelected, as every choice of a set (#371).
+    -- LockHighlight drew nothing on these flat buttons, so neither looked chosen.
+    local filterAllBtn  = UI:CreateButton(scrollParent, L["All"], 58, 20)
+    local filter25Btn   = UI:CreateButton(scrollParent, Prog(L["25-man"]), 62, 20)
     filterAllBtn:SetPoint("LEFT", sessionsLabel, "RIGHT", 10, 0)
     filter25Btn:SetPoint("LEFT", filterAllBtn,   "RIGHT",  4, 0)
 
-    local sessionScroll = CreateFrame("ScrollFrame", "AmazingHubRaidSessionScroll", scrollParent, "UIPanelScrollFrameTemplate")
-    sessionScroll:SetPoint("TOPLEFT",     0,   -50)
-    sessionScroll:SetPoint("BOTTOMRIGHT", -10, 250)
-    UI:SkinScrollBar(sessionScroll, "AmazingHubRaidSessionScroll")
-
-    local sessionContent = CreateFrame("Frame", nil, sessionScroll)
+    local sessionScroll, sessionContent = UI:CreateScrollFrame(scrollParent, "AmazingHubRaidSessionScroll")
     sessionContent:SetSize(1, 1)
-    sessionScroll:SetScrollChild(sessionContent)
     UI:BindScrollChildWidth(sessionScroll, sessionContent)
 
     ----------------------------------------------------------------
-    -- Attendance section (bottom ~50%)
+    -- Attendance section: a section title, a table header that stays put, the rows that scroll
     ----------------------------------------------------------------
-    local attLabel = UI:CreateHeaderText(scrollParent, Prog(L["Member Attendance — 25-man only"]), 11)
-    attLabel:SetPoint("BOTTOMLEFT", 0, 236)
+    local attHdr = UI:CreateTableHeader(scrollParent)
+    local function AHdr(txt, x)
+        UI:CreateHeaderText(attHdr, txt):SetPoint("LEFT", x, 0)
+    end
+    AHdr(L["PLAYER"], ATT_COLS.player); AHdr(L["GROUP"], ATT_COLS.group); AHdr(L["ATT%"], ATT_COLS.pct)
+    AHdr(L["RAIDS"], ATT_COLS.raids); AHdr(L["AVG SCORE"], ATT_COLS.avg); AHdr(L["LAST RAID"], ATT_COLS.last)
 
-    local attScroll = CreateFrame("ScrollFrame", "AmazingHubAttendanceScroll", scrollParent, "UIPanelScrollFrameTemplate")
-    attScroll:SetPoint("BOTTOMLEFT",  0,   10)
-    attScroll:SetPoint("BOTTOMRIGHT", -10, 10)
-    attScroll:SetHeight(220)
-    UI:SkinScrollBar(attScroll, "AmazingHubAttendanceScroll")
+    local attTitle = UI:CreateSectionTitle(scrollParent, Prog(L["Member Attendance — 25-man only"]))
+    attTitle:SetPoint("BOTTOMLEFT", attHdr, "TOPLEFT", 0, GAP)
 
-    local attContent = CreateFrame("Frame", nil, attScroll)
+    local attScroll, attContent = UI:CreateScrollFrame(scrollParent, "AmazingHubAttendanceScroll")
+    attScroll:SetPoint("TOPLEFT", attHdr, "BOTTOMLEFT", 0, 0)
+    attScroll:SetPoint("BOTTOMRIGHT", 0, 0)
     attContent:SetSize(1, 1)
-    attScroll:SetScrollChild(attContent)
     UI:BindScrollChildWidth(attScroll, attContent)
+
+    -- The sessions list takes the room the attendance leaves it; with no session it has no empty
+    -- string to say so, so it folds away and the attendance moves up under the filter (#371): it
+    -- was a 400px black block. Left and right come from the parent, the bottom from the title.
+    sessionScroll:SetPoint("TOPLEFT", 0, LIST_TOP)
+    sessionScroll:SetPoint("TOPRIGHT", 0, LIST_TOP)
+    sessionScroll:SetPoint("BOTTOMLEFT", attTitle, "TOPLEFT", 0, 20)
+    sessionContent.placeBlocks = function(hasSessions)
+        attHdr:ClearAllPoints()
+        if hasSessions then
+            attHdr:SetPoint("TOPLEFT", scrollParent, "BOTTOMLEFT", 0, ATT_LIST_H + attHdr:GetHeight())
+            attHdr:SetPoint("TOPRIGHT", scrollParent, "BOTTOMRIGHT", 0, ATT_LIST_H + attHdr:GetHeight())
+        else
+            -- Under the filter row: 20px over the title for its rule, 18 for its line, UI.GAP to the header.
+            local top = (FILTER_Y - 20) - 20 - 18 - GAP
+            attHdr:SetPoint("TOPLEFT", scrollParent, "TOPLEFT", 0, top)
+            attHdr:SetPoint("TOPRIGHT", scrollParent, "TOPRIGHT", 0, top)
+        end
+        sessionScroll:SetShown(hasSessions)
+    end
+    sessionContent.placeBlocks(true)
 
     ----------------------------------------------------------------
     -- Filter button wiring
     ----------------------------------------------------------------
     local function SetFilterActive(only25)
         _raidFilter25 = only25
-        if only25 then
-            filter25Btn:LockHighlight()
-            filterAllBtn:UnlockHighlight()
-        else
-            filterAllBtn:LockHighlight()
-            filter25Btn:UnlockHighlight()
-        end
+        UI:SetSelected(filterAllBtn, not only25)
+        UI:SetSelected(filter25Btn, only25)
         AmazingHub:RefreshRaidsPanel(sessionContent, attContent, statusText)
     end
 
@@ -470,7 +458,7 @@ function AmazingHub:RefreshRaidsPanel(sessionContent, attContent, statusText)
     local totalAll  = AmazingHub.RaidTracker:GetTotalSessions()
     local total25   = AmazingHub.RaidTracker:GetTotal25ManSessions()
     local curGroup  = AmazingHub.RaidTracker:GetCurrentGroup()
-    local groupStr  = curGroup ~= "" and ("|cffFFD700" .. curGroup .. "|r  ·  ") or ""
+    local groupStr  = curGroup ~= "" and (curGroup .. "  ·  ") or ""
     local trackStr  = AmazingHub.RaidTracker.trackingActive
                       and "|cff00ff00" .. L["Tracking"] .. "|r" or "|cff888888" .. L["Idle"] .. "|r"
     statusText:SetText(groupStr .. totalAll .. L[" lockouts ("] .. total25 .. Prog(L[" 25-man)  |  "]) .. trackStr)
@@ -543,38 +531,39 @@ function AmazingHub:RefreshRaidsPanel(sessionContent, attContent, statusText)
         local uPlayers = 0
         for _ in pairs(g.allPlayers) do uPlayers = uPlayers + 1 end
 
-        -- Group header row
+        -- Group header row, hung by both top corners: a width read while the tab is hidden is 0 (#371).
         local gRow = CreateFrame("Button", nil, sessionContent, "BackdropTemplate")
-        gRow:SetSize(sessionContent:GetWidth() - 10, gRowH)
+        gRow:SetHeight(gRowH)
         gRow:SetPoint("TOPLEFT", 0, -yOff)
+        gRow:SetPoint("TOPRIGHT", 0, -yOff)
         gRow:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
         gRow:SetBackdropColor(C.headerBg.r, C.headerBg.g, C.headerBg.b, C.headerBg.a)
 
         -- Expand arrow
         -- ASCII marks: IBM Plex Mono has no ▶ or ▼ glyph.
-        UI:CreateText(gRow, isGroupExp and "-" or "+", 9, C.accent.r, C.accent.g, C.accent.b)
+        UI:CreateText(gRow, isGroupExp and "-" or "+", 9, C.label.r, C.label.g, C.label.b)
             :SetPoint("LEFT", 4, 0)
 
-        -- Raid name (gold for 25-man, silver for 10-man)
-        local nameClr = is25 and C.gold or C.silver
+        -- Raid name (paper for 25-man, silver for 10-man); the core's tag plain, not purple (#371)
+        local nameClr = is25 and C.text or C.silver
         local nameLabel = g.difficulty and (g.name .. " (" .. g.difficulty .. ")") or g.name
         if g.groupTag and g.groupTag ~= "" then
-            nameLabel = "|cff9966FF[" .. g.groupTag .. "]|r " .. nameLabel
+            nameLabel = "[" .. g.groupTag .. "] " .. nameLabel
         end
         UI:CreateText(gRow, nameLabel, 11, nameClr.r, nameClr.g, nameClr.b)
             :SetPoint("LEFT", 18, 0)
 
         -- Week range label  e.g.  "22/04 – 28/04"
         local weekLabel = AmazingHub:DateText(g.weekStart) .. " – " .. AmazingHub:DateText(g.weekStart + 6 * 86400)
-        UI:CreateText(gRow, weekLabel, 10, C.silver.r, C.silver.g, C.silver.b)
+        Num(UI:CreateText(gRow, weekLabel, 10, C.silver.r, C.silver.g, C.silver.b))
             :SetPoint("LEFT", 170, 0)
 
         -- Session count
-        UI:CreateText(gRow, #g.sessions .. L[" sess."], 9, C.accentDim.r, C.accentDim.g, C.accentDim.b)
+        UI:CreateText(gRow, #g.sessions .. L[" sess."], 9, C.label.r, C.label.g, C.label.b)
             :SetPoint("LEFT", 280, 0)
 
         -- Unique player count
-        UI:CreateText(gRow, uPlayers .. L[" players"], 9, C.white.r, C.white.g, C.white.b)
+        UI:CreateText(gRow, uPlayers .. L[" players"], 9, C.text.r, C.text.g, C.text.b)
             :SetPoint("LEFT", 340, 0)
 
         -- Kills / wipes summary
@@ -606,32 +595,33 @@ function AmazingHub:RefreshRaidsPanel(sessionContent, attContent, statusText)
                 local rowH  = 22
 
                 local row = CreateFrame("Button", nil, sessionContent, "BackdropTemplate")
-                row:SetSize(sessionContent:GetWidth() - 30, rowH)
+                row:SetHeight(rowH)
                 row:SetPoint("TOPLEFT", 20, -yOff)
+                row:SetPoint("TOPRIGHT", 0, -yOff)
                 row:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
                 local bg = (idx % 2 == 1) and C.row1 or C.row2
                 row:SetBackdropColor(bg.r, bg.g, bg.b, bg.a)
 
                 -- Expand arrow
-                UI:CreateText(row, isExp and "-" or "+", 8, C.accent.r, C.accent.g, C.accent.b)
+                UI:CreateText(row, isExp and "-" or "+", 8, C.label.r, C.label.g, C.label.b)
                     :SetPoint("LEFT", 4, 0)
 
                 -- Date + time
-                local dateStr = date("%a %d/%m  %H:%M", sd.startTime or 0)
-                UI:CreateText(row, dateStr, 9, C.silver.r, C.silver.g, C.silver.b)
+                local dateStr = AmazingHub:LocalDate("%a ", sd.startTime or 0) .. AmazingHub:DateText(sd.startTime or 0, "  %H:%M")
+                Num(UI:CreateText(row, dateStr, 9, C.silver.r, C.silver.g, C.silver.b))
                     :SetPoint("LEFT", 16, 0)
 
                 -- Duration
                 local dur = sd.duration or (sd.endTime and sd.startTime and (sd.endTime - sd.startTime))
                 if dur then
                     local durStr = format("%dh%02dm", floor(dur / 3600), floor((dur % 3600) / 60))
-                    UI:CreateText(row, durStr, 9, C.silver.r, C.silver.g, C.silver.b)
+                    Num(UI:CreateText(row, durStr, 9, C.silver.r, C.silver.g, C.silver.b))
                         :SetPoint("LEFT", 165, 0)
                 end
 
                 -- Player count
                 local pCount = AmazingHub.RaidTracker:CountTable(sd.players or {})
-                UI:CreateText(row, pCount .. L[" players"], 9, C.white.r, C.white.g, C.white.b)
+                UI:CreateText(row, pCount .. L[" players"], 9, C.text.r, C.text.g, C.text.b)
                     :SetPoint("LEFT", 215, 0)
 
                 -- Boss kills / wipes
@@ -717,34 +707,35 @@ function AmazingHub:RefreshRaidsPanel(sessionContent, attContent, statusText)
                         return a.name < b.name
                     end)
 
-                    local hdrFrame = CreateFrame("Frame", nil, sessionContent, "BackdropTemplate")
-                    hdrFrame:SetSize(sessionContent:GetWidth() - 50, 16)
+                    -- The shared table header: no band, a 1px rule under it (#371).
+                    local hdrFrame = UI:CreateTableHeader(sessionContent)
                     hdrFrame:SetPoint("TOPLEFT", 40, -yOff)
-                    hdrFrame:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-                    hdrFrame:SetBackdropColor(0.040, 0.040, 0.055, 1)
+                    hdrFrame:SetPoint("TOPRIGHT", 0, -yOff)
                     local function Hdr(txt, x)
-                        UI:CreateText(hdrFrame, txt, 8, C.accent.r, C.accent.g, C.accent.b):SetPoint("LEFT", x, 0)
+                        UI:CreateHeaderText(hdrFrame, txt):SetPoint("LEFT", x, 0)
                     end
                     Hdr(L["PLAYER"], 6); Hdr(L["SCORE"], 120); Hdr(L["LATE"], 170); Hdr(L["LEFT EARLY"], 210)
                     if AmazingHub.ConsumableChecker then Hdr(L["NO CONS"], 290) end   -- TBC only (issue #184)
-                    yOff = yOff + 18
+                    yOff = yOff + hdrFrame:GetHeight() + 2
 
                     for pIdx, p in ipairs(playerList) do
                         local pRow = CreateFrame("Frame", nil, sessionContent, "BackdropTemplate")
-                        pRow:SetSize(sessionContent:GetWidth() - 50, 18)
+                        pRow:SetHeight(18)
                         pRow:SetPoint("TOPLEFT", 40, -yOff)
+                        pRow:SetPoint("TOPRIGHT", 0, -yOff)
                         pRow:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-                        local pbg = (pIdx % 2 == 1) and { r=0.05, g=0.04, b=0.09 } or { r=0.07, g=0.06, b=0.12 }
-                        pRow:SetBackdropColor(pbg.r, pbg.g, pbg.b, 0.9)
+                        -- The table's own zebra, not a purple tint of its own (#371).
+                        local pbg = (pIdx % 2 == 1) and C.row1 or C.row2
+                        pRow:SetBackdropColor(pbg.r, pbg.g, pbg.b, pbg.a)
 
                         local cr, cg, cb = AmazingHub:GetClassColor(p.class)
                         local nameT = UI:CreateText(pRow, p.name, 9, cr, cg, cb)
                         nameT:SetPoint("LEFT", 6, 0); nameT:SetWidth(110)
 
                         local sr, sg, sb = C.green.r, C.green.g, C.green.b
-                        if p.score < 75 then sr, sg, sb = C.gold.r, C.gold.g, C.gold.b end
+                        if p.score < 75 then sr, sg, sb = C.warn.r, C.warn.g, C.warn.b end
                         if p.score < 50 then sr, sg, sb = C.red.r,  C.red.g,  C.red.b  end
-                        UI:CreateText(pRow, p.score .. "%", 9, sr, sg, sb):SetPoint("LEFT", 120, 0)
+                        Num(UI:CreateText(pRow, p.score .. "%", 9, sr, sg, sb)):SetPoint("LEFT", 120, 0)
 
                         local function Flag(x, val, redTxt, greenTxt)
                             local fr, fg, fb = val and C.red.r or C.green.r, val and C.red.g or C.green.g, val and C.red.b or C.green.b
@@ -756,7 +747,7 @@ function AmazingHub:RefreshRaidsPanel(sessionContent, attContent, statusText)
                         if AmazingHub.ConsumableChecker then
                             local consStr = p.consumeChecks > 0 and format("%d/%d", p.consumeHits, p.consumeChecks) or "-"
                             local cr2 = not p.noConsumes and C.green or C.red
-                            UI:CreateText(pRow, consStr, 8, cr2.r, cr2.g, cr2.b):SetPoint("LEFT", 290, 0)
+                            Num(UI:CreateText(pRow, consStr, 8, cr2.r, cr2.g, cr2.b)):SetPoint("LEFT", 290, 0)
                         end
 
                         yOff = yOff + 20
@@ -767,6 +758,7 @@ function AmazingHub:RefreshRaidsPanel(sessionContent, attContent, statusText)
         end -- if isGroupExp
     end -- for groups
     sessionContent:SetHeight(math.max(1, yOff))
+    if sessionContent.placeBlocks then sessionContent.placeBlocks(#groupOrder > 0) end
 
     ----------------------------------------------------------------
     -- Attendance list — always 25-man stats regardless of filter
@@ -794,41 +786,29 @@ function AmazingHub:RefreshRaidsPanel(sessionContent, attContent, statusText)
         return pa > pb
     end)
 
-    -- Column headers
-    local attHdr = CreateFrame("Frame", nil, attContent, "BackdropTemplate")
-    attHdr:SetSize(attContent:GetWidth() - 10, 16)
-    attHdr:SetPoint("TOPLEFT", 0, 0)
-    attHdr:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-    attHdr:SetBackdropColor(0.040, 0.040, 0.055, 1)
-    local function AHdr(txt, x)
-        local t = UI:CreateText(attHdr, txt, 8, C.accent.r, C.accent.g, C.accent.b)
-        t:SetPoint("LEFT", x, 0)
-    end
-    AHdr(L["PLAYER"], 6); AHdr(L["GROUP"], 145); AHdr(L["ATT%"], 240); AHdr(L["RAIDS"], 295); AHdr(L["AVG SCORE"], 355); AHdr(L["LAST RAID"], 450)
-
-    yOff = 20
+    -- The column labels are the panel's own header, outside the scroll (CreateRaidsPanel, #371).
+    yOff = 0
     local lastGroupTag = nil
     for idx, entry in ipairs(attList) do
-        -- Group separator header when the group changes
+        -- Group separator when the group changes: a header row of the table, the tag in plain text (#371).
         if entry.groupTag ~= lastGroupTag then
             lastGroupTag = entry.groupTag
-            local ghRow = CreateFrame("Frame", nil, attContent, "BackdropTemplate")
-            ghRow:SetSize(attContent:GetWidth() - 10, 16)
+            local ghRow = UI:CreateTableHeader(attContent, 18)
             ghRow:SetPoint("TOPLEFT", 0, -yOff)
-            ghRow:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-            ghRow:SetBackdropColor(0.100, 0.100, 0.130, 1)
+            ghRow:SetPoint("TOPRIGHT", 0, -yOff)
             local groupLabel = entry.groupTag ~= "" and entry.groupTag or L["(no group)"]
             local total25g = AmazingHub.RaidTracker:GetTotal25ManSessions(entry.groupTag)
             local ghText = UI:CreateText(ghRow,
-                "|cff9966FF" .. groupLabel .. "|r  —  " .. total25g .. Prog(L[" 25-man raids"]),
-                9, C.white.r, C.white.g, C.white.b)
-            ghText:SetPoint("LEFT", 6, 0)
-            yOff = yOff + 18
+                groupLabel .. "  ·  " .. total25g .. Prog(L[" 25-man raids"]),
+                9, C.text.r, C.text.g, C.text.b)
+            ghText:SetPoint("LEFT", ATT_COLS.player, 0)
+            yOff = yOff + 20
         end
 
         local row = CreateFrame("Frame", nil, attContent, "BackdropTemplate")
-        row:SetSize(attContent:GetWidth() - 10, 20)
+        row:SetHeight(20)
         row:SetPoint("TOPLEFT", 0, -yOff)
+        row:SetPoint("TOPRIGHT", 0, -yOff)
         row:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
         local bg = (idx % 2 == 1) and C.row1 or C.row2
         row:SetBackdropColor(bg.r, bg.g, bg.b, bg.a)
@@ -838,45 +818,45 @@ function AmazingHub:RefreshRaidsPanel(sessionContent, attContent, statusText)
         local class = memberData and memberData.class
         local cr, cg, cb = AmazingHub:GetClassColor(class)
         local nameText = UI:CreateText(row, shortName, 10, cr, cg, cb)
-        nameText:SetPoint("LEFT", 6, 0)
+        nameText:SetPoint("LEFT", ATT_COLS.player, 0)
 
         -- Group tag column
         local gtLabel = entry.groupTag ~= "" and entry.groupTag or "-"
-        UI:CreateText(row, gtLabel, 9, C.label.r, C.label.g, C.label.b):SetPoint("LEFT", 145, 0)
+        UI:CreateText(row, gtLabel, 9, C.label.r, C.label.g, C.label.b):SetPoint("LEFT", ATT_COLS.group, 0)
 
         local total25g = AmazingHub.RaidTracker:GetTotal25ManSessions(entry.groupTag)
         local pct      = AmazingHub.RaidTracker:GetAttendance25ManPercent(entry.key, entry.groupTag)
-        local pctClr   = pct >= 75 and C.green or (pct >= 50 and C.gold or C.red)
-        local pctText  = UI:CreateText(row, pct .. "%", 10, pctClr.r, pctClr.g, pctClr.b)
-        pctText:SetPoint("LEFT", 240, 0)
+        local pctClr   = pct >= 75 and C.green or (pct >= 50 and C.warn or C.red)
+        local pctText  = Num(UI:CreateText(row, pct .. "%", 10, pctClr.r, pctClr.g, pctClr.b))
+        pctText:SetPoint("LEFT", ATT_COLS.pct, 0)
 
         local raids25  = entry.data.raids25 or 0
-        local fracText = UI:CreateText(row, raids25 .. "/" .. total25g, 10, C.silver.r, C.silver.g, C.silver.b)
-        fracText:SetPoint("LEFT", 295, 0)
+        local fracText = Num(UI:CreateText(row, raids25 .. "/" .. total25g, 10, C.silver.r, C.silver.g, C.silver.b))
+        fracText:SetPoint("LEFT", ATT_COLS.raids, 0)
 
         local avgScore = 0
         if raids25 > 0 and entry.data.totalScore25 then
             avgScore = math.floor(entry.data.totalScore25 / raids25 + 0.5)
         end
         local asr, asg, asb = C.green.r, C.green.g, C.green.b
-        if avgScore < 80 then asr, asg, asb = C.gold.r, C.gold.g, C.gold.b end
+        if avgScore < 80 then asr, asg, asb = C.warn.r, C.warn.g, C.warn.b end
         if avgScore < 60 then asr, asg, asb = C.red.r,  C.red.g,  C.red.b  end
-        local avgScoreText = UI:CreateText(row, avgScore .. " pts", 9, asr, asg, asb)
-        avgScoreText:SetPoint("LEFT", 355, 0)
+        local avgScoreText = Num(UI:CreateText(row, avgScore .. " pts", 9, asr, asg, asb))
+        avgScoreText:SetPoint("LEFT", ATT_COLS.avg, 0)
 
         local lastStr = entry.data.lastRaid and entry.data.lastRaid > 0
             and AmazingHub:DateText(entry.data.lastRaid, "/%Y") or "-"
-        local lastText = UI:CreateText(row, lastStr, 9, C.silver.r, C.silver.g, C.silver.b)
-        lastText:SetPoint("LEFT", 450, 0)
+        local lastText = Num(UI:CreateText(row, lastStr, 9, C.silver.r, C.silver.g, C.silver.b))
+        lastText:SetPoint("LEFT", ATT_COLS.last, 0)
 
         -- Recent form: flag members who missed the latest guild raid(s).
         local missed = AmazingHub.RaidTracker:GetMissedStreak(entry.key, entry.groupTag, 5)
         if missed >= 2 then
             local f = UI:CreateText(row, string.format(L["missed last %d"], missed), 9, C.red.r, C.red.g, C.red.b)
-            f:SetPoint("LEFT", 540, 0)
+            f:SetPoint("LEFT", ATT_COLS.form, 0)
         elseif missed == 1 then
-            local f = UI:CreateText(row, L["missed last raid"], 9, C.gold.r, C.gold.g, C.gold.b)
-            f:SetPoint("LEFT", 540, 0)
+            local f = UI:CreateText(row, L["missed last raid"], 9, C.warn.r, C.warn.g, C.warn.b)
+            f:SetPoint("LEFT", ATT_COLS.form, 0)
         end
 
         local capturedEntry = entry
@@ -888,7 +868,7 @@ function AmazingHub:RefreshRaidsPanel(sessionContent, attContent, statusText)
             GameTooltip:AddLine(shortName, cr, cg, cb)
             local gLabel = capturedEntry.groupTag ~= "" and capturedEntry.groupTag or L["(no group)"]
             GameTooltip:AddLine(L["Group: "] .. gLabel, C.label.r, C.label.g, C.label.b)
-            GameTooltip:AddLine(Prog(L["25-man Attendance"]), C.gold.r, C.gold.g, C.gold.b)
+            GameTooltip:AddLine(Prog(L["25-man Attendance"]), C.text.r, C.text.g, C.text.b)
             GameTooltip:AddLine(" ")
             GameTooltip:AddDoubleLine(L["Raids:"], raids25 .. "/" .. total25g, 1,1,1, C.silver.r,C.silver.g,C.silver.b)
             GameTooltip:AddDoubleLine(L["Attendance %:"], pct .. "%", 1,1,1, pctClr.r,pctClr.g,pctClr.b)
@@ -915,450 +895,45 @@ function AmazingHub:RefreshRaidsPanel(sessionContent, attContent, statusText)
         yOff = yOff + 22
     end
 
-    if #attList == 0 then
-        local emptyText = UI:CreateText(attContent, Prog(L["No 25-man attendance data yet."]), 10, C.silver.r, C.silver.g, C.silver.b)
-        emptyText:SetPoint("TOPLEFT", 6, -yOff)
-        yOff = yOff + 22
+    -- One empty line, kept: a new one each redraw stayed on screen under the rows that came later.
+    if not attContent.emptyText then
+        attContent.emptyText = UI:CreateText(attContent, "", 10, C.textSoft.r, C.textSoft.g, C.textSoft.b)
+        attContent.emptyText:SetPoint("TOPLEFT", ATT_COLS.player, -6)
     end
+    attContent.emptyText:SetText(Prog(L["No 25-man attendance data yet."]))
+    attContent.emptyText:SetShown(#attList == 0)
+    if #attList == 0 then yOff = yOff + 22 end
 
     attContent:SetHeight(math.max(1, yOff))
-end
-
-----------------------------------------------------------------------
--- LOOT HISTORY PANEL
-----------------------------------------------------------------------
-function AmazingHub:CreateLootPanel(parent, _mainFrame)
-    local scrollParent = CreateFrame("Frame", nil, parent)
-    scrollParent:SetPoint("TOPLEFT", 10, -10)
-    scrollParent:SetPoint("BOTTOMRIGHT", -10, 10)
-
-    local title = UI:CreateTitle(scrollParent, L["Loot History"], 14)
-    title:SetPoint("TOPLEFT", 0, 0)
-
-    local countText = UI:CreateText(scrollParent, "", 10, C.silver.r, C.silver.g, C.silver.b)
-    countText:SetPoint("TOPRIGHT", 0, -2)
-
-    -- View toggle: History | Equity | SoftRes. Retail has no soft reserves and no loot master
-    -- (ADR-0026): its tab is the history and the equity of personal loot (issue #183).
-    local histBtn = UI:CreateButton(scrollParent, L["History"], 90, 20)
-    histBtn:SetPoint("TOPLEFT", 0, -24)
-    local eqBtn = UI:CreateButton(scrollParent, L["Equity"], 90, 20)
-    eqBtn:SetPoint("LEFT", histBtn, "RIGHT", 6, 0)
-    local srBtn
-    if AmazingHub.SoftRes then
-        srBtn = UI:CreateButton(scrollParent, L["Soft Res"], 90, 20)
-        srBtn:SetPoint("LEFT", eqBtn, "RIGHT", 6, 0)
-    end
-
-    local exportBtn = UI:CreateButton(scrollParent, L["Export"], 90, 20)
-    exportBtn:SetPoint("LEFT", srBtn or eqBtn, "RIGHT", 6, 0)
-    exportBtn:SetScript("OnClick", function()
-        AmazingHub:ShowExportPopup(L["Loot Export"], AmazingHub:ExportLoot())
-    end)
-
-    local lmText = UI:CreateText(scrollParent, "", 10, C.silver.r, C.silver.g, C.silver.b)
-    lmText:SetPoint("LEFT", exportBtn, "RIGHT", 12, 0)
-    lmText:SetPoint("RIGHT", scrollParent, "TOPRIGHT", 0, -34)   -- the buttons' row
-    lmText:SetWordWrap(false)
-    lmText:SetJustifyH("LEFT")
-    if AmazingHub.LootMaster then
-        local lmEvents = CreateFrame("Frame")
-        AmazingHub.Compat.RegisterEvent(lmEvents, "PARTY_LOOT_METHOD_CHANGED")
-        AmazingHub.Compat.RegisterEvent(lmEvents, "GROUP_ROSTER_UPDATE")
-        lmEvents:SetScript("OnEvent", function()
-            if parent:IsVisible() then lmText:SetText(AmazingHub:LootMasterStatus() or "") end
-        end)
-    end
-
-    local VIEW_TOP = 50  -- space reserved for title + toggle row
-
-    ----------------------------------------------------------------
-    -- History view
-    ----------------------------------------------------------------
-    local historyView = CreateFrame("Frame", nil, scrollParent)
-    historyView:SetPoint("TOPLEFT", 0, -VIEW_TOP)
-    historyView:SetPoint("BOTTOMRIGHT", 0, 0)
-
-    local colHeader = CreateFrame("Frame", nil, historyView)
-    colHeader:SetPoint("TOPLEFT", 0, 0)
-    colHeader:SetPoint("TOPRIGHT", 0, 0)
-    colHeader:SetHeight(20)
-
-    local hItem = UI:CreateHeaderText(colHeader, L["ITEM"], 10)
-    hItem:SetPoint("LEFT", 6, 0)
-    local hPlayer = UI:CreateHeaderText(colHeader, L["PLAYER"], 10)
-    hPlayer:SetPoint("LEFT", 300, 0)
-    local hRaid = UI:CreateHeaderText(colHeader, L["RAID"], 10)
-    hRaid:SetPoint("LEFT", 450, 0)
-    local hDate = UI:CreateHeaderText(colHeader, L["DATE"], 10)
-    hDate:SetPoint("LEFT", 600, 0)
-
-    local sep = UI:CreateSeparator(historyView)
-    sep:SetPoint("TOPLEFT", 0, -20)
-    sep:SetPoint("TOPRIGHT", 0, -20)
-
-    local lootScroll = CreateFrame("ScrollFrame", "AmazingHubLootScroll", historyView, "UIPanelScrollFrameTemplate")
-    lootScroll:SetPoint("TOPLEFT", 0, -22)
-    lootScroll:SetPoint("BOTTOMRIGHT", -10, 0)
-    UI:SkinScrollBar(lootScroll, "AmazingHubLootScroll")
-
-    local lootContent = CreateFrame("Frame", nil, lootScroll)
-    lootContent:SetSize(1, 1)
-    lootScroll:SetScrollChild(lootContent)
-    UI:BindScrollChildWidth(lootScroll, lootContent)
-
-    ----------------------------------------------------------------
-    -- Equity view
-    ----------------------------------------------------------------
-    local equityView = CreateFrame("Frame", nil, scrollParent)
-    equityView:SetPoint("TOPLEFT", 0, -VIEW_TOP)
-    equityView:SetPoint("BOTTOMRIGHT", 0, 0)
-    equityView:Hide()
-
-    local eqHeader = CreateFrame("Frame", nil, equityView)
-    eqHeader:SetPoint("TOPLEFT", 0, 0)
-    eqHeader:SetPoint("TOPRIGHT", 0, 0)
-    eqHeader:SetHeight(20)
-    local ehName = UI:CreateHeaderText(eqHeader, L["MEMBER"], 10)
-    ehName:SetPoint("LEFT", 6, 0)
-    local ehItems = UI:CreateHeaderText(eqHeader, L["ITEMS"], 10)
-    ehItems:SetPoint("LEFT", 200, 0)
-    local ehAtt = UI:CreateHeaderText(eqHeader, L["ATT%"], 10)
-    ehAtt:SetPoint("LEFT", 300, 0)
-    local ehRaids = UI:CreateHeaderText(eqHeader, L["RAIDS"], 10)
-    ehRaids:SetPoint("LEFT", 400, 0)
-    local ehPer = UI:CreateHeaderText(eqHeader, L["ITEMS/RAID"], 10)
-    ehPer:SetPoint("LEFT", 500, 0)
-
-    local eqSep = UI:CreateSeparator(equityView)
-    eqSep:SetPoint("TOPLEFT", 0, -20)
-    eqSep:SetPoint("TOPRIGHT", 0, -20)
-
-    local eqScroll = CreateFrame("ScrollFrame", "AmazingHubLootEquityScroll", equityView, "UIPanelScrollFrameTemplate")
-    eqScroll:SetPoint("TOPLEFT", 0, -22)
-    eqScroll:SetPoint("BOTTOMRIGHT", -10, 0)
-    UI:SkinScrollBar(eqScroll, "AmazingHubLootEquityScroll")
-
-    local eqContent = CreateFrame("Frame", nil, eqScroll)
-    eqContent:SetSize(1, 1)
-    eqScroll:SetScrollChild(eqContent)
-    UI:BindScrollChildWidth(eqScroll, eqContent)
-
-    ----------------------------------------------------------------
-    -- SoftRes view
-    ----------------------------------------------------------------
-    local srView = CreateFrame("Frame", nil, scrollParent)
-    srView:SetPoint("TOPLEFT", 0, -VIEW_TOP)
-    srView:SetPoint("BOTTOMRIGHT", 0, 0)
-    srView:Hide()
-
-    -- Action bar: Import + Clear
-    local srImportBtn = UI:CreateButton(srView, L["Import from softres.it"], 160, 22)
-    srImportBtn:SetPoint("TOPLEFT", 0, 0)
-    local srClearBtn = UI:CreateButton(srView, L["Clear"], 70, 22)
-    srClearBtn:SetPoint("LEFT", srImportBtn, "RIGHT", 6, 0)
-
-    local srActionTop = 28  -- pixels used by the action bar
-
-    -- Column header
-    local srColHeader = CreateFrame("Frame", nil, srView)
-    srColHeader:SetPoint("TOPLEFT", 0, -srActionTop)
-    srColHeader:SetPoint("TOPRIGHT", 0, -srActionTop)
-    srColHeader:SetHeight(20)
-    local srHItem  = UI:CreateHeaderText(srColHeader, L["ITEM"],       10); srHItem:SetPoint("LEFT",  6,   0)
-    local srHRes   = UI:CreateHeaderText(srColHeader, L["RESERVED BY"],10); srHRes:SetPoint("LEFT",  300, 0)
-    local srHRaid  = UI:CreateHeaderText(srColHeader, L["IN RAID"],    10); srHRaid:SetPoint("LEFT", 550, 0)
-
-    local srSep = UI:CreateSeparator(srView)
-    srSep:SetPoint("TOPLEFT",  0, -(srActionTop + 20))
-    srSep:SetPoint("TOPRIGHT", 0, -(srActionTop + 20))
-
-    local srScroll = CreateFrame("ScrollFrame", "AmazingHubSoftResScroll", srView, "UIPanelScrollFrameTemplate")
-    srScroll:SetPoint("TOPLEFT",  0, -(srActionTop + 22))
-    srScroll:SetPoint("BOTTOMRIGHT", -10, 0)
-    UI:SkinScrollBar(srScroll, "AmazingHubSoftResScroll")
-
-    local srContent = CreateFrame("Frame", nil, srScroll)
-    srContent:SetSize(1, 1)
-    srScroll:SetScrollChild(srContent)
-    UI:BindScrollChildWidth(srScroll, srContent)
-
-    local function refreshSR()
-        for _, child in pairs({ srContent:GetChildren() }) do child:Hide() end
-        if not AmazingHub.SoftRes then return end
-
-        local items = AmazingHub.SoftRes:GetAllItems()
-        countText:SetText(#items .. " " .. L["items"])
-
-        local yOff = 0
-        for idx, entry in ipairs(items) do
-            local itemId  = entry.itemId
-            local row = CreateFrame("Frame", nil, srContent, "BackdropTemplate")
-            row:SetPoint("TOPLEFT",  0,    -yOff)
-            row:SetPoint("TOPRIGHT", -4,   -yOff)
-            row:SetHeight(22)
-            row:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-            local bg = (idx % 2 == 0) and C.row1 or C.row2
-            row:SetBackdropColor(bg.r, bg.g, bg.b, bg.a or 0.4)
-
-            -- Item name / link
-            local itemName, _, _, _, _, _, _, _, _, itemTexture = AmazingHub.Compat.GetItemInfo(itemId)
-            local itemText = UI:CreateText(row, itemName or ("Item #" .. itemId), 11,
-                C.white.r, C.white.g, C.white.b)
-            itemText:SetPoint("LEFT", 6, 0)
-            itemText:SetWidth(290)
-
-            if itemTexture then
-                local icon = row:CreateTexture(nil, "ARTWORK")
-                icon:SetSize(16, 16)
-                icon:SetPoint("LEFT", 6, 0)
-                icon:SetTexture(itemTexture)
-                itemText:SetPoint("LEFT", 26, 0)
-                itemText:SetWidth(274)
-            end
-
-            -- Reservers list
-            local reserves = AmazingHub.SoftRes:GetReservesForDisplay(itemId)
-            local inRaidCount, names = 0, {}
-            for _, r in ipairs(reserves) do
-                if r.inRaid then inRaidCount = inRaidCount + 1 end
-                names[#names+1] = r.name
-            end
-            local nameStr = table.concat(names, ", ")
-            if AmazingHub:Utf8Len(nameStr) > 40 then nameStr = AmazingHub:Utf8Head(nameStr, 37) .. "..." end
-
-            local resText = UI:CreateText(row, nameStr, 11, C.silver.r, C.silver.g, C.silver.b)
-            resText:SetPoint("LEFT", 300, 0)
-            resText:SetWidth(245)
-
-            -- In-raid count
-            local raidColor = inRaidCount > 0 and C.green or C.silver
-            local raidStr   = inRaidCount > 0
-                and (inRaidCount .. "/" .. #reserves .. " " .. L["in raid"])
-                or  "–"
-            local raidText = UI:CreateText(row, raidStr, 11,
-                raidColor.r or 0.5, raidColor.g or 0.5, raidColor.b or 0.5)
-            raidText:SetPoint("LEFT", 550, 0)
-
-            yOff = yOff + 22
-        end
-        srContent:SetHeight(math.max(yOff, 1))
-    end
-
-    -- Register the refresh callback so SoftResSystem can trigger it after import
-    AmazingHub.softResRefresh = refreshSR
-
-    srImportBtn:SetScript("OnClick", function()
-        AmazingHub:ShowSoftResImportPopup()
-    end)
-    srClearBtn:SetScript("OnClick", function()
-        if AmazingHub.SoftRes then AmazingHub.SoftRes:Clear() end
-        refreshSR()
-    end)
-
-    ----------------------------------------------------------------
-    -- Toggle logic
-    ----------------------------------------------------------------
-    local function showView(which)
-        historyView:SetShown(which == "history")
-        equityView:SetShown(which == "equity")
-        srView:SetShown(which == "softres")
-
-        local titles = { history = L["Loot History"], equity = L["Loot Equity"], softres = L["Soft Reserves"] }
-        title:SetText(titles[which] or L["Loot History"])
-
-        local function btnColor(btn, active)
-            if active then
-                btn:SetBaseColor(C.accent.r * 0.32, C.accent.g * 0.32, C.accent.b * 0.32, 0.92)
-            else
-                btn:SetBaseColor(C.bg2.r, C.bg2.g, C.bg2.b, 0.92)
-            end
-        end
-        btnColor(histBtn, which == "history")
-        btnColor(eqBtn,   which == "equity")
-        if srBtn then btnColor(srBtn, which == "softres") end
-
-        if which == "history" then
-            AmazingHub:RefreshLootPanel(lootContent, countText)
-        elseif which == "equity" then
-            AmazingHub:RefreshLootEquity(eqContent, countText)
-        else
-            refreshSR()
-        end
-    end
-    histBtn:SetScript("OnClick", function() showView("history") end)
-    eqBtn:SetScript("OnClick",   function() showView("equity")  end)
-    if srBtn then srBtn:SetScript("OnClick", function() showView("softres") end) end
-
-    parent:SetScript("OnShow", function()
-        lmText:SetText(AmazingHub:LootMasterStatus() or "")
-        showView("history")
-    end)
-end
-
-function AmazingHub:RefreshLootPanel(content, countText)
-    if not AmazingHub.LootTracker then return end
-
-    for _, child in pairs({ content:GetChildren() }) do child:Hide() end
-
-    local history = AmazingHub.LootTracker:GetHistory(100)
-    countText:SetText(#AmazingHub.db.lootHistory .. L[" items tracked"])
-
-    local yOff = 0
-    for _, entry in ipairs(history) do
-        local row = CreateFrame("Frame", nil, content, "BackdropTemplate")
-        row:SetSize(content:GetWidth() - 10, 22)
-        row:SetPoint("TOPLEFT", 0, -yOff)
-        row:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-
-        local altIdx = (math.floor(yOff / 22) % 2 == 0) and C.row1 or C.row2
-        row:SetBackdropColor(altIdx.r, altIdx.g, altIdx.b, altIdx.a)
-
-        -- Item name with quality color (always resolve via GetItemInfo for correct locale).
-        -- GetItemInfo accepts itemLink directly, so no need to parse the ID.
-        local qColor = AmazingHub.QualityColors[entry.quality] or AmazingHub.QualityColors[1]
-        local localItemName, _, _, _, _, _, _, _, _, _, localItemQuality = AmazingHub.Compat.GetItemInfo(entry.itemLink or entry.itemId or 0)
-        if localItemQuality then
-            qColor = AmazingHub.QualityColors[localItemQuality] or qColor
-        end
-        local displayName = localItemName or entry.itemName or "?"
-        local itemText = UI:CreateText(row, displayName, 10, qColor.r, qColor.g, qColor.b)
-        itemText:SetPoint("LEFT", 6, 0)
-        itemText:SetWidth(280)
-
-        -- Hover tooltip for item
-        if entry.itemLink then
-            row:EnableMouse(true)
-            row:SetScript("OnEnter", function(self)
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:SetHyperlink(entry.itemLink)
-                GameTooltip:Show()
-                self:SetBackdropColor(C.rowHover.r, C.rowHover.g, C.rowHover.b, C.rowHover.a)
-            end)
-            row:SetScript("OnLeave", function(self)
-                GameTooltip:Hide()
-                self:SetBackdropColor(altIdx.r, altIdx.g, altIdx.b, altIdx.a)
-            end)
-        end
-
-        -- My own personal item, still in my bags to trade: offered to the raid from here (retail, #185).
-        if AmazingHub.TradeCouncil and not entry.awarded and entry.itemLink
-            and GetServerTime() - (entry.timestamp or 0) < AmazingHub.TradeCouncil.OFFER_TTL
-            and entry.playerKey == AmazingHub:GetPlayerKey(AmazingHub.Compat.PlayerName()) then
-            local offerBtn = UI:CreateButton(row, L["Offer"], 56, 18)
-            offerBtn:SetPoint("RIGHT", -4, 0)
-            offerBtn:SetScript("OnClick", function() AmazingHub.TradeCouncil:Offer(entry.itemLink) end)
-        end
-
-        -- Player
-        local memberData = AmazingHub.db.members[entry.playerKey]
-        local pClass = memberData and memberData.class
-        local pr, pg, pb = 1, 1, 1
-        if pClass then
-            pr, pg, pb = AmazingHub:GetClassColor(pClass)
-        end
-        local playerText = UI:CreateText(row, entry.player or "?", 10, pr, pg, pb)
-        playerText:SetPoint("LEFT", 300, 0)
-
-        -- Raid
-        local raidText = UI:CreateText(row, entry.raid or "", 10, C.silver.r, C.silver.g, C.silver.b)
-        raidText:SetPoint("LEFT", 450, 0)
-
-        -- Date
-        local dateStr = AmazingHub:DateText(entry.timestamp or 0, " %H:%M")
-        local dateText = UI:CreateText(row, dateStr, 10, C.silver.r, C.silver.g, C.silver.b)
-        dateText:SetPoint("LEFT", 600, 0)
-
-        yOff = yOff + 22
-    end
-    content:SetHeight(math.max(1, yOff))
-end
-
-function AmazingHub:RefreshLootEquity(content, countText)
-    if not AmazingHub.LootTracker then return end
-    for _, child in pairs({ content:GetChildren() }) do child:Hide() end
-
-    local rows = AmazingHub.LootTracker:GetGuildLootEquity()
-    countText:SetText(string.format("%d members: items received compared with raid attendance", #rows))
-
-    local yOff = 0
-    for _, r in ipairs(rows) do
-        local row = CreateFrame("Frame", nil, content, "BackdropTemplate")
-        row:SetSize(content:GetWidth() - 10, 22)
-        row:SetPoint("TOPLEFT", 0, -yOff)
-        row:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-        local altIdx = (math.floor(yOff / 22) % 2 == 0) and C.row1 or C.row2
-        row:SetBackdropColor(altIdx.r, altIdx.g, altIdx.b, altIdx.a)
-
-        local cr, cg, cb = AmazingHub:GetClassColor(r.class)
-        local nameText = UI:CreateText(row, r.name, 10, cr, cg, cb)
-        nameText:SetPoint("LEFT", 6, 0)
-
-        local itemsText = UI:CreateText(row, tostring(r.items), 10, C.white.r, C.white.g, C.white.b)
-        itemsText:SetPoint("LEFT", 200, 0)
-
-        -- Attendance: green when high, gold mid, red low.
-        local attColor = r.attendance >= 70 and C.green or (r.attendance >= 40 and C.gold or C.red)
-        local attText = UI:CreateText(row, r.attendance .. "%", 10, attColor.r, attColor.g, attColor.b)
-        attText:SetPoint("LEFT", 300, 0)
-
-        local raidsText = UI:CreateText(row, tostring(r.raids), 10, C.silver.r, C.silver.g, C.silver.b)
-        raidsText:SetPoint("LEFT", 400, 0)
-
-        local perText = UI:CreateText(row, string.format("%.2f", r.perRaid), 10, C.silver.r, C.silver.g, C.silver.b)
-        perText:SetPoint("LEFT", 500, 0)
-
-        -- Flag: dry (deserves loot) vs over-fed, for quick scanning.
-        if r.attendance >= 70 and r.items == 0 then
-            local flag = UI:CreateText(row, "due loot", 10, C.green.r, C.green.g, C.green.b)
-            flag:SetPoint("LEFT", 600, 0)
-        elseif r.raids > 0 and r.perRaid >= 1.0 then
-            local flag = UI:CreateText(row, "lots of loot", 10, C.red.r, C.red.g, C.red.b)
-            flag:SetPoint("LEFT", 600, 0)
-        end
-
-        yOff = yOff + 22
-    end
-
-    if #rows == 0 then
-        local empty = UI:CreateText(content, L["No loot or attendance data yet."], 11, C.silver.r, C.silver.g, C.silver.b)
-        empty:SetPoint("TOPLEFT", 6, -4)
-    end
-    content:SetHeight(math.max(1, yOff))
 end
 
 ----------------------------------------------------------------------
 -- TRIAL TRACKER PANEL
 ----------------------------------------------------------------------
 function AmazingHub:CreateTrialsPanel(parent, _mainFrame)
+    -- Flush with the Recruitment sub-tab bar's left edge, the first line UI.GAP under it (#371).
     local scrollParent = CreateFrame("Frame", nil, parent)
-    scrollParent:SetPoint("TOPLEFT", 10, -10)
-    scrollParent:SetPoint("BOTTOMRIGHT", -10, 10)
+    scrollParent:SetPoint("TOPLEFT", 0, -GAP)
+    scrollParent:SetPoint("BOTTOMRIGHT", -GAP, GAP)
 
-    local title = UI:CreateTitle(scrollParent, L["Trial Members"], 14)
+    local title = UI:CreateSectionTitle(scrollParent, L["Trial Members"], true)
     title:SetPoint("TOPLEFT", 0, 0)
 
-    local statusText = UI:CreateText(scrollParent, "", 10, C.silver.r, C.silver.g, C.silver.b)
-    statusText:SetPoint("TOPRIGHT", 0, -2)
+    -- The count under the title it qualifies, not floating at the top right (#371).
+    local statusText = UI:CreateText(scrollParent, "", 10, C.textSoft.r, C.textSoft.g, C.textSoft.b)
+    statusText:SetPoint("TOPLEFT", 0, -22)
 
     -- The guild's length and its switch for new members (issue #249): an officer's, for the whole guild.
+    -- The shared field (#371): it had a gold border and no inset, so "30" touched its edge.
     local TT = AmazingHub.TrialTracker
-    local daysLabel = UI:CreateText(scrollParent, L["Trial length (days)"], 11, C.white.r, C.white.g, C.white.b)
-    daysLabel:SetPoint("TOPLEFT", 0, -30)
-    local daysBox = CreateFrame("EditBox", nil, scrollParent, "BackdropTemplate")
-    daysBox:SetSize(40, 22)
+    local ROW_Y = -40
+    local daysLabel = UI:CreateText(scrollParent, L["Trial length (days)"], 11, C.text.r, C.text.g, C.text.b)
+    daysLabel:SetPoint("LEFT", scrollParent, "TOPLEFT", 0, ROW_Y - 11)
+    -- Room for a 100 to be refused, not cut to 10.
+    local daysBox = UI:CreateInput(scrollParent, 48, 22, { numeric = true, max = 3 })
     daysBox:SetPoint("LEFT", daysLabel, "RIGHT", 8, 0)
-    daysBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-    daysBox:SetBackdropColor(0.058, 0.058, 0.075, 0.9)
-    daysBox:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 0.5)
-    AmazingHub:ApplyFont(daysBox, 11)
-    daysBox:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-    daysBox:SetNumeric(true)
-    daysBox:SetMaxLetters(3)   -- room for a 100 to be refused, not cut to 10
-    daysBox:SetAutoFocus(false)
-    daysBox:SetScript("OnEscapePressed", function(self)
+    daysBox:HookScript("OnEscapePressed", function(self)
         self:SetText(tostring(TT and TT:GetDays() or ""))
-        self:ClearFocus()
     end)
     UI:AttachSaveButton(daysBox, function(box)
         local ok, why = TT:SetDays(box:GetText())
@@ -1378,16 +953,17 @@ function AmazingHub:CreateTrialsPanel(parent, _mainFrame)
         cb:SetChecked(TT:IsAutoOn())
     end
 
+    -- Under the row it explains, left-aligned (#371).
     local configHint = UI:CreateText(scrollParent,
         L["A new length moves the end of every running trial. Nobody already in the guild becomes a trial."],
-        9, C.silver.r, C.silver.g, C.silver.b)
-    configHint:SetPoint("TOPLEFT", 0, -54)
+        10, C.textSoft.r, C.textSoft.g, C.textSoft.b)
+    configHint:SetPoint("TOPLEFT", 0, ROW_Y - 22 - 6)
 
-    -- Column headers
-    local colHeader = CreateFrame("Frame", nil, scrollParent)
-    colHeader:SetPoint("TOPLEFT", 0, -70)
-    colHeader:SetPoint("TOPRIGHT", 0, -70)
-    colHeader:SetHeight(20)
+    -- Column headers: the shared header, no band, its 1px rule under it (#371).
+    local HEADER_Y = ROW_Y - 22 - 6 - 14 - GAP
+    local colHeader = UI:CreateTableHeader(scrollParent)
+    colHeader:SetPoint("TOPLEFT", 0, HEADER_Y)
+    colHeader:SetPoint("TOPRIGHT", 0, HEADER_Y)
 
     local hName = UI:CreateHeaderText(colHeader, L["MEMBER"], 10)
     hName:SetPoint("LEFT", 6, 0)
@@ -1404,13 +980,9 @@ function AmazingHub:CreateTrialsPanel(parent, _mainFrame)
     local hStatus = UI:CreateHeaderText(colHeader, L["STATUS"], 10)
     hStatus:SetPoint("LEFT", 455, 0)
 
-    local sep = UI:CreateSeparator(scrollParent)
-    sep:SetPoint("TOPLEFT", 0, -92)
-    sep:SetPoint("TOPRIGHT", 0, -92)
-
     local trialScroll = CreateFrame("ScrollFrame", "AmazingHubTrialScroll", scrollParent, "UIPanelScrollFrameTemplate")
-    trialScroll:SetPoint("TOPLEFT", 0, -94)
-    trialScroll:SetPoint("BOTTOMRIGHT", -10, 0)
+    trialScroll:SetPoint("TOPLEFT", colHeader, "BOTTOMLEFT", 0, -2)
+    trialScroll:SetPoint("BOTTOMRIGHT", 0, 0)
     UI:SkinScrollBar(trialScroll, "AmazingHubTrialScroll")
 
     local trialContent = CreateFrame("Frame", nil, trialScroll)
@@ -1430,7 +1002,7 @@ function AmazingHub:CreateTrialsPanel(parent, _mainFrame)
     -- An officer's change or the other officers' trials arriving redraw it while it is open (#249).
     if TT then
         TT.uiRefresh = function()
-            if parent:IsShown() then AmazingHub:RefreshTrialsPanel(parent) end
+            if parent:IsVisible() then AmazingHub:RefreshTrialsPanel(parent) end
         end
     end
 end
@@ -1462,19 +1034,21 @@ function AmazingHub:RefreshTrialsPanel(parent)
         local progress = AmazingHub.TrialTracker:GetProgress(trial.key)
         local state = AmazingHub.TrialTracker:GetState(trial.key)
 
-        -- Main row
+        -- Main row, hung by both top corners: a width read while the tab is hidden is 0 (#371).
         local row = CreateFrame("Button", nil, content, "BackdropTemplate")
-        row:SetSize(content:GetWidth() - 10, 26)
+        row:SetHeight(26)
         row:SetPoint("TOPLEFT", 0, -yOff)
+        row:SetPoint("TOPRIGHT", 0, -yOff)
         row:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
 
+        -- The table's zebra only: a trial waiting for a decision says so in its status column, and gold
+        -- is the selection's colour, not a wash (#371).
         local rowIdx = math.floor(yOff / 26) % 2
         local altIdx = (rowIdx == 0) and C.row1 or C.row2
-        if state == "review" then altIdx = C.accentSoft end   -- a gold wash: it waits for a decision
         row:SetBackdropColor(altIdx.r, altIdx.g, altIdx.b, altIdx.a)
 
         -- Expand arrow
-        local arrow = UI:CreateText(row, isExpanded and "v" or ">", 10, C.accent.r, C.accent.g, C.accent.b)
+        local arrow = UI:CreateText(row, isExpanded and "v" or ">", 10, C.label.r, C.label.g, C.label.b)
         arrow:SetPoint("LEFT", 2, 0)
 
         -- Name with class color
@@ -1491,20 +1065,20 @@ function AmazingHub:RefreshTrialsPanel(parent)
             local ilvlSign = progress.ilvlDelta > 0 and "+" or ""
             local ilvlColor = progress.ilvlDelta > 0 and C.green or (progress.ilvlDelta < 0 and C.red or C.silver)
             local ilvlStr = format("%d (%s%d)", progress.currentIlvl, ilvlSign, progress.ilvlDelta)
-            local ilvlText = UI:CreateText(row, ilvlStr, 9, ilvlColor.r, ilvlColor.g, ilvlColor.b)
+            local ilvlText = Num(UI:CreateText(row, ilvlStr, 9, ilvlColor.r, ilvlColor.g, ilvlColor.b))
             ilvlText:SetPoint("LEFT", 140, 0)
 
             -- Attunement progress
             if AmazingHub.AttunementTracker then
                 local attColor = progress.attDelta > 0 and C.green or C.silver
                 local attStr = format("%d/%d (+%d)", progress.currentAttDone, progress.attTotal, progress.attDelta)
-                local attText = UI:CreateText(row, attStr, 9, attColor.r, attColor.g, attColor.b)
+                local attText = Num(UI:CreateText(row, attStr, 9, attColor.r, attColor.g, attColor.b))
                 attText:SetPoint("LEFT", 210, 0)
             end
         else
             local ilvlVal = memberData and memberData.avgIlvl or 0
             if ilvlVal > 0 then
-                local ilvlText = UI:CreateText(row, tostring(ilvlVal), 9, C.silver.r, C.silver.g, C.silver.b)
+                local ilvlText = Num(UI:CreateText(row, tostring(ilvlVal), 9, C.silver.r, C.silver.g, C.silver.b))
                 ilvlText:SetPoint("LEFT", 140, 0)
             end
             if AmazingHub.AttunementTracker then
@@ -1518,11 +1092,11 @@ function AmazingHub:RefreshTrialsPanel(parent)
 
         local daysRem = AmazingHub.TrialTracker:GetDaysRemaining(trial.key)
         local daysStr = daysRem and (daysRem .. "d") or "-"
-        local daysColor = C.white
+        local daysColor = C.text
         if daysRem then
-            daysColor = daysRem > 14 and C.green or (daysRem > 7 and C.gold or C.red)
+            daysColor = daysRem > 14 and C.green or (daysRem > 7 and C.warn or C.red)
         end
-        local daysText = UI:CreateText(row, daysStr, 10, daysColor.r, daysColor.g, daysColor.b)
+        local daysText = Num(UI:CreateText(row, daysStr, 10, daysColor.r, daysColor.g, daysColor.b))
         daysText:SetPoint("LEFT", 390, 0)
 
         -- Status badge: the state worked out from the start and the guild's length, so a trial an older
@@ -1530,7 +1104,7 @@ function AmazingHub:RefreshTrialsPanel(parent)
         local statusColor = C.silver
         local statusStr = tostring(data.status or "?")
         if state == "trial" then
-            statusColor = C.gold; statusStr = L["TRIAL"]
+            statusColor = C.textSoft; statusStr = L["TRIAL"]
         elseif state == "review" then
             statusColor = C.red; statusStr = L["READY TO REVIEW"]
         elseif state == "left" then
@@ -1605,7 +1179,7 @@ function AmazingHub:RefreshTrialsPanel(parent)
                 local notesLabel = detailFrame:CreateFontString(nil, "OVERLAY")
                 AmazingHub:ApplyFont(notesLabel, 9)
                 notesLabel:SetPoint("TOPLEFT", 10, dY)
-                notesLabel:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
+                notesLabel:SetTextColor(C.label.r, C.label.g, C.label.b)
                 notesLabel:SetText(L["Comments:"])
                 notesLabel:Show()
                 dY = dY - 14
@@ -1614,7 +1188,9 @@ function AmazingHub:RefreshTrialsPanel(parent)
                     local noteFS = detailFrame:CreateFontString(nil, "OVERLAY")
                     AmazingHub:ApplyFont(noteFS, 9)
                     noteFS:SetPoint("TOPLEFT", 14, dY)
-                    noteFS:SetWidth(content:GetWidth() - 60)
+                    -- A set width, not a second anchor: GetStringHeight below measures the wrap at once, before
+                    -- an anchored width would be resolved. `content` is bound to the scroll's width (#371).
+                    noteFS:SetWidth(math.max(1, content:GetWidth() - 60))
                     noteFS:SetJustifyH("LEFT")
                     noteFS:SetWordWrap(true)
                     local dateStr = note.timestamp and AmazingHub:DateText(note.timestamp, " %H:%M") or ""
@@ -1624,32 +1200,12 @@ function AmazingHub:RefreshTrialsPanel(parent)
                 end
             end
 
-            -- Inline add note
-            local addBox = CreateFrame("EditBox", nil, detailFrame, "BackdropTemplate")
-            addBox:SetSize(content:GetWidth() - 120, 20)
+            -- Inline add note: the shared field with its hint, running up to the Add button (#371).
+            local addBtn = UI:CreateButton(detailFrame, L["Add"], 50, 22)
+            addBtn:SetPoint("TOPRIGHT", -10, dY - 4)
+            local addBox = UI:CreateInput(detailFrame, 200, 22, { max = 200, placeholder = L["Add comment..."] })
             addBox:SetPoint("TOPLEFT", 10, dY - 4)
-            addBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-            addBox:SetBackdropColor(0.038, 0.038, 0.052, 1)
-            addBox:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.3)
-            AmazingHub:ApplyFont(addBox, 9)
-            addBox:SetTextColor(C.white.r, C.white.g, C.white.b)
-            addBox:SetTextInsets(4, 4, 2, 2)
-            addBox:SetAutoFocus(false)
-            addBox:SetMaxLetters(200)
-            addBox:Show()
-
-            local ph = addBox:CreateFontString(nil, "OVERLAY")
-            AmazingHub:ApplyFont(ph, 9)
-            ph:SetPoint("LEFT", 4, 0)
-            ph:SetTextColor(0.3, 0.3, 0.3)
-            ph:SetText(L["Add comment..."])
-            addBox:SetScript("OnTextChanged", function(self)
-                if self:GetText() ~= "" then ph:Hide() else ph:Show() end
-            end)
-            addBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-            local addBtn = UI:CreateButton(detailFrame, L["Add"], 50, 20)
-            addBtn:SetPoint("LEFT", addBox, "RIGHT", 4, 0)
+            addBox:SetPoint("RIGHT", addBtn, "LEFT", -4, 0)
             addBtn:SetScript("OnClick", function()
                 local text = addBox:GetText()
                 if text and strtrim(text) ~= "" then
@@ -1675,11 +1231,13 @@ function AmazingHub:RefreshTrialsPanel(parent)
         end
     end
 
-    if #trials == 0 then
-        local emptyText = UI:CreateText(content, L["No trial members tracked."], 11, C.silver.r, C.silver.g, C.silver.b)
-        emptyText:SetPoint("TOPLEFT", 0, 0)
-        yOff = 30
+    -- One empty line, kept: a new one each redraw stayed on screen under the trials that came later.
+    if not parent.trialEmpty then
+        parent.trialEmpty = UI:CreateText(content, L["No trial members tracked."], 11, C.textSoft.r, C.textSoft.g, C.textSoft.b)
+        parent.trialEmpty:SetPoint("TOPLEFT", 6, -6)
     end
+    parent.trialEmpty:SetShown(#trials == 0)
+    if #trials == 0 then yOff = 30 end
 
     content:SetHeight(math.max(1, yOff))
 end
@@ -1693,7 +1251,7 @@ function AmazingHub:ShowExportChooser()
     local f = CreateFrame("Frame", "AmazingHubExportChooser", UIParent, "BackdropTemplate")
     f:SetSize(390, 300)
     f:SetPoint("CENTER")
-    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(f) })
     f:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
     UI:StylePopup(f)
@@ -1722,10 +1280,13 @@ function AmazingHub:ShowExportChooser()
         { key = "readiness",  label = L["Readiness"] },
         { key = "equity",     label = L["Loot Equity"] },
         { key = "standings",  label = L["DKP Standings"] },
+        -- The officers' own (issue #425).
+        { key = "log",        label = L["Audit Log"], officer = true },
+        { key = "former",     label = L["Former members"], officer = true },
     }
     local y = -56
     for _, d in ipairs(datasets) do
-        if AmazingHub.Exporter:Has(d.key) then
+        if AmazingHub.Exporter:Has(d.key) and (not d.officer or AmazingHub:IsOfficer()) then
             local lbl = UI:CreateText(f, d.label, 11, C.text.r, C.text.g, C.text.b)
             lbl:SetPoint("TOPLEFT", 16, y)
             local fx = 150
@@ -1742,6 +1303,7 @@ function AmazingHub:ShowExportChooser()
             y = y - 32
         end
     end
+    f:SetHeight(math.max(300, -y + 16))   -- the officers' two rows (#425) need room below the six
 end
 
 ----------------------------------------------------------------------
@@ -1756,7 +1318,7 @@ function AmazingHub:ShowExportPopup(titleStr, text)
     f:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(f),
     })
     f:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
@@ -1769,9 +1331,9 @@ function AmazingHub:ShowExportPopup(titleStr, text)
     f:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
 
     local titleText = f:CreateFontString(nil, "OVERLAY")
-    AmazingHub:ApplyFont(titleText, 13)
+    AmazingHub:ApplyFont(titleText, nil, "sectionTitle")
     titleText:SetPoint("TOP", 0, -10)
-    titleText:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
+    titleText:SetTextColor(C.text.r, C.text.g, C.text.b)
     titleText:SetText(titleStr or L["Export"])
 
     local hint = f:CreateFontString(nil, "OVERLAY")
@@ -1786,16 +1348,15 @@ function AmazingHub:ShowExportPopup(titleStr, text)
     scrollFrame:SetPoint("BOTTOMRIGHT", -12, 40)
     UI:SkinScrollBar(scrollFrame, "AmazingHubExportScroll")
 
-    local editBox = CreateFrame("EditBox", nil, scrollFrame)
-    editBox:SetMultiLine(true)
-    AmazingHub:ApplyFont(editBox, 11)
-    editBox:SetTextColor(C.white.r, C.white.g, C.white.b)
-    editBox:SetWidth(scrollFrame:GetWidth() - 10)
+    -- The shared field, multi-line (#371). It grows with its text; the scroll frame keeps it clear of
+    -- the bar, and Escape still closes the window after the field lets go.
+    local editBox = UI:CreateInput(scrollFrame, 460, 262, { multiline = true })
     editBox:SetAutoFocus(true)
     editBox:SetText(text or "")
     editBox:HighlightText()
-    editBox:SetScript("OnEscapePressed", function() f:Hide() end)
+    editBox:HookScript("OnEscapePressed", function() f:Hide() end)
     scrollFrame:SetScrollChild(editBox)
+    UI:BindScrollChildWidth(scrollFrame, editBox)
 
     local closeBtn = UI:CreateCloseButton(f)
     closeBtn:SetPoint("TOPRIGHT", -4, -4)
@@ -1821,7 +1382,7 @@ function AmazingHub:ShowSoftResImportPopup()
     f:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(f),
     })
     f:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
@@ -1834,9 +1395,9 @@ function AmazingHub:ShowSoftResImportPopup()
     f:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
 
     local titleText = f:CreateFontString(nil, "OVERLAY")
-    AmazingHub:ApplyFont(titleText, 13)
+    AmazingHub:ApplyFont(titleText, nil, "sectionTitle")
     titleText:SetPoint("TOP", 0, -10)
-    titleText:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
+    titleText:SetTextColor(C.text.r, C.text.g, C.text.b)
     titleText:SetText(L["Import SoftRes from softres.it"])
 
     local hint = f:CreateFontString(nil, "OVERLAY")
@@ -1850,14 +1411,12 @@ function AmazingHub:ShowSoftResImportPopup()
     scrollFrame:SetPoint("BOTTOMRIGHT", -12, 44)
     UI:SkinScrollBar(scrollFrame, "AmazingHubSRImportScroll")
 
-    local editBox = CreateFrame("EditBox", nil, scrollFrame)
-    editBox:SetMultiLine(true)
-    AmazingHub:ApplyFont(editBox, 11)
-    editBox:SetTextColor(C.white.r, C.white.g, C.white.b)
-    editBox:SetWidth(scrollFrame:GetWidth() - 10)
+    -- The shared field, multi-line (#371); Escape still closes the window after the field lets go.
+    local editBox = UI:CreateInput(scrollFrame, 480, 250, { multiline = true })
     editBox:SetAutoFocus(true)
-    editBox:SetScript("OnEscapePressed", function() f:Hide() end)
+    editBox:HookScript("OnEscapePressed", function() f:Hide() end)
     scrollFrame:SetScrollChild(editBox)
+    UI:BindScrollChildWidth(scrollFrame, editBox)
 
     local closeBtn = UI:CreateCloseButton(f)
     closeBtn:SetPoint("TOPRIGHT", -4, -4)
@@ -1896,7 +1455,7 @@ function AmazingHub:ShowImportPopup()
     f:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(f),
     })
     f:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
@@ -1909,16 +1468,18 @@ function AmazingHub:ShowImportPopup()
     f:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
 
     local titleText = f:CreateFontString(nil, "OVERLAY")
-    AmazingHub:ApplyFont(titleText, 13)
+    AmazingHub:ApplyFont(titleText, nil, "sectionTitle")
     titleText:SetPoint("TOP", 0, -10)
-    titleText:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
+    titleText:SetTextColor(C.text.r, C.text.g, C.text.b)
     titleText:SetText(L["Raid roster from the website"])
 
     local hint = f:CreateFontString(nil, "OVERLAY")
     AmazingHub:ApplyFont(hint, 10)
-    hint:SetPoint("TOP", 0, -28)
+    hint:SetPoint("TOP", 0, -26)
+    hint:SetWidth(496)
     hint:SetTextColor(C.silver.r, C.silver.g, C.silver.b)
-    hint:SetText(L["Paste the roster string, then Load. Invite and Groups work after that."])
+    hint:SetText(L["Paste the roster string, then Load. Invite and Groups work after that."] .. " "
+        .. L["A cores code from the guild website goes here too."])
 
     local status = f:CreateFontString(nil, "OVERLAY")
     AmazingHub:ApplyFont(status, 11)
@@ -1932,18 +1493,16 @@ function AmazingHub:ShowImportPopup()
     end
 
     local scrollFrame = CreateFrame("ScrollFrame", "AmazingHubCompanionImportScroll", f, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", 12, -50)
+    scrollFrame:SetPoint("TOPLEFT", 12, -56)   -- below a hint of two lines
     scrollFrame:SetPoint("BOTTOMRIGHT", -12, 76)
     UI:SkinScrollBar(scrollFrame, "AmazingHubCompanionImportScroll")
 
-    local editBox = CreateFrame("EditBox", nil, scrollFrame)
-    editBox:SetMultiLine(true)
-    AmazingHub:ApplyFont(editBox, 11)
-    editBox:SetTextColor(C.white.r, C.white.g, C.white.b)
-    editBox:SetWidth(scrollFrame:GetWidth() - 10)
+    -- The shared field, multi-line (#371); Escape still closes the window after the field lets go.
+    local editBox = UI:CreateInput(scrollFrame, 480, 250, { multiline = true })
     editBox:SetAutoFocus(true)
-    editBox:SetScript("OnEscapePressed", function() f:Hide() end)
+    editBox:HookScript("OnEscapePressed", function() f:Hide() end)
     scrollFrame:SetScrollChild(editBox)
+    UI:BindScrollChildWidth(scrollFrame, editBox)
 
     local closeBtn = UI:CreateCloseButton(f)
     closeBtn:SetPoint("TOPRIGHT", -4, -4)
@@ -1952,10 +1511,14 @@ function AmazingHub:ShowImportPopup()
     local loadBtn = UI:CreateButton(f, L["Load"], 90, 26)
     loadBtn:SetPoint("BOTTOMRIGHT", -12, 44)
     loadBtn:SetScript("OnClick", function()
-        local n, err = AmazingHub.CompanionImport:Load(editBox:GetText())
+        local n, err, said = AmazingHub.CompanionImport:Load(editBox:GetText())
         if err then
             status:SetTextColor(1, 0.35, 0.35)
             status:SetText(err)
+        elseif said then
+            -- A GOSCORE1 pasted here: the guild's cores, not a raid's roster (issue #347).
+            status:SetTextColor(C.silver.r, C.silver.g, C.silver.b)
+            status:SetText(said)
         else
             local r = AmazingHub.CompanionImport:Current()
             status:SetTextColor(C.silver.r, C.silver.g, C.silver.b)
@@ -1963,23 +1526,28 @@ function AmazingHub:ShowImportPopup()
         end
     end)
 
+    -- This window's two buttons act on the roster it holds, the one just loaded, not the raid of the window
+    -- the Web tab's buttons act on (issue #400).
     local inviteBtn = UI:CreateButton(f, L["Invite all"], 90, 26)
     inviteBtn:SetPoint("RIGHT", loadBtn, "LEFT", -6, 0)
     inviteBtn:SetScript("OnClick", function()
-        local n, skipped, err = AmazingHub.CompanionImport:InviteAll()
+        local I = AmazingHub.CompanionImport
+        local n, here, err, offline = I:InviteAll(I:Current())
         if err then
             status:SetTextColor(1, 0.35, 0.35)
             status:SetText(err)
         else
             status:SetTextColor(C.silver.r, C.silver.g, C.silver.b)
-            status:SetText(string.format(L["Invited %d, already here %d."], n, skipped))
+            status:SetText(string.format(L["Invited %d, already here %d."], n, here))
         end
+        local off = I.OfflineLine(offline)
+        if off then AmazingHub:Print(off) end
     end)
 
     local groupsBtn = UI:CreateButton(f, L["Groups"], 90, 26)
     groupsBtn:SetPoint("RIGHT", inviteBtn, "LEFT", -6, 0)
     groupsBtn:SetScript("OnClick", function()
-        local moved, err = AmazingHub.CompanionImport:OrganizeGroups()
+        local moved, err = AmazingHub.CompanionImport:OrganizeGroups(AmazingHub.CompanionImport:Current())
         if err then
             status:SetTextColor(1, 0.35, 0.35)
             status:SetText(err)
@@ -1994,1531 +1562,6 @@ function AmazingHub:ShowImportPopup()
 end
 
 ----------------------------------------------------------------------
--- SETTINGS PANEL
-----------------------------------------------------------------------
-function AmazingHub:CreateSettingsPanel(parent, _mainFrame)
-    local scrollFrame, content = UI:CreateScrollFrame(parent, "AmazingHubSettingsScroll")
-    scrollFrame:SetPoint("TOPLEFT", 12, -10)
-    scrollFrame:SetPoint("BOTTOMRIGHT", -12, 10)
-    content:SetWidth(scrollFrame:GetWidth() - 20)
-
-    parent:SetScript("OnShow", function()
-        AmazingHub:RefreshSettingsPanel(content)
-    end)
-end
-
-function AmazingHub:RefreshSettingsPanel(content, category)
-    -- Clear existing. Hide BOTH child frames AND regions: section titles,
-    -- hints and separators are FontStrings/textures parented straight to
-    -- `content`, so they must be hidden too — otherwise a re-render with a
-    -- different layout (e.g. switching category) leaves the old text
-    -- overlapping the new.
-    for _, child in pairs({ content:GetChildren() }) do child:Hide() end
-    for _, region in pairs({ content:GetRegions() }) do region:Hide() end
-
-    local isOfficer = AmazingHub:IsOfficer()
-
-    -- Settings are grouped into category sub-tabs so the panel is easy to
-    -- navigate. Officer-only categories are hidden from members. The active
-    -- category is remembered on the panel itself.
-    local CATS = {
-        { key = "general", label = L["General"] },
-        -- On retail since issue #185, with what applies there: the loot system and the points.
-        { key = "loot",    label = L["Loot"],    officer = true },
-        { key = "raid",    label = L["Raid"] },
-        { key = "officer", label = L["Officer"], officer = true },
-        { key = "about",   label = L["About"] },
-    }
-    local cat = category or content.__settingsCat or "general"
-    if (cat == "loot" or cat == "officer") and not isOfficer then cat = "general" end
-    content.__settingsCat = cat
-
-    local yOff = 0
-
-    -- Title + category bar
-    local title = UI:CreateTitle(content, L["Settings"], 16)
-    title:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 26
-
-    local cx = 0
-    for _, c in ipairs(CATS) do
-        if (not c.officer or isOfficer) and not (c.retail == false and AmazingHub.Client.isRetail) then
-            local b = UI:CreateButton(content, c.label, 92, 24)
-            b:SetPoint("TOPLEFT", cx, -yOff)
-            if c.key == cat then
-                b:SetBaseColor(C.accent.r * 0.34, C.accent.g * 0.34, C.accent.b * 0.34, 0.95)
-                b.label:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-            end
-            b:SetScript("OnClick", function() AmazingHub:RefreshSettingsPanel(content, c.key) end)
-            cx = cx + b:GetWidth() + 4  -- a button its label grew pushes the next one (issue #28)
-        end
-    end
-    yOff = yOff + 34
-
-    local sep1 = UI:CreateSeparator(content)
-    sep1:SetPoint("TOPLEFT", 0, -yOff)
-    sep1:SetPoint("TOPRIGHT", -10, -yOff)
-    yOff = yOff + 12
-
-    if cat == "general" then
-    --------------------------------------------------------------------
-    -- MY PROFILE (self-service raid roles)
-    --------------------------------------------------------------------
-    local profTitle = UI:CreateHeaderText(content, L["MY PROFILE"], 12)
-    profTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 22
-
-    local rolesHint = UI:CreateText(content, L["Roles you're willing to play. Your guild's Raiders list picks this up automatically, so no officer has to set it."], 10, C.silver.r, C.silver.g, C.silver.b)
-    rolesHint:SetPoint("TOPLEFT", 4, -yOff); rolesHint:SetWidth(content:GetWidth() - 20); rolesHint:SetJustifyH("LEFT")
-    yOff = yOff + 20
-
-    local rolePicker = AmazingHub:CreateRolePicker(content)
-    rolePicker:SetPoint("TOPLEFT", 4, -yOff)
-    yOff = yOff + 34
-
-    local profSep = UI:CreateSeparator(content)
-    profSep:SetPoint("TOPLEFT", 0, -yOff)
-    profSep:SetPoint("TOPRIGHT", -10, -yOff)
-    yOff = yOff + 12
-
-    --------------------------------------------------------------------
-    -- UI SCALE
-    --------------------------------------------------------------------
-    local scaleLabel = UI:CreateText(content, L["UI scale"], 11, C.text.r, C.text.g, C.text.b)
-    scaleLabel:SetPoint("TOPLEFT", 0, -yOff)
-
-    -- Amazing Hub: five buttons instead of the slider (the slider moved with the window it scaled)
-    local scaleBtns = {}
-    local function markScale()
-        local cur = AmazingHub:GetSetting("uiScale") or 1
-        for v, b in pairs(scaleBtns) do
-            local pct = string.format("%d%%", v * 100 + 0.5)
-            b.label:SetText(math.abs(cur - v) < 0.01 and ("|cffFFD700" .. pct .. "|r") or pct)
-        end
-    end
-    for i, v in ipairs({ 0.8, 0.9, 1.0, 1.1, 1.2 }) do
-        local b = UI:CreateButton(content, "", 50, 20)
-        b:SetPoint("TOPLEFT", 120 + (i - 1) * 54, -yOff)
-        b:SetScript("OnClick", function()
-            AmazingHub:SetSetting("uiScale", v)
-            markScale()
-            UI:ApplyScale()
-        end)
-        scaleBtns[v] = b
-    end
-    markScale()
-    yOff = yOff + 30
-    local scale = { SetPoint = function() end } -- the slider's lines below are left out
-    if false then
-    scale:SetPoint("TOPLEFT", 120, -yOff)
-    scale:SetWidth(180)
-    scale:SetMinMaxValues(0.8, 1.2)
-    scale:SetValueStep(0.05)
-    scale:SetObeyStepOnDrag(true)
-    scale:SetValue(AmazingHub:GetSetting("uiScale") or 1)
-    _G[scale:GetName() .. "Low"]:SetText("80%")
-    _G[scale:GetName() .. "High"]:SetText("120%")
-    _G[scale:GetName() .. "Text"]:SetText(string.format("%d%%", (AmazingHub:GetSetting("uiScale") or 1) * 100))
-    scale:SetScript("OnValueChanged", function(self, value)
-        value = math.floor(value * 20 + 0.5) / 20   -- snap to the 0.05 step
-        AmazingHub:SetSetting("uiScale", value)
-        _G[self:GetName() .. "Text"]:SetText(string.format("%d%%", value * 100))
-        UI:ApplyScale()
-    end)
-    end -- Amazing Hub: end of the unused slider
-
-    --------------------------------------------------------------------
-    -- MODULE TOGGLES
-    --------------------------------------------------------------------
-    local sectionTitle = UI:CreateHeaderText(content, L["MODULES"], 12)
-    sectionTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 22
-
-    -- Toggles come from the feature registry. AllFeatures, not
-    -- VisibleFeatures: a disabled feature must keep its checkbox, or
-    -- there is no way left to switch it back on. `core` features have no
-    -- switch at all — turning Settings or Roster off would lock the user out.
-    for _, def in ipairs(UI:AllFeatures(nil)) do
-        if not def.core then
-        local row = CreateFrame("Frame", nil, content, "BackdropTemplate")
-        row:SetSize(content:GetWidth() - 10, 36)
-        row:SetPoint("TOPLEFT", 0, -yOff)
-        row:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-        row:SetBackdropColor(0.082, 0.082, 0.105, 0.5)
-
-        local cb = UI:CreateCheckbox(row, def.label, 18)
-        cb:SetPoint("LEFT", 8, 0)
-        cb.checkbox:SetChecked(AmazingHub:IsFeatureEnabled(def.id))
-        cb.checkbox.onChanged = function(_, checked)
-            AmazingHub:SetFeatureEnabled(def.id, checked)
-            -- Tabs build lazily, so UI features toggle live. Background
-            -- modules register their events at Initialize, so only those
-            -- still need a reload, and a tab whose module does (`restart`).
-            local needsReload = def.restart or (def.module and not def.tab)
-            AmazingHub:Print(def.label .. (checked
-                and L[" |cff00ff00enabled|r."]
-                or  L[" |cffFF4444disabled|r."])
-                .. (needsReload and L[" Reload UI to apply."] or ""))
-            if def.id == "lootMaster" and AmazingHub.LootMaster and AmazingHub.LootMaster.SetEnabled then
-                AmazingHub.LootMaster:SetEnabled(checked and true or false)
-            end
-        end
-
-        local desc = UI:CreateText(row, def.desc or "", 9, C.silver.r, C.silver.g, C.silver.b)
-        desc:SetPoint("LEFT", 240, 0)
-        desc:SetWidth(400)
-
-        yOff = yOff + 38
-        end
-    end
-
-    yOff = yOff + 8
-
-    -- Separator
-    local sep2 = UI:CreateSeparator(content)
-    sep2:SetPoint("TOPLEFT", 0, -yOff)
-    sep2:SetPoint("TOPRIGHT", -10, -yOff)
-    yOff = yOff + 12
-
-    --------------------------------------------------------------------
-    -- QUICK ACCESS — open feature windows from the UI (not just chat)
-    --------------------------------------------------------------------
-    local qaTitle = UI:CreateHeaderText(content, L["QUICK ACCESS"], 12)
-    qaTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 22
-
-    -- Show only the loot-access button that matches the active system.
-    local quickButtons = {}
-    if AmazingHub:LootSystemShowsDKP() then
-        quickButtons[#quickButtons + 1] = { label = L["Loot & DKP"], fn = function() AmazingHub:ShowPointsFrame() end }
-    end
-    if AmazingHub:LootSystemShowsWishlist() then
-        quickButtons[#quickButtons + 1] = { label = L["My Wishlist"], fn = function() AmazingHub:ShowWishlistFrame() end }
-    end
-    -- Retail's loot council by trade, for every member: offering an item, answering one (issue #185).
-    if AmazingHub.TradeCouncil and AmazingHub:LootSystemActive() then
-        quickButtons[#quickButtons + 1] = { label = L["Loot Council"], fn = function() AmazingHub:ShowTradeCouncil() end }
-    end
-    if AmazingHub.LootEquity then  -- on retail too since issue #183
-        quickButtons[#quickButtons + 1] = { label = L["Loot Equity"], fn = function()
-            local txt = AmazingHub.Exporter and AmazingHub.Exporter:Build("equity", "tsv") or ""
-            AmazingHub:ShowExportPopup(L["Loot Equity"], txt)
-        end }
-    end
-    quickButtons[#quickButtons + 1] = { label = L["Bulletin"], fn = function()
-        if AmazingHub.Bulletin then AmazingHub.Bulletin:Show() end
-    end }
-    quickButtons[#quickButtons + 1] = { label = L["Polls"], fn = function()
-        if AmazingHub.Polls then AmazingHub.Polls:Show() end
-    end }
-    quickButtons[#quickButtons + 1] = { label = L["Search"], fn = function()
-        if AmazingHub.Search then AmazingHub.Search:Show() end
-    end }
-    quickButtons[#quickButtons + 1] = { label = L["Login Digest"], fn = function()
-        if AmazingHub.Digest then AmazingHub.Digest:Show() end
-    end }
-    quickButtons[#quickButtons + 1] = { label = L["Export Data"], fn = function()
-        if AmazingHub.ShowExportChooser then AmazingHub:ShowExportChooser() end
-    end }
-    local qx, qrow = 0, 0
-    for _, qb in ipairs(quickButtons) do
-        local b = UI:CreateButton(content, qb.label, 130, 24)
-        -- Wrap on the button's real width: its label may have grown it (issue #28).
-        if qx > 0 and qx + b:GetWidth() > content:GetWidth() - 20 then qx = 0; qrow = qrow + 30 end
-        b:SetPoint("TOPLEFT", qx, -(yOff + qrow))
-        b:SetScript("OnClick", qb.fn)
-        qx = qx + b:GetWidth() + 6
-    end
-    yOff = yOff + 36 + qrow
-
-    --------------------------------------------------------------------
-    -- GENERAL OPTIONS
-    --------------------------------------------------------------------
-    local goTitle = UI:CreateHeaderText(content, L["GENERAL OPTIONS"], 12)
-    goTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 24
-
-    local mmCb = UI:CreateCheckbox(content, L["Show minimap button"], 18)
-    mmCb:SetPoint("TOPLEFT", 8, -yOff)
-    mmCb.checkbox:SetChecked(AmazingHub.IsMinimapShown and AmazingHub:IsMinimapShown() or false)
-    mmCb.checkbox.onChanged = function(_, checked)
-        if AmazingHub.SetMinimapShown then AmazingHub:SetMinimapShown(checked) end
-    end
-    yOff = yOff + 30
-
-    -- The guildmates-in-your-zone dots under the minimap (#271).
-    if false and AmazingHub.GuildMap then -- Amazing Hub: the hub's map is off, so are its minimap dots
-        local dotsCb = UI:CreateCheckbox(content, L["Show guildmates in your zone on the minimap"], 18)
-        dotsCb:SetPoint("TOPLEFT", 8, -yOff)
-        dotsCb.checkbox:SetChecked(AmazingHub.GuildMap:IsMinimapDots())
-        dotsCb.checkbox.onChanged = function(_, checked) AmazingHub.GuildMap:SetMinimapDots(checked) end
-        yOff = yOff + 30
-    end
-
-    -- Guild button takeover — off = the guild micro button / "J" opens Blizzard's own
-    -- guild UI instead of Amazing Hub (use the minimap button, or the "Amazing Hub" button we
-    -- add to the native frame, to open Amazing Hub). Lets players use both.
-    local gbCb = UI:CreateCheckbox(content, L["Guild button opens Amazing Hub"], 18)
-    gbCb:SetPoint("TOPLEFT", 8, -yOff)
-    gbCb.checkbox:SetChecked(AmazingHub:IsGuildButtonHijacked())
-    gbCb.checkbox.onChanged = function(_, checked)
-        AmazingHub:SetSetting("hijackGuildButton", checked and true or false)
-    end
-    yOff = yOff + 30
-
-    -- Guild lines on item tooltips (crafters, wishlist, soft reserves) — issue #39.
-    local ttCb = UI:CreateCheckbox(content, L["Guild info on item tooltips"], 18)
-    ttCb:SetPoint("TOPLEFT", 8, -yOff)
-    local ttShift = UI:CreateCheckbox(content, L["Only while holding Shift"], 16)
-    ttShift:SetPoint("TOPLEFT", 28, -(yOff + 26))
-    local ttMode = AmazingHub:GetSetting("itemTooltip")
-    ttCb.checkbox:SetChecked(ttMode ~= "off")
-    ttShift.checkbox:SetChecked(ttMode == "shift")
-    local function SaveTooltipMode()
-        local on = ttCb.checkbox:GetChecked() and true or false
-        AmazingHub:SetSetting("itemTooltip", not on and "off" or (ttShift.checkbox:GetChecked() and "shift" or "always"))
-        if on then ttShift.checkbox:Enable() else ttShift.checkbox:Disable() end
-    end
-    if ttMode == "off" then ttShift.checkbox:Disable() end
-    ttCb.checkbox.onChanged = SaveTooltipMode
-    ttShift.checkbox.onChanged = SaveTooltipMode
-    yOff = yOff + 52
-
-    -- The interface style (issue #122): the picker, where the client draws more than one.
-    yOff = AmazingHub.Style:BuildPicker(content, yOff)
-
-    -- The game's own font instead of AmazingHub's (issue #57), for the whole account (see
-    -- ApplyFont). Text is set when it is drawn, so the change shows after a reload.
-    local fontCb = UI:CreateCheckbox(content, L["Use the game's font"], 18)
-    fontCb:SetPoint("TOPLEFT", 8, -yOff)
-    fontCb.checkbox:SetChecked(AmazingHubDB.font == "game" or AmazingHub.GameFontOnly or AmazingHub.Style.gameFont)
-    fontCb.checkbox.onChanged = function(_, checked)
-        AmazingHubDB.font = checked and "game" or nil
-    end
-    local fontReload = UI:CreateButton(content, L["Reload to apply"], 130, 22)
-    fontReload:SetPoint("TOPLEFT", 28, -(yOff + 26))
-    fontReload:SetScript("OnClick", function() ReloadUI() end)
-    -- A Korean or Chinese client always uses it: AmazingHub's fonts cannot draw the language (#103).
-    if AmazingHub.GameFontOnly or AmazingHub.Style.gameFont then
-        fontCb.checkbox:Disable()
-        fontReload:Hide()
-    end
-    yOff = yOff + 56
-
-    local digestCb = UI:CreateCheckbox(content, L["Show login digest"], 18)
-    digestCb:SetPoint("TOPLEFT", 8, -yOff)
-    digestCb.checkbox:SetChecked(not (AmazingHub.db.digest and AmazingHub.db.digest.enabled == false))
-    digestCb.checkbox.onChanged = function(_, checked)
-        AmazingHub.db.digest = AmazingHub.db.digest or {}
-        AmazingHub.db.digest.enabled = checked and true or false
-    end
-    yOff = yOff + 30
-
-    -- WoW: Forever's guild feed on the guild website (issue #205): the member's own choice.
-    if AmazingHub.Journal then
-        local feedCb = UI:CreateCheckbox(content, L["Don't name me in Discord posts"], 18)
-        feedCb:SetPoint("TOPLEFT", 8, -yOff)
-        feedCb.checkbox:SetChecked(AmazingHub.Journal:IsOptedOut())
-        feedCb.checkbox.onChanged = function(_, checked) AmazingHub.Journal:SetOptedOut(checked) end
-        yOff = yOff + 30
-    end
-
-    local welcomeBtn = UI:CreateButton(content, L["Show welcome again"], 160, 24)
-    welcomeBtn:SetPoint("TOPLEFT", 8, -yOff)
-    welcomeBtn:SetScript("OnClick", function()
-        if AmazingHub.ShowOnboarding then AmazingHub:ShowOnboarding() end
-    end)
-    local welcomeNote = UI:CreateText(content, L["Replay the first-run intro"], 9, C.silver.r, C.silver.g, C.silver.b)
-    welcomeNote:SetPoint("LEFT", welcomeBtn, "RIGHT", 10, 0)
-    yOff = yOff + 34
-
-    --------------------------------------------------------------------
-    -- CHAT (guild/officer chat annotations — a personal display
-    -- preference, not officer-only; lives in Modules/ChatTweaks.lua)
-    --------------------------------------------------------------------
-    local chatTitle = UI:CreateHeaderText(content, L["CHAT"], 12)
-    chatTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 24
-
-    local chatCb = UI:CreateCheckbox(content, L["Annotate guild chat (class icon, level, alt tag)"], 18)
-    chatCb:SetPoint("TOPLEFT", 8, -yOff)
-    chatCb.checkbox:SetChecked(AmazingHub.db.chatTweaks and AmazingHub.db.chatTweaks.enabled or false)
-    chatCb.checkbox.onChanged = function(_, checked)
-        if AmazingHub.db.chatTweaks then
-            AmazingHub.db.chatTweaks.enabled = checked and true or false
-        end
-    end
-    yOff = yOff + 26
-
-    local classIconCb = UI:CreateCheckbox(content, L["Class icon"], 16)
-    classIconCb:SetPoint("TOPLEFT", 28, -yOff)
-    classIconCb.checkbox:SetChecked(AmazingHub.db.chatTweaks and AmazingHub.db.chatTweaks.classIcon ~= false)
-    classIconCb.checkbox.onChanged = function(_, checked)
-        if AmazingHub.db.chatTweaks then
-            AmazingHub.db.chatTweaks.classIcon = checked and true or false
-        end
-    end
-    yOff = yOff + 22
-
-    local levelCb = UI:CreateCheckbox(content, L["Level"], 16)
-    levelCb:SetPoint("TOPLEFT", 28, -yOff)
-    levelCb.checkbox:SetChecked(AmazingHub.db.chatTweaks and AmazingHub.db.chatTweaks.level ~= false)
-    levelCb.checkbox.onChanged = function(_, checked)
-        if AmazingHub.db.chatTweaks then
-            AmazingHub.db.chatTweaks.level = checked and true or false
-        end
-    end
-    yOff = yOff + 22
-
-    local altTagCb = UI:CreateCheckbox(content, L["Alt tag"], 16)
-    altTagCb:SetPoint("TOPLEFT", 28, -yOff)
-    altTagCb.checkbox:SetChecked(AmazingHub.db.chatTweaks and AmazingHub.db.chatTweaks.altTag ~= false)
-    altTagCb.checkbox.onChanged = function(_, checked)
-        if AmazingHub.db.chatTweaks then
-            AmazingHub.db.chatTweaks.altTag = checked and true or false
-        end
-    end
-    yOff = yOff + 22
-
-    -- Guild Roster Manager's tag (#269).
-    local altShortCb = UI:CreateCheckbox(content, L["Short tag: [M] on a main, [Main] on an alt"], 16)
-    altShortCb:SetPoint("TOPLEFT", 48, -yOff)
-    altShortCb.checkbox:SetChecked(AmazingHub.db.chatTweaks and AmazingHub.db.chatTweaks.altShort or false)
-    altShortCb.checkbox.onChanged = function(_, checked)
-        if AmazingHub.db.chatTweaks then
-            AmazingHub.db.chatTweaks.altShort = checked and true or false
-        end
-    end
-    yOff = yOff + 26
-    if AmazingHub.ChatTag then yOff = AmazingHub.ChatTag.BuildSettings(content, yOff) end -- Amazing Hub
-
-    --------------------------------------------------------------------
-    -- MENTIONS & ALERTS (issue #59): what /amazing mentions and /amazing avail notify set.
-    -- Personal, never synced.
-    --------------------------------------------------------------------
-    local mcfg = AmazingHub.db.mentions
-    if mcfg then
-        local mTitle = UI:CreateHeaderText(content, L["MENTIONS & ALERTS"], 12)
-        mTitle:SetPoint("TOPLEFT", 0, -yOff)
-        yOff = yOff + 24
-
-        local function MentionCheck(label, key, indent, size)
-            local cb = UI:CreateCheckbox(content, label, size)
-            cb:SetPoint("TOPLEFT", indent, -yOff)
-            cb.checkbox:SetChecked(mcfg[key] and true or false)
-            cb.checkbox.onChanged = function(_, checked) mcfg[key] = checked and true or false end
-            yOff = yOff + (size == 18 and 26 or 22)
-        end
-        MentionCheck(L["Alert me when my name or a watch-word comes up in chat"], "enabled", 8, 18)
-        MentionCheck(L["My own name"], "ownName", 28, 16)
-        MentionCheck(L["Guild chat"], "guild", 28, 16)
-        MentionCheck(L["Officer chat"], "officer", 28, 16)
-        MentionCheck(L["When somebody calls the officers in guild chat (officers only)"], "officerCall", 28, 16)
-        MentionCheck(L["Play a sound"], "sound", 28, 16)
-        yOff = yOff + 4
-
-        local wLabel = UI:CreateText(content, L["Watch-words:"], 11, C.white.r, C.white.g, C.white.b)
-        wLabel:SetPoint("TOPLEFT", 28, -yOff)
-        local wBox = CreateFrame("EditBox", nil, content, "BackdropTemplate")
-        wBox:SetSize(160, 22)
-        wBox:SetPoint("LEFT", wLabel, "RIGHT", 10, 0)
-        wBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-        wBox:SetBackdropColor(C.well.r, C.well.g, C.well.b, 1)
-        wBox:SetBackdropBorderColor(C.line.r, C.line.g, C.line.b, 1)
-        AmazingHub:ApplyFont(wBox, 11)
-        wBox:SetTextColor(C.text.r, C.text.g, C.text.b)
-        wBox:SetMaxLetters(40)
-        wBox:SetAutoFocus(false)
-        wBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-        yOff = yOff + 30
-
-        -- One chip per watch-word; clicking a chip removes it.
-        local WORD_MAX, WORD_PER_ROW = 9, 3
-        local wordBtns = {}
-        local moreText = UI:CreateText(content, "", 9, C.silver.r, C.silver.g, C.silver.b)
-        local function refreshWords()
-            local words = mcfg.watchWords or {}
-            for i = 1, WORD_MAX do
-                local b, w = wordBtns[i], words[i]
-                if w then
-                    b._word = w
-                    UI:SetChipText(b, w, 130)
-                    b:Show()
-                else
-                    b:Hide()
-                end
-            end
-            moreText:SetText(#words > WORD_MAX and string.format(L["+%d more (/amazing mentions list)"], #words - WORD_MAX) or "")
-        end
-        for i = 1, WORD_MAX do
-            local b = UI:CreateButton(content, "", 130, 20)
-            b:SetPoint("TOPLEFT", 28 + ((i - 1) % WORD_PER_ROW) * 136, -(yOff + math.floor((i - 1) / WORD_PER_ROW) * 24))
-            b:SetScript("OnClick", function(self)
-                AmazingHub.Mentions:_RemoveWatchWord(mcfg.watchWords, self._word)
-                refreshWords()
-            end)
-            wordBtns[i] = b
-        end
-        yOff = yOff + math.ceil(WORD_MAX / WORD_PER_ROW) * 24
-        moreText:SetPoint("TOPLEFT", 28, -yOff)
-        UI:AttachSaveButton(wBox, function(box)
-            mcfg.watchWords = mcfg.watchWords or {}
-            local status = AmazingHub.Mentions:_AddWatchWord(mcfg.watchWords, box:GetText())
-            if status == "ok" then
-                box:SetText("")
-                refreshWords()
-            elseif status == "short" then
-                AmazingHub:Print(L["Watch-words must be at least 3 characters."])
-            else
-                AmazingHub:Print(L["Already watching: |cffFFFFFF"] .. strtrim(box:GetText()):lower() .. "|r")
-            end
-        end, { text = L["Add"] })
-        local wHint = UI:CreateText(content, L["Click a word to remove it."], 9, C.silver.r, C.silver.g, C.silver.b)
-        wHint:SetPoint("LEFT", wBox.saveButton, "RIGHT", 8, 0)
-        refreshWords()
-        yOff = yOff + 18
-
-        local logBtn = UI:CreateButton(content, L["Recent mentions"], 150, 22)
-        logBtn:SetPoint("TOPLEFT", 28, -yOff)
-        logBtn:SetScript("OnClick", function() AmazingHub.Mentions:PrintLog() end)
-        local clearBtn = UI:CreateButton(content, L["Clear watch-words"], 150, 22)
-        clearBtn:SetPoint("LEFT", logBtn, "RIGHT", 8, 0)
-        clearBtn:SetScript("OnClick", function()
-            StaticPopupDialogs["AMAZINGHUB_CLEAR_WORDS"] = StaticPopupDialogs["AMAZINGHUB_CLEAR_WORDS"] or {
-                text = L["Clear every watch-word?"], button1 = L["Clear watch-words"], button2 = L["Cancel"],
-                OnAccept = function(self)
-                    AmazingHub.Mentions:HandleCommand({ "clearwords" })
-                    if self and self.data and self.data.after then self.data.after() end
-                end,
-                timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
-            }
-            StaticPopup_Show("AMAZINGHUB_CLEAR_WORDS", nil, nil, { after = refreshWords })
-        end)
-        yOff = yOff + 28
-    end
-
-    if AmazingHub.db.lfgPrefs then
-        local lfgCb = UI:CreateCheckbox(content, L["Tell me when a guildmate posts on the LFG board"], 18)
-        lfgCb:SetPoint("TOPLEFT", 8, -yOff)
-        lfgCb.checkbox:SetChecked(AmazingHub.db.lfgPrefs.notify and true or false)
-        lfgCb.checkbox.onChanged = function(_, checked) AmazingHub.db.lfgPrefs.notify = checked and true or false end
-        yOff = yOff + 30
-    end
-    end -- cat == "general"
-
-    if isOfficer and cat == "loot" then
-    --------------------------------------------------------------------
-    -- LOOT SYSTEM (officer) — how the guild distributes loot
-    --------------------------------------------------------------------
-    local lsTitle = UI:CreateHeaderText(content, L["LOOT SYSTEM"], 12)
-    lsTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 20
-
-    -- Retail has no loot master: the system says who awards an item a guildmate offers (issue #185).
-    local lsDesc = UI:CreateText(content, AmazingHub.Client.isRetail
-        and L["Choose how your guild hands out loot: who awards an item a guildmate offers, and what an award costs."]
-        or L["Choose how your guild distributes loot. Sets the default Loot Master flow."], 9, C.silver.r, C.silver.g, C.silver.b)
-    lsDesc:SetPoint("TOPLEFT", 8, -yOff)
-    lsDesc:SetWidth(content:GetWidth() - 20)
-    yOff = yOff + 18
-
-    local curSys = AmazingHub:GetLootSystem()
-    local lx = 8
-    for _, sys in ipairs(AmazingHub:LootSystemsHere()) do
-        local label = AmazingHub:LootSystemLabel(sys)
-        local b = UI:CreateButton(content, label, 130, 24)
-        b:SetPoint("TOPLEFT", lx, -yOff)
-        if sys.key == curSys then
-            b:SetBaseColor(C.accent.r * 0.34, C.accent.g * 0.34, C.accent.b * 0.34, 0.95)
-            b.label:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-        end
-        b:SetScript("OnClick", function()
-            AmazingHub:SetLootSystem(sys.key)
-            AmazingHub:Print(string.format(L["Loot system set to %s."], label))
-            AmazingHub:RefreshSettingsPanel(content)
-        end)
-        lx = lx + b:GetWidth() + 6  -- a button its label grew pushes the next one (issue #28)
-    end
-    yOff = yOff + 34
-
-    -- "External / Off" explainer — this is the full loot-system kill switch.
-    if curSys == "external" then
-        local note = UI:CreateText(content, L["AmazingHub won't touch loot: no roll popups, wishlists, or history. Pick this if your guild distributes loot with Gargul, RCLootCouncil, etc."], 9, C.silver.r, C.silver.g, C.silver.b)
-        note:SetPoint("TOPLEFT", 8, -yOff)
-        note:SetWidth(content:GetWidth() - 20)
-        note:SetJustifyH("LEFT")
-        yOff = yOff + 28
-    elseif AmazingHub.Client.isRetail then
-        -- Who awards an offered item on retail (issue #185).
-        local note = UI:CreateText(content, curSys == "rolls"
-            and L["Free roll: whoever received the item awards it to the best answer, Need before Greed, then the roll. Officers may award too."]
-            or L["An officer awards an item a guildmate offers; whoever holds it then trades it to the winner."],
-            9, C.silver.r, C.silver.g, C.silver.b)
-        note:SetPoint("TOPLEFT", 8, -yOff)
-        note:SetWidth(content:GetWidth() - 20)
-        note:SetJustifyH("LEFT")
-        yOff = yOff + 28
-    end
-
-    -- DKP/Points configuration appears when the DKP system is selected
-    if curSys == "dkp" and AmazingHub.Points then
-        local pcfg = AmazingHub.Points:GetDB().config
-        local function numRow(labelText, key, hint)
-            local lbl = UI:CreateText(content, labelText, 11, C.white.r, C.white.g, C.white.b)
-            lbl:SetPoint("TOPLEFT", 16, -yOff)
-            local box = CreateFrame("EditBox", nil, content, "BackdropTemplate")
-            box:SetSize(60, 22)
-            box:SetPoint("TOPLEFT", 220, -yOff + 2)
-            box:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-            box:SetBackdropColor(0.05, 0.05, 0.066, 1)
-            box:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 0.5)
-            AmazingHub:ApplyFont(box, 11)
-            box:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-            box:SetAutoFocus(false)
-            box:SetNumeric(true)
-            box:SetMaxLetters(6)
-            box:SetText(tostring(pcfg[key] or 0))
-            box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-            UI:AttachSaveButton(box, function(b2)
-                pcfg[key] = tonumber(b2:GetText()) or pcfg[key] or 0
-                AmazingHub.Points:BroadcastSnapshot()
-            end)
-            if hint then
-                local h = UI:CreateText(content, hint, 9, C.silver.r, C.silver.g, C.silver.b)
-                h:SetPoint("TOPLEFT", 360, -yOff)
-                h:SetWidth(280)
-            end
-            yOff = yOff + 28
-        end
-
-        -- Mode: DKP / EPGP / Loot Council
-        local modeLbl = UI:CreateText(content, L["Mode:"], 11, C.white.r, C.white.g, C.white.b)
-        modeLbl:SetPoint("TOPLEFT", 16, -yOff)
-        local MODES = { { k = "dkp", n = "DKP" }, { k = "epgp", n = "EPGP" }, { k = "council", n = L["Loot Council"] } }
-        local mx = 90
-        for _, m in ipairs(MODES) do
-            local mb = UI:CreateButton(content, m.n, 90, 22)
-            mb:SetPoint("TOPLEFT", mx, -yOff + 2)
-            if AmazingHub.Points:GetMode() == m.k then
-                mb:SetBaseColor(C.accent.r * 0.34, C.accent.g * 0.34, C.accent.b * 0.34, 0.95)
-                mb.label:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-            end
-            mb:SetScript("OnClick", function()
-                AmazingHub.Points:SetMode(m.k)
-                AmazingHub:RefreshSettingsPanel(content)
-            end)
-            mx = mx + mb:GetWidth() + 4  -- a button its label grew pushes the next one (issue #28)
-        end
-        yOff = yOff + 30
-
-        numRow(L["Points per boss:"], "bossAward", L["Awarded to raiders on each boss kill"])
-        numRow(L["Weekly decay (%):"], "decayPct", L["Use the DKP window's Decay button to apply"])
-        numRow(L["Starting points:"], "startingPoints", L["Default for a player's first entry"])
-        numRow(L["Cost per item:"], "itemCost", AmazingHub.Client.isRetail
-            and L["Charged to the winner when the trade of an award is recorded (0 = off)"]
-            or L["Charged to the winner when the ML awards (0 = off)"])
-
-        local autoCb = UI:CreateCheckbox(content, L["Auto-award on boss kill (raid leader only)"], 18)
-        autoCb:SetPoint("TOPLEFT", 12, -yOff)
-        autoCb.checkbox:SetChecked(pcfg.autoAward and true or false)
-        autoCb.checkbox.onChanged = function(_, checked)
-            pcfg.autoAward = checked and true or false
-            AmazingHub.Points:BroadcastSnapshot()
-        end
-        yOff = yOff + 28
-
-        local openDkp = UI:CreateButton(content, L["Open DKP Window"], 150, 22)
-        openDkp:SetPoint("TOPLEFT", 12, -yOff)
-        openDkp:SetScript("OnClick", function() AmazingHub:ShowPointsFrame() end)
-        yOff = yOff + 30
-    end
-
-    local sepLS = UI:CreateSeparator(content)
-    sepLS:SetPoint("TOPLEFT", 0, -yOff)
-    sepLS:SetPoint("TOPRIGHT", -10, -yOff)
-    yOff = yOff + 12
-
-    -- The loot master's settings, where there is one: not on retail (ADR-0026, issue #185).
-    if AmazingHub.LootMaster then
-    --------------------------------------------------------------------
-    -- LOOT MASTER SETTINGS (officer only)
-    --------------------------------------------------------------------
-    local lmTitle = UI:CreateHeaderText(content, L["LOOT MASTER"], 12)
-    lmTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 22
-
-    -- Roll duration
-    local durLabel = UI:CreateText(content, L["Roll Duration (seconds):"], 11, C.white.r, C.white.g, C.white.b)
-    durLabel:SetPoint("TOPLEFT", 8, -yOff)
-
-    local durBox = CreateFrame("EditBox", nil, content, "BackdropTemplate")
-    durBox:SetSize(60, 22)
-    durBox:SetPoint("LEFT", durLabel, "RIGHT", 10, 0)
-    durBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-    durBox:SetBackdropColor(0.058, 0.058, 0.075, 0.9)
-    durBox:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 0.5)
-    AmazingHub:ApplyFont(durBox, 11)
-    durBox:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-    durBox:SetNumeric(true)
-    durBox:SetMaxLetters(3)
-    durBox:SetAutoFocus(false)
-    local _lmCfg = AmazingHub.LootMaster and AmazingHub.LootMaster:GetCfg() or (AmazingHub.db.lootMaster or {})
-    durBox:SetText(tostring(_lmCfg.rollDuration or 30))
-    local function commitDur(box)
-        local val = tonumber(box:GetText())
-        if val and val >= 5 and val <= 120 then
-            if AmazingHub.LootMaster then
-                AmazingHub.LootMaster:SaveCfgKey("rollDuration", val)
-                AmazingHub.LootMaster.ROLL_DURATION = val
-            end
-            AmazingHub:Print(L["Roll duration set to "] .. val .. "s")
-        else
-            AmazingHub:Print(L["Duration must be between 5 and 120 seconds."])
-            local cur = AmazingHub.LootMaster and AmazingHub.LootMaster:GetCfg() or (AmazingHub.db.lootMaster or {})
-            box:SetText(tostring(cur.rollDuration or 30))
-        end
-    end
-    durBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    UI:AttachSaveButton(durBox, commitDur)
-    yOff = yOff + 30
-
-    -- Auto announce
-    local autoAnn = UI:CreateCheckbox(content, L["Auto-announce loot when ML opens loot window"], 18)
-    autoAnn:SetPoint("TOPLEFT", 8, -yOff)
-    autoAnn.checkbox:SetChecked(_lmCfg.autoAnnounce ~= false)
-    autoAnn.checkbox.onChanged = function(_, checked)
-        if AmazingHub.LootMaster then
-            -- GetChecked() yields true/nil in TBC; store an explicit boolean so
-            -- the per-core cascade can't fall back to the default-true when off.
-            local val = checked and true or false
-            AmazingHub.LootMaster:SaveCfgKey("autoAnnounce", val)
-            AmazingHub.LootMaster.AUTO_ANNOUNCE = val
-        end
-    end
-    yOff = yOff + 28
-
-    -- Wishlist auto-council
-    local tmbCouncil = UI:CreateCheckbox(content, L["Wishlist Auto-Council (check wishlist before rolling)"], 18)
-    tmbCouncil:SetPoint("TOPLEFT", 8, -yOff)
-    tmbCouncil.checkbox:SetChecked(_lmCfg.wishlistOnlyMode or false)
-    tmbCouncil.checkbox.onChanged = function(_, checked)
-        if AmazingHub.LootMaster then
-            AmazingHub.LootMaster:SaveCfgKey("wishlistOnlyMode", checked)
-            AmazingHub.LootMaster.WISHLIST_ONLY_MODE = checked
-        end
-    end
-    yOff = yOff + 28
-
-    --------------------------------------------------------------------
-    -- LOOT DISTRIBUTION SETTINGS (officer only)
-    --------------------------------------------------------------------
-    local ldSep = UI:CreateSeparator(content)
-    ldSep:SetPoint("TOPLEFT", 0, -yOff)
-    ldSep:SetPoint("TOPRIGHT", -10, -yOff)
-    yOff = yOff + 12
-
-    local ldTitle = UI:CreateHeaderText(content, L["LOOT DISTRIBUTION"], 12)
-    ldTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 22
-
-    -- Min attendance for MS roll
-    local minAttLabel = UI:CreateText(content, L["Min. Attendance for MS Roll (%):"], 11, C.white.r, C.white.g, C.white.b)
-    minAttLabel:SetPoint("TOPLEFT", 8, -yOff)
-
-    local minAttBox = CreateFrame("EditBox", nil, content, "BackdropTemplate")
-    minAttBox:SetSize(50, 22)
-    minAttBox:SetPoint("LEFT", minAttLabel, "RIGHT", 10, 0)
-    minAttBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-    minAttBox:SetBackdropColor(0.058, 0.058, 0.075, 0.9)
-    minAttBox:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 0.5)
-    AmazingHub:ApplyFont(minAttBox, 11)
-    minAttBox:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-    minAttBox:SetNumeric(true)
-    minAttBox:SetMaxLetters(3)
-    minAttBox:SetAutoFocus(false)
-    minAttBox:SetText(tostring(_lmCfg.minAttendancePct or 0))
-    local function commitMinAtt(box)
-        local val = math.max(0, math.min(100, tonumber(box:GetText()) or 0))
-        if AmazingHub.LootMaster then AmazingHub.LootMaster:SaveCfgKey("minAttendancePct", val) end
-        AmazingHub:Print(L["Min. MS attendance set to "] .. val .. "%" .. (val == 0 and L[" (disabled)"] or ""))
-    end
-    minAttBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    UI:AttachSaveButton(minAttBox, commitMinAtt)
-
-    local minAttHint = UI:CreateText(content, L["0 = disabled. Below this % MS is auto-downgraded to OS."], 9, C.silver.r, C.silver.g, C.silver.b)
-    minAttHint:SetPoint("LEFT", minAttBox.saveButton, "RIGHT", 8, 0)
-    minAttHint:SetWidth(280)
-    yOff = yOff + 30
-
-    -- Attendance as roll tiebreaker
-    local attTie = UI:CreateCheckbox(content, Prog(L["Use 25-man Attendance as Roll Tiebreaker"]), 18)
-    attTie:SetPoint("TOPLEFT", 8, -yOff)
-    attTie.checkbox:SetChecked(_lmCfg.attTiebreaker ~= false)
-    attTie.checkbox.onChanged = function(_, checked)
-        if AmazingHub.LootMaster then AmazingHub.LootMaster:SaveCfgKey("attTiebreaker", checked) end
-    end
-    yOff = yOff + 28
-
-    -- Penalize recent receivers
-    local recvPen = UI:CreateCheckbox(content, L["Penalize Players Who Received Items This Lockout"], 18)
-    recvPen:SetPoint("TOPLEFT", 8, -yOff)
-    recvPen.checkbox:SetChecked(_lmCfg.recvPenalty ~= false)
-    recvPen.checkbox.onChanged = function(_, checked)
-        if AmazingHub.LootMaster then AmazingHub.LootMaster:SaveCfgKey("recvPenalty", checked) end
-    end
-    yOff = yOff + 28
-
-    -- Disenchanter name
-    local deLabel = UI:CreateText(content, L["Disenchanter:"], 11, C.white.r, C.white.g, C.white.b)
-    deLabel:SetPoint("TOPLEFT", 8, -yOff)
-
-    local deBox = CreateFrame("EditBox", nil, content, "BackdropTemplate")
-    deBox:SetSize(160, 22)
-    deBox:SetPoint("LEFT", deLabel, "RIGHT", 10, 0)
-    deBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-    deBox:SetBackdropColor(C.well.r, C.well.g, C.well.b, 1)
-    deBox:SetBackdropBorderColor(C.line.r, C.line.g, C.line.b, 1)
-    AmazingHub:ApplyFont(deBox, 11)
-    deBox:SetTextColor(C.text.r, C.text.g, C.text.b)
-    deBox:SetMaxLetters(64)
-    deBox:SetAutoFocus(false)
-    deBox:SetText((AmazingHub.LootMaster and AmazingHub.LootMaster:GetDisenchanter()) or "")
-    local function commitDE(box)
-        local name = strtrim(box:GetText())
-        if AmazingHub.LootMaster then AmazingHub.LootMaster:SetDisenchanter(name) end
-        if name ~= "" then
-            AmazingHub:Print(L["Disenchanter set: "] .. "|cff00ff00" .. name .. "|r")
-        else
-            AmazingHub:Print(L["Disenchanter removed."])
-        end
-    end
-    deBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    UI:AttachSaveButton(deBox, commitDE)
-
-    local deHint = UI:CreateText(content, L["Name of the player who receives items for DE"], 9, C.silver.r, C.silver.g, C.silver.b)
-    deHint:SetPoint("LEFT", deBox.saveButton, "RIGHT", 8, 0)
-    deHint:SetWidth(180)
-    yOff = yOff + 30
-
-    -- Rarity threshold: which item quality opens the ML loot window.
-    -- Click to cycle Uncommon -> Rare -> Epic -> Legendary.
-    local thrLabel = UI:CreateText(content, L["Rarity threshold:"], 11, C.white.r, C.white.g, C.white.b)
-    thrLabel:SetPoint("TOPLEFT", 8, -yOff)
-
-    local thrBtn = UI:CreateButton(content, "", 150, 22)
-    thrBtn:SetPoint("LEFT", thrLabel, "RIGHT", 10, 0)
-    local function thrName(q)
-        return (AmazingHub.LootMaster and AmazingHub.LootMaster.THRESHOLD_NAMES and AmazingHub.LootMaster.THRESHOLD_NAMES[q])
-            or tostring(q)
-    end
-    local function refreshThr()
-        local q = (AmazingHub.LootMaster and AmazingHub.LootMaster:GetLootThreshold()) or 3
-        local qc = AmazingHub.QualityColors[q] or C.gold
-        thrBtn.label:SetText(thrName(q))
-        thrBtn.baseLabelColor = { qc.r, qc.g, qc.b }
-        thrBtn.label:SetTextColor(qc.r, qc.g, qc.b)
-    end
-    thrBtn:SetScript("OnClick", function()
-        if not AmazingHub.LootMaster then return end
-        local q = AmazingHub.LootMaster:GetLootThreshold() + 1
-        if q > 5 then q = 2 end
-        AmazingHub.LootMaster:SetLootThreshold(q)
-        refreshThr()
-        AmazingHub:Print(L["Loot threshold: "] .. "|cffffd700" .. thrName(q) .. "|r")
-    end)
-    refreshThr()
-
-    local thrHint = UI:CreateText(content, L["Items of this rarity (or higher) open the ML panel"], 9, C.silver.r, C.silver.g, C.silver.b)
-    thrHint:SetPoint("LEFT", thrBtn, "RIGHT", 8, 0)
-    thrHint:SetWidth(200)
-    yOff = yOff + 30
-
-    yOff = yOff + 8
-    local sep3 = UI:CreateSeparator(content)
-    sep3:SetPoint("TOPLEFT", 0, -yOff)
-    sep3:SetPoint("TOPRIGHT", -10, -yOff)
-    yOff = yOff + 12
-    end -- AmazingHub.LootMaster
-
-    end -- isOfficer and cat == "loot" (Loot settings)
-
-    if cat == "raid" then
-    --------------------------------------------------------------------
-    -- RAID TRACKER SETTINGS
-    --------------------------------------------------------------------
-    local rtTitle = UI:CreateHeaderText(content, L["RAID TRACKER"], 12)
-    rtTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 22
-
-    -- Officer-only: Raid Group Tag
-    if isOfficer then
-        local groupLabel = UI:CreateText(content, L["Raid Group:"], 11, C.white.r, C.white.g, C.white.b)
-        groupLabel:SetPoint("TOPLEFT", 8, -yOff)
-
-        local groupBox = CreateFrame("EditBox", nil, content, "BackdropTemplate")
-        groupBox:SetSize(160, 22)
-        groupBox:SetPoint("LEFT", groupLabel, "RIGHT", 10, 0)
-        groupBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-        groupBox:SetBackdropColor(C.well.r, C.well.g, C.well.b, 1)
-        groupBox:SetBackdropBorderColor(C.line.r, C.line.g, C.line.b, 1)
-        AmazingHub:ApplyFont(groupBox, 11)
-        groupBox:SetTextColor(C.text.r, C.text.g, C.text.b)
-        groupBox:SetMaxLetters(64)
-        groupBox:SetAutoFocus(false)
-        groupBox:SetText(AmazingHub.db.raidTracker and AmazingHub.db.raidTracker.currentGroupTag or "")
-        local function commitGroup(box)
-            local name = strtrim(box:GetText())
-            if AmazingHub.RaidTracker then AmazingHub.RaidTracker:SetGroupTag(name) end
-            if name ~= "" then
-                AmazingHub:Print(L["Raid group set: "] .. "|cff9966FF" .. name .. "|r")
-            else
-                AmazingHub:Print(L["Raid group removed."])
-            end
-        end
-        groupBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-        UI:AttachSaveButton(groupBox, commitGroup)
-
-        local groupHint = UI:CreateText(content, L["Ex: Core 1, Core 2"], 9, C.silver.r, C.silver.g, C.silver.b)
-        groupHint:SetPoint("LEFT", groupBox.saveButton, "RIGHT", 8, 0)
-        groupHint:SetWidth(180)
-        yOff = yOff + 30
-    end -- isOfficer (Raid group tag)
-
-    -- The guild's weights (issue #55): what a raid outside any core scores with, and what a
-    -- core takes when it set none of its own (Raids > Cores). 0 turns one off.
-    local penaltyInfo = UI:CreateText(content, L["Attendance penalties (base score = 100, 0 turns one off):"], 11, C.white.r, C.white.g, C.white.b)
-    penaltyInfo:SetPoint("TOPLEFT", 8, -yOff)
-    yOff = yOff + 18
-    local penaltyScope = UI:CreateText(content, L["For raids outside a core, and for every core that set none of its own."], 9, C.silver.r, C.silver.g, C.silver.b)
-    penaltyScope:SetPoint("TOPLEFT", 8, -yOff)
-    yOff = yOff + 18
-
-    local penalties = {
-        { key = "LATE",        label = L["Late (missed first snapshot)"] },
-        { key = "LEFT_EARLY",  label = L["Left Early (missed last snapshot)"] },
-    }
-    -- Consumables are checked only where the checker exists (TBC, ADR-0014; issue #184).
-    if AmazingHub.ConsumableChecker then
-        penalties[#penalties + 1] = { key = "NO_CONSUMES", label = L["No Consumables (<50% snapshots)"] }
-    end
-    local pen = AmazingHub.RaidTracker:GetPenalties("")
-    local canEdit = isOfficer and AmazingHub.CoreManager
-    local penBoxes = {}
-    for _, p in ipairs(penalties) do
-        if canEdit then
-            local box = CreateFrame("EditBox", nil, content, "BackdropTemplate")
-            box:SetSize(44, 20)
-            box:SetPoint("TOPLEFT", 16, -yOff)
-            box:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-            box:SetBackdropColor(C.well.r, C.well.g, C.well.b, 1)
-            box:SetBackdropBorderColor(C.line.r, C.line.g, C.line.b, 1)
-            AmazingHub:ApplyFont(box, 11)
-            box:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-            box:SetNumeric(true)
-            box:SetMaxLetters(3)
-            box:SetAutoFocus(false)
-            box:SetText(tostring(pen[p.key]))
-            box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-            UI:AttachSaveButton(box, function(b)
-                local val = tonumber(b:GetText())
-                if not val then   -- an empty box is a slip, not "off": 0 is typed
-                    b:SetText(tostring(AmazingHub.RaidTracker:GetPenalties("")[p.key]))
-                    return
-                end
-                AmazingHub.CoreManager:SetPenalty(p.key, val, "")
-                AmazingHub.RaidTracker:RebuildAttendanceFromSessions()
-                b:SetText(tostring(AmazingHub.RaidTracker:GetPenalties("")[p.key]))
-                AmazingHub:Print(L["Attendance penalty saved."])
-            end)
-            local lbl = UI:CreateText(content, p.label, 10, C.silver.r, C.silver.g, C.silver.b)
-            lbl:SetPoint("LEFT", box.saveButton, "RIGHT", 8, 0)
-            penBoxes[p.key] = box
-            yOff = yOff + 24
-        else
-            local shown = pen[p.key] > 0 and ("-" .. pen[p.key]) or "0"
-            local pt = UI:CreateText(content, "  " .. shown .. "  " .. p.label, 10, C.silver.r, C.silver.g, C.silver.b)
-            pt:SetPoint("TOPLEFT", 16, -yOff)
-            yOff = yOff + 16
-        end
-    end
-    if canEdit then
-        local offBtn = UI:CreateButton(content, L["Turn penalties off"], 160, 22)
-        offBtn:SetPoint("TOPLEFT", 16, -yOff)
-        offBtn:SetScript("OnClick", function()
-            for _, p in ipairs(penalties) do
-                AmazingHub.CoreManager:SetPenalty(p.key, 0, "")
-                penBoxes[p.key]:SetText("0")
-            end
-            AmazingHub.RaidTracker:RebuildAttendanceFromSessions()
-            AmazingHub:Print(L["Attendance penalties are off."])
-        end)
-        yOff = yOff + 28
-    end
-
-    yOff = yOff + 8
-    end -- cat == "raid"
-
-    if isOfficer and cat == "officer" then
-    --------------------------------------------------------------------
-    -- MAINTENANCE (officer only)
-    --------------------------------------------------------------------
-    local mtTitle = UI:CreateHeaderText(content, L["MAINTENANCE"], 12)
-    mtTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 22
-
-    local errBtn = UI:CreateButton(content, L["View Errors"], 120, 24)
-    errBtn:SetPoint("TOPLEFT", 8, -yOff)
-    errBtn:SetScript("OnClick", function() AmazingHub:ShowErrors() end)
-
-    local dbgCb = UI:CreateCheckbox(content, L["Debug logging"], 18)
-    dbgCb:SetPoint("LEFT", errBtn, "RIGHT", 14, 0)
-    dbgCb.checkbox:SetChecked((AmazingHub.Logger and AmazingHub.Logger.debug) or false)
-    dbgCb.checkbox.onChanged = function(_, checked)
-        if AmazingHub.Logger then AmazingHub.Logger.debug = checked and true or false end
-    end
-    yOff = yOff + 34
-
-    local sepMaint = UI:CreateSeparator(content)
-    sepMaint:SetPoint("TOPLEFT", 0, -yOff)
-    sepMaint:SetPoint("TOPRIGHT", -10, -yOff)
-    yOff = yOff + 12
-
-    --------------------------------------------------------------------
-    -- TEST FUNCTIONS (officer only)
-    --------------------------------------------------------------------
-    local testTitle = UI:CreateHeaderText(content, L["TEST FUNCTIONS"], 12)
-    testTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 6
-
-    local testNote = UI:CreateText(content, L["Simulate features to preview how they work. No data is sent to raid or guild chat."], 10, C.silver.r, C.silver.g, C.silver.b)
-    testNote:SetPoint("TOPLEFT", 0, -yOff)
-    testNote:SetWidth(content:GetWidth() - 20)
-    yOff = yOff + 22
-
-    -- Test: Consumable Check. TBC content: only where the checker exists (ADR-0014).
-    if AmazingHub.ConsumableChecker then
-        local testCons = UI:CreateButton(content, L["Test Consumable Check"], 200, 26)
-        testCons:SetPoint("TOPLEFT", 8, -yOff)
-        testCons:SetScript("OnClick", function()
-            local results = AmazingHub.ConsumableChecker:CheckRaid()
-            if results then
-                local missing = AmazingHub.ConsumableChecker:GetMissingCount(results)
-                AmazingHub:Print(L["Consumable Check Test: "] .. missing .. L[" players missing buffs."])
-                AmazingHub:Print(L["Use |cffFFD700/amazinghub consreport|r to see details in raid chat."])
-            else
-                AmazingHub:Print(L["Consumable check returned no results (not in a raid?)."])
-            end
-        end)
-        local testConsDesc = UI:CreateText(content, L["Scans your current raid for missing consumables"], 9, C.silver.r, C.silver.g, C.silver.b)
-        testConsDesc:SetPoint("LEFT", testCons, "RIGHT", 10, 0)
-        yOff = yOff + 32
-    end
-
-    -- The Loot Master's tests: only where it exists, never on retail (ADR-0026).
-    if AmazingHub.LootMaster then
-        -- Test: Loot Master Roll Popup
-        local testLM = UI:CreateButton(content, L["Test Roll Popup"], 200, 26)
-        testLM:SetPoint("TOPLEFT", 8, -yOff)
-        testLM:SetScript("OnClick", function()
-            if AmazingHub.LootMaster then
-                AmazingHub.LootMaster.testMode = true
-                -- Simulate a roll popup with a fake item
-                AmazingHub.LootMaster:ShowRollPopup(
-                    "|cffff8000|Hitem:32837::::::::70:::::|h[Warglaive of Azzinoth]|h|r",
-                    15,
-                    32837
-                )
-                AmazingHub:Print(L["Test roll popup shown (15s timer). Try MS/OS/Pass buttons."])
-            else
-                AmazingHub:Print(L["|cffFF4444Loot Master module is disabled.|r"])
-            end
-        end)
-        local testLMDesc = UI:CreateText(content, L["Shows the raider roll popup with a sample item"], 9, C.silver.r, C.silver.g, C.silver.b)
-        testLMDesc:SetPoint("LEFT", testLM, "RIGHT", 10, 0)
-        yOff = yOff + 32
-
-        -- Test: Wishlist Council Preview
-        local testCouncil = UI:CreateButton(content, L["Test Wishlist Council"], 200, 26)
-        testCouncil:SetPoint("TOPLEFT", 8, -yOff)
-        testCouncil:SetScript("OnClick", function()
-            if AmazingHub.LootMaster then
-                AmazingHub.LootMaster.testMode = true
-                -- Show council frame with fake data
-                local fakeWinner = { name = AmazingHub.Compat.PlayerName(), class = select(2, UnitClass("player")), wishlistType = "wishlist", order = 1 }
-                local fakeCandidates = {
-                    fakeWinner,
-                    { name = "TestPlayer", class = "WARRIOR", wishlistType = "wishlist", order = 2 },
-                    { name = "AnotherOne", class = "MAGE", wishlistType = "wishlist", order = 3 },
-                }
-                AmazingHub.LootMaster.activeLoot = {
-                    link = "|cffff8000|Hitem:32837::::::::70:::::|h[Warglaive of Azzinoth]|h|r",
-                    slot = nil,
-                    itemId = 32837,
-                }
-                AmazingHub.LootMaster:ShowCouncilResultFrame(
-                    fakeWinner,
-                    "|cffff8000|Hitem:32837::::::::70:::::|h[Warglaive of Azzinoth]|h|r",
-                    nil,
-                    fakeCandidates
-                )
-                AmazingHub:Print(L["Test council frame shown. Award button won't work (no loot slot)."])
-            else
-                AmazingHub:Print(L["|cffFF4444Loot Master module is disabled.|r"])
-            end
-        end)
-        local testCouncilDesc = UI:CreateText(content, L["Shows the ML council result frame with sample data"], 9, C.silver.r, C.silver.g, C.silver.b)
-        testCouncilDesc:SetPoint("LEFT", testCouncil, "RIGHT", 10, 0)
-        yOff = yOff + 32
-
-        -- Test: ML Roll Tracker
-        local testRollFrame = UI:CreateButton(content, L["Test Roll Tracker"], 200, 26)
-        testRollFrame:SetPoint("TOPLEFT", 8, -yOff)
-        testRollFrame:SetScript("OnClick", function()
-            if AmazingHub.LootMaster then
-                AmazingHub.LootMaster.testMode = true
-                AmazingHub.LootMaster.activeLoot = {
-                    link = "|cffa335ee|Hitem:30110::::::::70:::::|h[Tsunami Talisman]|h|r",
-                    slot = nil,
-                    itemId = 30110,
-                    startTime = GetServerTime(),
-                    endTime = GetServerTime() + 30,
-                }
-                AmazingHub.LootMaster.rolls = {
-                    ["TestWarrior-Realm"] = { name = "TestWarrior", class = "WARRIOR", rollType = "MS", roll = 87, prioOrder = 1 },
-                    ["TestMage-Realm"] = { name = "TestMage", class = "MAGE", rollType = "MS", roll = 54, wishlist = { order = 2 } },
-                    ["TestPriest-Realm"] = { name = "TestPriest", class = "PRIEST", rollType = "OS", roll = 92 },
-                    ["TestRogue-Realm"] = { name = "TestRogue", class = "ROGUE", rollType = "PASS", roll = 0 },
-                }
-                AmazingHub.LootMaster:ShowRollFrame()
-                AmazingHub:Print(L["Test roll tracker shown with sample rolls."])
-            else
-                AmazingHub:Print(L["|cffFF4444Loot Master module is disabled.|r"])
-            end
-        end)
-        local testRFDesc = UI:CreateText(content, L["Shows the ML roll tracker with sample roll data"], 9, C.silver.r, C.silver.g, C.silver.b)
-        testRFDesc:SetPoint("LEFT", testRollFrame, "RIGHT", 10, 0)
-        yOff = yOff + 32
-    end
-
-    -- Test: Raid Tracker Status
-    local testRT = UI:CreateButton(content, L["Test Raid Status"], 200, 26)
-    testRT:SetPoint("TOPLEFT", 8, -yOff)
-    testRT:SetScript("OnClick", function()
-        if AmazingHub.RaidTracker then
-            local total = AmazingHub.RaidTracker:GetTotalSessions()
-            local tracking = AmazingHub.RaidTracker.trackingActive
-            AmazingHub:Print(string.format(L["Raid Tracker: %d sessions recorded. Currently %s."],
-                total, tracking and "|cff00ff00" .. L["tracking"] .. "|r" or "|cffFF4444" .. L["not tracking"] .. "|r"))
-            if AmazingHub.RaidTracker.currentRaid then
-                AmazingHub:Print(L["Active raid: "] .. (AmazingHub.RaidTracker.currentRaid.name or L["Unknown"]))
-            end
-        else
-            AmazingHub:Print(L["|cffFF4444Raid Tracker module is disabled.|r"])
-        end
-    end)
-    local testRTDesc = UI:CreateText(content, L["Shows current raid tracking status and session count"], 9, C.silver.r, C.silver.g, C.silver.b)
-    testRTDesc:SetPoint("LEFT", testRT, "RIGHT", 10, 0)
-    yOff = yOff + 32
-
-    if AmazingHub.LootMaster then  -- not on retail (ADR-0026)
-        -- Test: ML Loot Frame
-        local testLootFrame = UI:CreateButton(content, L["Test Loot Frame"], 200, 26)
-        testLootFrame:SetPoint("TOPLEFT", 8, -yOff)
-        testLootFrame:SetScript("OnClick", function()
-            if AmazingHub.LootMaster then
-                AmazingHub.LootMaster.testMode = true
-                local fakeItems = {
-                    { slot = 1, link = "|cffa335ee|Hitem:30110::::::::70:::::|h[Tsunami Talisman]|h|r",   name = "Tsunami Talisman",    quality = 4 },
-                    { slot = 2, link = "|cffff8000|Hitem:32837::::::::70:::::|h[Warglaive of Azzinoth]|h|r", name = "Warglaive of Azzinoth", quality = 5 },
-                    { slot = 3, link = "|cffa335ee|Hitem:30019::::::::70:::::|h[Ring of Endless Coils]|h|r", name = "Ring of Endless Coils", quality = 4 },
-                }
-                AmazingHub.LootMaster:ShowLootFrame(fakeItems)
-                AmazingHub:Print(L["Test loot frame shown with 3 sample items."])
-            else
-                AmazingHub:Print(L["|cffFF4444Loot Master module is disabled.|r"])
-            end
-        end)
-        local testLFDesc = UI:CreateText(content, L["Opens the ML loot frame with sample items"], 9, C.silver.r, C.silver.g, C.silver.b)
-        testLFDesc:SetPoint("LEFT", testLootFrame, "RIGHT", 10, 0)
-        yOff = yOff + 32
-    end
-
-    -- Test: Export Attendance
-    local testExport = UI:CreateButton(content, L["Test Attendance Export"], 200, 26)
-    testExport:SetPoint("TOPLEFT", 8, -yOff)
-    testExport:SetScript("OnClick", function()
-        if AmazingHub.RaidTracker then
-            local json, err = AmazingHub.RaidTracker:ExportForTMB()
-            if json then
-                AmazingHub:ShowExportPopup(L["Attendance Export"], json)
-            else
-                AmazingHub:Print(L["|cffFF4444Export failed:|r "] .. (err or L["No attendance data"]))
-            end
-        else
-            AmazingHub:Print(L["|cffFF4444Raid Tracker module is disabled.|r"])
-        end
-    end)
-    local testExpDesc = UI:CreateText(content, L["Opens the attendance export window"], 9, C.silver.r, C.silver.g, C.silver.b)
-    testExpDesc:SetPoint("LEFT", testExport, "RIGHT", 10, 0)
-    yOff = yOff + 32
-
-    end -- isOfficer and cat == "officer" (Maintenance + Test Functions)
-
-    if isOfficer and cat == "officer" then
-    yOff = yOff + 8
-    local sep5 = UI:CreateSeparator(content)
-    sep5:SetPoint("TOPLEFT", 0, -yOff)
-    sep5:SetPoint("TOPRIGHT", -10, -yOff)
-    yOff = yOff + 12
-    --------------------------------------------------------------------
-    -- WoW: Forever: the item level a 60 needs to be ready without a warning (issue #206),
-    -- the guild's, like the officer ranks below.
-    --------------------------------------------------------------------
-    if not AmazingHub.Client.isAnniversary and not AmazingHub.Client.isRetail then
-        local readyTitle = UI:CreateHeaderText(content, L["Readiness"], 12)
-        readyTitle:SetPoint("TOPLEFT", 0, -yOff)
-        yOff = yOff + 22
-        local minLabel = UI:CreateText(content, L["Minimum item level for a level 60:"], 11, C.white.r, C.white.g, C.white.b)
-        minLabel:SetPoint("TOPLEFT", 8, -yOff)
-        local minBox = CreateFrame("EditBox", nil, content, "BackdropTemplate")
-        minBox:SetSize(50, 22)
-        minBox:SetPoint("LEFT", minLabel, "RIGHT", 10, 0)
-        minBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-        minBox:SetBackdropColor(0.058, 0.058, 0.075, 0.9)
-        minBox:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 0.5)
-        AmazingHub:ApplyFont(minBox, 11)
-        minBox:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-        minBox:SetNumeric(true)
-        minBox:SetMaxLetters(3)
-        minBox:SetAutoFocus(false)
-        minBox:SetText(tostring(AmazingHub.Readiness:GetMinIlvl() or ""))
-        minBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-        UI:AttachSaveButton(minBox, function(box)
-            AmazingHub.Readiness:SetMinIlvl(tonumber(box:GetText()))
-            box:SetText(tostring(AmazingHub.Readiness:GetMinIlvl() or ""))
-            box:ClearFocus()
-        end)
-        local minHint = UI:CreateText(content, L["Empty: no minimum. Below it, a 60 still counts, with a warning."],
-            9, C.silver.r, C.silver.g, C.silver.b)
-        minHint:SetPoint("LEFT", minBox.saveButton, "RIGHT", 8, 0)
-        minHint:SetWidth(280)
-        yOff = yOff + 34
-
-        -- The founding letter, for after the prompt was put away (issue #208): the GM records, an
-        -- officer suggests.
-        if AmazingHub.Founding and AmazingHub:IsFeatureEnabled("founding") then
-            local foundBtn = UI:CreateButton(content,
-                AmazingHub.Founding:IsGM() and L["Record founding"] or L["Suggest founding date to your GM"], 240, 22)
-            foundBtn:SetPoint("TOPLEFT", 8, -yOff)
-            foundBtn:SetScript("OnClick", function() AmazingHub:ShowFoundingLetter(false) end)
-            yOff = yOff + 32
-        end
-    end
-    --------------------------------------------------------------------
-    -- OFFICER RANK CONFIGURATION (officer only)
-    --------------------------------------------------------------------
-    local rankTitle = UI:CreateHeaderText(content, L["OFFICER RANKS"], 12)
-    rankTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 22
-
-    local rankDesc = UI:CreateText(content,
-        L["Checked ranks are officers in Amazing Hub for the whole guild: a change goes to every member running it."],
-        10, C.silver.r, C.silver.g, C.silver.b)
-    rankDesc:SetPoint("TOPLEFT", 8, -yOff)
-    rankDesc:SetWidth(content:GetWidth() - 20)
-    yOff = yOff + math.max(18, (rankDesc:GetStringHeight() or 12) + 6)
-
-    -- Set before the threshold was the guild's (issue #81), a choice was never stamped, so nobody
-    -- sends it: one click shares it as it is. Only a choice, not the default: an officer who never
-    -- ticked anything and has not heard the guild's yet would otherwise overwrite it.
-    if not AmazingHub.db.settings.officerMaxRankAt and (AmazingHub.db.settings.officerMaxRank or 1) ~= 1 then
-        local shareBtn = UI:CreateButton(content, L["Share these ranks with the guild"], 220, 22)
-        shareBtn:SetPoint("TOPLEFT", 8, -yOff)
-        shareBtn:SetScript("OnClick", function(self)
-            AmazingHub:SetOfficerMaxRank(AmazingHub.db.settings.officerMaxRank or 1)
-            self:Hide()
-        end)
-        yOff = yOff + 30
-    end
-
-    -- Read current max rank setting
-    local currentMaxRank = AmazingHub.db.settings.officerMaxRank or 1
-
-    -- Get rank names from the WoW guild control API (1-based, rank 1 = GM)
-    local numRanks = 0
-    if GuildControlGetNumRanks then
-        numRanks = GuildControlGetNumRanks() or 0
-    end
-
-    if numRanks == 0 then
-        local noRankText = UI:CreateText(content, L["Guild rank info not available. Open the Guild panel first."], 10, C.silver.r, C.silver.g, C.silver.b)
-        noRankText:SetPoint("TOPLEFT", 8, -yOff)
-        yOff = yOff + 18
-    else
-        -- Checkboxes: one per rank (rank 0 = index 1 in GuildControl = GM, always checked)
-        -- We store officerMaxRank as 0-based WoW rankIndex
-        for i = 1, numRanks do
-            local rankWoWIndex = i - 1  -- convert to 0-based WoW rankIndex
-            local rankName = GuildControlGetRankName and GuildControlGetRankName(i) or (L["Rank "] .. rankWoWIndex)
-            if not rankName or rankName == "" then rankName = L["Rank "] .. rankWoWIndex end
-
-            local row = CreateFrame("Frame", nil, content, "BackdropTemplate")
-            row:SetSize(content:GetWidth() - 10, 26)
-            row:SetPoint("TOPLEFT", 0, -yOff)
-            row:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-            row:SetBackdropColor(0.082, 0.082, 0.105, 0.5)
-
-            local isGM = (rankWoWIndex == 0)
-            local isChecked = (rankWoWIndex <= currentMaxRank)
-
-            local cb = UI:CreateCheckbox(row, rankName, 18)
-            cb:SetPoint("LEFT", 8, 0)
-            cb.checkbox:SetChecked(isChecked)
-
-            -- Rank label showing 0-based index
-            local idxLabel = UI:CreateText(row, L["(rank "] .. rankWoWIndex .. ")", 9, C.silver.r, C.silver.g, C.silver.b)
-            idxLabel:SetPoint("LEFT", 220, 0)
-
-            if isGM then
-                -- GM is always an officer, cannot be unchecked
-                cb.checkbox:Disable()
-                local lockNote = UI:CreateText(row, L["|cff666666always officer|r"], 9, 0.4, 0.4, 0.4)
-                lockNote:SetPoint("LEFT", 280, 0)
-            else
-            local capturedRankIndex = rankWoWIndex
-            cb.checkbox.onChanged = function(_, checked)
-                -- officerMaxRank = highest rank that is checked.
-                -- Checking a rank implicitly checks all ranks above it (lower index).
-                -- Unchecking a rank implicitly unchecks all ranks below it (higher index).
-                local newMax
-                if checked then
-                    -- Expand threshold to include this rank if it's higher
-                    newMax = math.max(capturedRankIndex, AmazingHub.db.settings.officerMaxRank or 0)
-                else
-                    -- Shrink threshold to exclude this rank and all below it
-                    newMax = capturedRankIndex - 1
-                    if newMax < 0 then newMax = 0 end
-                end
-                -- No longer an officer (a change from elsewhere, the panel still open): nothing changed.
-                if not AmazingHub:SetOfficerMaxRank(newMax) then return end
-                local newRankName = GuildControlGetRankName and GuildControlGetRankName(newMax + 1) or (L["Rank "] .. newMax)
-                AmazingHub:Print(L["Officer threshold: ranks 0-"] .. newMax .. " (" .. newRankName .. L[" and above are officers)."])
-            end
-            end
-
-            yOff = yOff + 28
-        end
-    end
-
-    -- Who creates calendar events (issue #283): the officers, or every rank down to one. The guild's, as
-    -- the threshold above; each click moves one rank further, then back to the officers.
-    yOff = yOff + 6
-    local evLabel = UI:CreateText(content, L["Who creates events:"], 11, C.silver.r, C.silver.g, C.silver.b)
-    evLabel:SetPoint("TOPLEFT", 8, -yOff)
-    local evBtn = UI:CreateButton(content, "", 180, 22)
-    evBtn:SetPoint("LEFT", evLabel, "RIGHT", 10, 0)
-    local function evText()
-        local max = AmazingHub:EventMaxRank()
-        if max <= (AmazingHub.db.settings.officerMaxRank or 1) then return L["Officers"] end
-        local name = GuildControlGetRankName and GuildControlGetRankName(max + 1)
-        return string.format(L["Up to %s"], (name and name ~= "") and name or tostring(max))
-    end
-    evBtn.label:SetText(evText())
-    evBtn:SetScript("OnClick", function()
-        local officers = AmazingHub.db.settings.officerMaxRank or 1
-        local last = (GuildControlGetNumRanks and GuildControlGetNumRanks() or 10) - 1
-        local nextMax = AmazingHub:EventMaxRank() + 1
-        if nextMax > last then nextMax = officers end
-        if AmazingHub:SetEventMaxRank(nextMax) then evBtn.label:SetText(evText()) end
-    end)
-    yOff = yOff + 30
-
-    yOff = yOff + 4
-    local rankNote = UI:CreateText(content,
-        L["Change takes effect immediately. Reload UI required to reload officer modules."],
-        9, C.silver.r, C.silver.g, C.silver.b)
-    rankNote:SetPoint("TOPLEFT", 8, -yOff)
-    rankNote:SetWidth(content:GetWidth() - 20)
-    yOff = yOff + 20
-
-    end -- isOfficer and cat == "officer" (Rank config)
-
-    if isOfficer and cat == "officer" then
-    yOff = yOff + 8
-    local sep6 = UI:CreateSeparator(content)
-    sep6:SetPoint("TOPLEFT", 0, -yOff)
-    sep6:SetPoint("TOPRIGHT", -10, -yOff)
-    yOff = yOff + 12
-    --------------------------------------------------------------------
-    -- AUTO-INVITE moved to the Recruitment tab with all its filters (issue #59);
-    -- officers who look for it here find the way there.
-    --------------------------------------------------------------------
-    local aiTitle = UI:CreateHeaderText(content, L["AUTO-INVITE"], 12)
-    aiTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 22
-
-    local aiBtn = UI:CreateButton(content, L["Open in Recruitment"], 170, 22)
-    aiBtn:SetPoint("TOPLEFT", 8, -yOff)
-    aiBtn:SetScript("OnClick", function() AmazingHub.UI:OpenWindow("recruitment", "recruiting") end)
-    local aiHint = UI:CreateText(content, string.format(L["Keyword, level and class filters are in %s > %s."], L["Recruitment"], L["Recruiting"]),
-        9, C.silver.r, C.silver.g, C.silver.b)
-    aiHint:SetPoint("LEFT", aiBtn, "RIGHT", 10, 0)
-    aiHint:SetWidth(math.max(120, content:GetWidth() - 200))
-    yOff = yOff + 34
-
-    --------------------------------------------------------------------
-    -- !NOTE (issue #59): members set their public note by typing !note in guild
-    -- chat, and a client that can edit notes applies it.
-    --------------------------------------------------------------------
-    local ncTitle = UI:CreateHeaderText(content, L["!NOTE COMMAND"], 12)
-    ncTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 22
-
-    local ncChk = UI:CreateCheckbox(content, L["Apply !note requests from guild chat on this client"], 18)
-    ncChk:SetPoint("TOPLEFT", 8, -yOff)
-    ncChk.checkbox:SetChecked(AmazingHub.db.noteCommand and AmazingHub.db.noteCommand.enabled or false)
-    ncChk.checkbox.onChanged = function(_, checked)
-        if AmazingHub.db.noteCommand then AmazingHub.db.noteCommand.enabled = checked and true or false end
-    end
-    yOff = yOff + 30
-
-    end -- isOfficer and cat == "officer" (Auto-Invite, !note)
-
-    if cat == "about" then
-    -- Reload UI button
-    local reloadBtn = UI:CreateButton(content, L["Reload UI"], 120, 28)
-    reloadBtn:SetPoint("TOPLEFT", 8, -yOff)
-    reloadBtn:SetScript("OnClick", function()
-        ReloadUI()
-    end)
-    local reloadNote = UI:CreateText(content, L["Required after enabling/disabling modules"], 9, C.silver.r, C.silver.g, C.silver.b)
-    reloadNote:SetPoint("LEFT", reloadBtn, "RIGHT", 10, 0)
-    yOff = yOff + 36
-
-    -- Backup / Restore
-    local backupBtn = UI:CreateButton(content, L["Backup"], 110, 24)
-    backupBtn:SetPoint("TOPLEFT", 8, -yOff)
-    backupBtn:SetScript("OnClick", function() if AmazingHub.Backup then AmazingHub.Backup:ShowExport() end end)
-    local restoreBtn2 = UI:CreateButton(content, L["Restore"], 110, 24)
-    restoreBtn2:SetPoint("LEFT", backupBtn, "RIGHT", 8, 0)
-    restoreBtn2:SetScript("OnClick", function() if AmazingHub.Backup then AmazingHub.Backup:ShowRestore() end end)
-    local backupNote = UI:CreateText(content, L["Export/import all Amazing Hub data for this guild"], 9, C.silver.r, C.silver.g, C.silver.b)
-    backupNote:SetPoint("LEFT", restoreBtn2, "RIGHT", 10, 0)
-    yOff = yOff + 34
-
-    -- Diagnostics: what /amazing scan, errors, selftest, probe, probe chat and style preview do,
-    -- three to a row; the results go to chat (#142).
-    local diagHead = UI:CreateHeaderText(content, L["Diagnostics"], 11)
-    diagHead:SetPoint("TOPLEFT", 8, -yOff)
-    yOff = yOff + 20
-    local diag = {
-        { L["Collect my data"], function() AmazingHub:CollectMyDataNow() end },
-        { L["View Errors"], function() AmazingHub:ShowErrors() end },
-        { L["Self-test"], function() if AmazingHub.SelfTest then AmazingHub.SelfTest:Run() end end },
-        { L["Probe the client"], function() if AmazingHub.Probe then AmazingHub.Probe:Run() end end },
-        { L["Probe chat"], function()
-            -- It posts two lines in guild chat: asked first.
-            StaticPopupDialogs["AMAZINGHUB_PROBE_CHAT"] = StaticPopupDialogs["AMAZINGHUB_PROBE_CHAT"] or {
-                text = L["Post two test lines in guild chat?"],
-                button1 = L["Probe chat"], button2 = L["Cancel"],
-                OnAccept = function() if AmazingHub.Probe then AmazingHub.Probe:RunChat() end end,
-                timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
-            }
-            StaticPopup_Show("AMAZINGHUB_PROBE_CHAT")
-        end },
-        { L["Style preview"], function() if AmazingHub.Style then AmazingHub.Style:ShowPreview() end end },
-    }
-    local prevDiag
-    for i, d in ipairs(diag) do
-        if i > 1 and (i - 1) % 3 == 0 then yOff = yOff + 26; prevDiag = nil end
-        local b = UI:CreateButton(content, d[1], 140, 22)
-        if prevDiag then b:SetPoint("LEFT", prevDiag, "RIGHT", 8, 0) else b:SetPoint("TOPLEFT", 8, -yOff) end
-        b:SetScript("OnClick", d[2])
-        prevDiag = b
-    end
-    yOff = yOff + 32
-
-    -- /amazing reset, behind a confirmation: it cannot be undone.
-    local eraseBtn = UI:CreateButton(content, L["Erase guild data"], 170, 22)
-    eraseBtn:SetPoint("TOPLEFT", 8, -yOff)
-    eraseBtn:SetScript("OnClick", function()
-        StaticPopupDialogs["AMAZINGHUB_ERASE_GUILD"] = StaticPopupDialogs["AMAZINGHUB_ERASE_GUILD"] or {
-            text = L["Erase all Amazing Hub data for this guild and reload the interface? This cannot be undone."],
-            button1 = L["Erase guild data"], button2 = L["Cancel"],
-            OnAccept = function() AmazingHub:EraseGuildData() end,
-            timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
-        }
-        StaticPopup_Show("AMAZINGHUB_ERASE_GUILD")
-    end)
-    local eraseNote = UI:CreateText(content, L["Removes every Amazing Hub record of this guild on this PC, then reloads."], 9,
-        C.silver.r, C.silver.g, C.silver.b)
-    eraseNote:SetPoint("LEFT", eraseBtn, "RIGHT", 10, 0)
-    eraseNote:SetPoint("RIGHT", content, "TOPRIGHT", -10, -(yOff + 11))   -- the button's row
-    eraseNote:SetWordWrap(false)
-    eraseNote:SetJustifyH("LEFT")
-    yOff = yOff + 30
-
-    --------------------------------------------------------------------
-    -- ABOUT & SUPPORT
-    --------------------------------------------------------------------
-    yOff = yOff + 8
-    local sepAbout = UI:CreateSeparator(content)
-    sepAbout:SetPoint("TOPLEFT", 0, -yOff)
-    sepAbout:SetPoint("TOPRIGHT", -10, -yOff)
-    yOff = yOff + 12
-
-    local aboutTitle = UI:CreateHeaderText(content, L["ABOUT & SUPPORT"], 12)
-    aboutTitle:SetPoint("TOPLEFT", 0, -yOff)
-    yOff = yOff + 22
-
-    local verText = UI:CreateText(content, "Amazing Hub v" .. (AmazingHub.VERSION or "?"), 11, C.gold.r, C.gold.g, C.gold.b)
-    verText:SetPoint("TOPLEFT", 8, -yOff)
-    yOff = yOff + 18
-
-    local creditText = UI:CreateText(content,
-        L["Made with care by "] .. "|cffFFD700Maupa|r", 10, C.silver.r, C.silver.g, C.silver.b)
-    creditText:SetPoint("TOPLEFT", 8, -yOff)
-    yOff = yOff + 22
-
-    -- Retail has no attunements (ADR-0026, issue #177); its wishlist came with issue #185.
-    local privacy = UI:CreateText(content, AmazingHub.Client.isRetail
-        and L["Amazing Hub syncs your gear, professions, spec and wishlist with guildmates running the addon. Officer notes and trials stay officer-only."]
-        or L["Amazing Hub syncs your gear, professions, attunements, spec and wishlist with guildmates running the addon. Officer notes and trials stay officer-only."],
-        10, C.silver.r, C.silver.g, C.silver.b)
-    privacy:SetPoint("TOPLEFT", 8, -yOff)
-    privacy:SetWidth(content:GetWidth() - 20)
-    privacy:SetJustifyH("LEFT")
-    yOff = yOff + 42
-
-    local cmds = UI:CreateText(content,
-        "/amazing  |  /amazing sync  |  /amazing minimap  |  /amazing debug",
-        9, C.textDim.r, C.textDim.g, C.textDim.b)
-    cmds:SetPoint("TOPLEFT", 8, -yOff)
-    yOff = yOff + 22
-
-    local linksBtn = UI:CreateButton(content, L["Links"], 120, 24)
-    linksBtn:SetPoint("TOPLEFT", 8, -yOff)
-    linksBtn:SetScript("OnClick", function()
-        AmazingHub:ShowExportPopup(L["Amazing Hub Links"],
-            -- The site first: it is the one link here that does something for the
-            -- person reading it. The other three are where the addon comes from. On
-            -- retail too since issue #182.
-            "Amazing Forever Guild Pack, made by Maupa for the Amazing guild.\n"
-            .. "Updates: search \"Amazing Forever Guild Pack\" on CurseForge or in your addon manager.\n"
-            .. "Questions and bugs: ask in the guild Discord.")
-    end)
-    local linksNote = UI:CreateText(content, L["Project page, bug reports and updates"], 9, C.silver.r, C.silver.g, C.silver.b)
-    linksNote:SetPoint("LEFT", linksBtn, "RIGHT", 10, 0)
-    yOff = yOff + 34
-    end -- cat == "about"
-
-    content:SetHeight(math.max(1, yOff))
-    -- Snap back to the top so a shorter category never shows blank space.
-    local sf = content:GetParent()
-    if sf and sf.SetVerticalScroll then sf:SetVerticalScroll(0) end
-end
-
-----------------------------------------------------------------------
 -- WISHLIST FRAME — standalone frame for each member's own wishlist
 -- Accessible via /amazing wish  or the "My Wishlist" button in roster.
 ----------------------------------------------------------------------
@@ -3527,6 +1570,11 @@ end
 local WISH_ROW_HEIGHT = 28
 local WISH_VISIBLE    = 14
 
+-- The addresses the "Edit on the site" buttons show (#385). The first is the player's own page; the
+-- second is the site's root, because the core's page needs the guild key and the addon cannot build it.
+local SITE_WISHLIST_URL = "the guild website"
+local SITE_URL = "the guild website"
+
 local function BuildWishlistFrame()
     local f = CreateFrame("Frame", "AmazingHubWishlistFrame", UIParent, "BackdropTemplate")
     f:SetSize(500, 520)
@@ -3534,7 +1582,7 @@ local function BuildWishlistFrame()
     f:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(f),
     })
     f:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
@@ -3575,10 +1623,10 @@ local function BuildWishlistFrame()
     titleBg:SetVertexColor(C.headerBg.r, C.headerBg.g, C.headerBg.b, 1.0)
 
     local titleText = f:CreateFontString(nil, "OVERLAY")
-    AmazingHub:ApplyFont(titleText, 14)
+    AmazingHub:ApplyFont(titleText, nil, "sectionTitle")
     titleText:SetPoint("LEFT", 14, 0)
     titleText:SetPoint("TOP", 0, -12)
-    titleText:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
+    titleText:SetTextColor(C.text.r, C.text.g, C.text.b)
     titleText:SetText(L["MY WISHLIST"])
     f.titleText = titleText
 
@@ -3591,8 +1639,8 @@ local function BuildWishlistFrame()
     counterText:SetText("0/50")
     f.counterText = counterText
 
-    -- Accent line under title
-    local titleLine = UI:CreateAccentLine(f, 2)
+    -- A 1px line under the title: gold is the selection's, not a rule's (#371).
+    local titleLine = UI:CreateSeparator(f)
     titleLine:SetPoint("TOPLEFT",  0, -40)
     titleLine:SetPoint("TOPRIGHT", 0, -40)
 
@@ -3601,33 +1649,21 @@ local function BuildWishlistFrame()
     closeBtn:SetPoint("TOPRIGHT", -4, -8)
     closeBtn:SetScript("OnClick", function() f:Hide() end)
 
-    -- Column headers background
-    local hdrBg = f:CreateTexture(nil, "BACKGROUND")
-    hdrBg:SetTexture("Interface\\Buttons\\WHITE8x8")
-    hdrBg:SetPoint("TOPLEFT",  1, -42)
-    hdrBg:SetPoint("TOPRIGHT", -1, -42)
-    hdrBg:SetHeight(22)
-    hdrBg:SetVertexColor(C.headerBg.r, C.headerBg.g, C.headerBg.b, 0.9)
-
+    -- Column headers: the shared header, no band, its 1px rule where the gold one was (#371).
+    local hdr = UI:CreateTableHeader(f)
+    hdr:SetPoint("TOPLEFT",  1, -42)
+    hdr:SetPoint("TOPRIGHT", -1, -42)
     local function Hdr(lbl, x, w, justify)
-        local t = f:CreateFontString(nil, "OVERLAY")
-        AmazingHub:ApplyFont(t, 10)
-        t:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-        t:SetPoint("TOPLEFT", x, -44)
+        local t = UI:CreateHeaderText(hdr, lbl)
+        t:SetPoint("LEFT", x - 1, 0)
         t:SetWidth(w)
         t:SetJustifyH(justify or "LEFT")
-        t:SetText(lbl)
         return t
     end
     Hdr("#",      10,  24, "CENTER")
     Hdr(L["ITEM"],   38, 262, "LEFT")
     Hdr(L["TYPE"],  308,  50, "CENTER")
     Hdr(L["ORDER"], 366,  60, "CENTER")
-
-    -- Thin separator between headers and rows
-    local hdrLine = UI:CreateAccentLine(f, 1)
-    hdrLine:SetPoint("TOPLEFT",  1, -64)
-    hdrLine:SetPoint("TOPRIGHT", -1, -64)
 
     -- Scroll area: TOPLEFT at y=-65, BOTTOMRIGHT at y=+50 (50px bottom bar)
     -- Available height: 520 - 65 - 50 = 405px; 14 rows × 28px = 392px ✓
@@ -3672,7 +1708,7 @@ local function BuildWishlistFrame()
 
         -- Order number
         local numText = row:CreateFontString(nil, "OVERLAY")
-        AmazingHub:ApplyFont(numText, 11)
+        AmazingHub:ApplyFont(numText, nil, "tableNum")
         numText:SetPoint("LEFT", 10, 0)
         numText:SetWidth(24)
         numText:SetJustifyH("CENTER")
@@ -3749,6 +1785,7 @@ local function BuildWishlistFrame()
         removeBtn:SetScript("OnEnter", function()
             removeTex:SetTextColor(1, 0.3, 0.3)
         end)
+        row.upBtn, row.downBtn, row.removeBtn = upBtn, downBtn, removeBtn
 
         row:Hide()
         f.rows[i] = row
@@ -3760,8 +1797,8 @@ local function BuildWishlistFrame()
         end)
     end)
 
-    -- Bottom bar (50px): separator line + dark background
-    local bottomLine = UI:CreateAccentLine(f, 1)
+    -- Bottom bar (50px): a 1px line (not gold, #371) + dark background
+    local bottomLine = UI:CreateSeparator(f)
     bottomLine:SetPoint("BOTTOMLEFT",  0, 50)
     bottomLine:SetPoint("BOTTOMRIGHT", 0, 50)
 
@@ -3779,101 +1816,46 @@ local function BuildWishlistFrame()
 
     local msBtn = UI:CreateButton(f, L["MS"], 56, 28)
     msBtn:SetPoint("BOTTOMLEFT", 10, 11)
-    -- Small dot indicator (6x6 texture, left of label)
-    local msDot = msBtn:CreateTexture(nil, "OVERLAY")
-    msDot:SetTexture("Interface\\Buttons\\WHITE8x8")
-    msDot:SetSize(6, 6)
-    msDot:SetPoint("RIGHT", msBtn.label, "LEFT", -4, 0)
-    msBtn.dot = msDot
     f.msBtn = msBtn
 
     local osBtn = UI:CreateButton(f, L["OS"], 56, 28)
     osBtn:SetPoint("BOTTOMLEFT", msBtn, "BOTTOMRIGHT", 4, 0)
-    local osDot = osBtn:CreateTexture(nil, "OVERLAY")
-    osDot:SetTexture("Interface\\Buttons\\WHITE8x8")
-    osDot:SetSize(6, 6)
-    osDot:SetPoint("RIGHT", osBtn.label, "LEFT", -4, 0)
-    osBtn.dot = osDot
     f.osBtn = osBtn
 
+    -- The spec the next item goes to: one of two, marked by UI:SetSelected (#371), not a gold fill
+    -- and a dot of its own.
     local function SetSpecType(isOS)
         f.isOS = isOS
-        if isOS then
-            -- OS selected
-            msBtn.label:SetTextColor(C.silver.r, C.silver.g, C.silver.b)
-            msBtn.dot:SetVertexColor(0.3, 0.3, 0.3, 0.6)
-            msBtn:SetBackdropColor(0.045, 0.045, 0.060, 0.5)
-            msBtn:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.3)
-            osBtn.label:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-            osBtn.dot:SetVertexColor(C.gold.r, C.gold.g, C.gold.b, 1.0)
-            osBtn:SetBackdropColor(0.22, 0.16, 0.02, 0.9)
-            osBtn:SetBackdropBorderColor(C.gold.r, C.gold.g, C.gold.b, 1.0)
-        else
-            -- MS selected
-            msBtn.label:SetTextColor(1.0, 1.0, 1.0)
-            msBtn.dot:SetVertexColor(C.accent.r, C.accent.g, C.accent.b, 1.0)
-            msBtn:SetBackdropColor(C.accentDim.r, C.accentDim.g, C.accentDim.b, 0.9)
-            msBtn:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 1.0)
-            osBtn.label:SetTextColor(C.silver.r, C.silver.g, C.silver.b)
-            osBtn.dot:SetVertexColor(0.3, 0.3, 0.3, 0.6)
-            osBtn:SetBackdropColor(0.045, 0.045, 0.060, 0.5)
-            osBtn:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.3)
-        end
+        UI:SetSelected(msBtn, not isOS)
+        UI:SetSelected(osBtn, isOS)
     end
 
     msBtn:SetScript("OnClick", function() SetSpecType(false) end)
     osBtn:SetScript("OnClick", function() SetSpecType(true)  end)
 
-    -- Override hover to preserve radio state visually
-    msBtn:SetScript("OnEnter", function(self)
-        self:SetBackdropBorderColor(C.gold.r, C.gold.g, C.gold.b, 1.0)
+    -- The tooltips hook the buttons' own hover, which keeps painting the selection.
+    msBtn:HookScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:ClearLines()
-        GameTooltip:AddLine(L["Main Spec"], C.gold.r, C.gold.g, C.gold.b)
+        GameTooltip:AddLine(L["Main Spec"], C.text.r, C.text.g, C.text.b)
         GameTooltip:AddLine(L["Item and priority for your main spec."], 1, 1, 1, true)
         GameTooltip:Show()
     end)
-    msBtn:SetScript("OnLeave", function()
-        SetSpecType(f.isOS)
-        GameTooltip:Hide()
-    end)
-    osBtn:SetScript("OnEnter", function(self)
-        self:SetBackdropBorderColor(C.gold.r, C.gold.g, C.gold.b, 1.0)
+    msBtn:HookScript("OnLeave", function() GameTooltip:Hide() end)
+    osBtn:HookScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:ClearLines()
-        GameTooltip:AddLine(L["Off Spec"], C.gold.r, C.gold.g, C.gold.b)
+        GameTooltip:AddLine(L["Off Spec"], C.text.r, C.text.g, C.text.b)
         GameTooltip:AddLine(L["Item for a secondary spec."], 1, 1, 1, true)
         GameTooltip:Show()
     end)
-    osBtn:SetScript("OnLeave", function()
-        SetSpecType(f.isOS)
-        GameTooltip:Hide()
-    end)
+    osBtn:HookScript("OnLeave", function() GameTooltip:Hide() end)
 
     SetSpecType(false)   -- initialise with MS selected
 
-    -- Add item edit box
-    local addBox = CreateFrame("EditBox", "AmazingHubWishAddBox", f, "BackdropTemplate")
-    addBox:SetSize(162, 28)
+    -- Add item: the shared field and its placeholder (#371).
+    local addBox = UI:CreateInput(f, 162, 28, { max = 200, placeholder = L["Search item or paste link..."] })
     addBox:SetPoint("BOTTOMLEFT", osBtn, "BOTTOMRIGHT", 6, 0)
-    addBox:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
-    })
-    addBox:SetBackdropColor(0.050, 0.050, 0.066, 1.0)
-    addBox:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.5)
-    AmazingHub:ApplyFont(addBox, 11)
-    addBox:SetTextColor(C.white.r, C.white.g, C.white.b)
-    addBox:SetTextInsets(6, 6, 0, 0)
-    addBox:SetAutoFocus(false)
-    addBox:SetMaxLetters(200)
-
-    local addPlaceholder = addBox:CreateFontString(nil, "OVERLAY")
-    AmazingHub:ApplyFont(addPlaceholder, 11)
-    addPlaceholder:SetPoint("LEFT", 6, 0)
-    addPlaceholder:SetTextColor(0.4, 0.4, 0.4)
-    addPlaceholder:SetText(L["Search item or paste link..."])
 
     -- Search dropdown — appears above the addBox
     local DROP_ROWS  = 6
@@ -3886,7 +1868,7 @@ local function BuildWishlistFrame()
     dropdown:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(dropdown),
     })
     -- A dropdown is elevation 4: popup surface, lineHi border.
     dropdown:SetBackdropColor(C.popup.r, C.popup.g, C.popup.b, 1)
@@ -3903,7 +1885,7 @@ local function BuildWishlistFrame()
         dr:SetPoint("TOPLEFT",  1, -((i - 1) * DROP_ROW_H) - 1)
         dr:SetPoint("TOPRIGHT", -1, -((i - 1) * DROP_ROW_H) - 1)
         dr:SetHighlightTexture("Interface\\Buttons\\WHITE8x8")
-        dr:GetHighlightTexture():SetVertexColor(C.lineHi.r, C.lineHi.g, C.lineHi.b, 1)
+        dr:GetHighlightTexture():SetVertexColor(C.line.r, C.line.g, C.line.b, 1)
         local drText = dr:CreateFontString(nil, "OVERLAY")
         AmazingHub:ApplyFont(drText, 11)
         drText:SetPoint("LEFT", 6, 0)
@@ -3918,7 +1900,6 @@ local function BuildWishlistFrame()
             f.suppressSearch   = true
             addBox:SetText(dr.itemName or "")
             f.suppressSearch   = nil
-            addPlaceholder:Hide()
             dropdown:Hide()
         end)
         dropdown.rows[i] = dr
@@ -3967,9 +1948,9 @@ local function BuildWishlistFrame()
         dropdown:Show()
     end
 
-    addBox:SetScript("OnTextChanged", function(self)
+    -- Hooked: the field shows and hides its own placeholder (#371).
+    addBox:HookScript("OnTextChanged", function(self)
         local t = self:GetText()
-        if t and t ~= "" then addPlaceholder:Hide() else addPlaceholder:Show() end
         if f.suppressSearch then return end
         -- Guard: WoW may fire OnTextChanged twice after SetText; don't clear
         -- the selection if the text still matches what was just selected.
@@ -4014,15 +1995,13 @@ local function BuildWishlistFrame()
     end
 
     addBox:SetScript("OnEnterPressed", function(self) DoAdd(); self:ClearFocus() end)
-    addBox:SetScript("OnEscapePressed", function(self)
-        self:ClearFocus()
-        dropdown:Hide()
-    end)
+    addBox:HookScript("OnEscapePressed", function() dropdown:Hide() end)
     f.addBox = addBox
 
     local addBtn = UI:CreateButton(f, L["+ Add"], 88, 28)
     addBtn:SetPoint("BOTTOMLEFT", addBox, "BOTTOMRIGHT", 6, 0)
     addBtn:SetScript("OnClick", DoAdd)
+    f.addBtn = addBtn
 
     -- Sync button — anchored to the right, with guaranteed gap from addBtn
     local syncBtn = UI:CreateButton(f, L["Sync"], 80, 28)
@@ -4031,11 +2010,32 @@ local function BuildWishlistFrame()
         if AmazingHub.Wishlist then AmazingHub.Wishlist:BroadcastMyWishlist(true) end
         AmazingHub:Print(L["[Wishlist] Sent to the guild."])
     end)
+    f.syncBtn = syncBtn
     if AmazingHub.WishImport then -- Amazing Hub: paste the line from the bot's /wish export
         local importBtn = UI:CreateButton(f, "Import from Discord", 130, 22)
         importBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -130, -9) -- title bar, left of the item counter
         importBtn:SetScript("OnClick", function() AmazingHub.WishImport.ShowPopup() end)
     end
+
+    -- When the site holds the list the editor is read-only and these two stand where the controls were
+    -- (shown by RefreshWishlistFrame, never here).
+    local siteLine = UI:CreateText(f, L["Your list comes from the site."], 11, C.textSoft.r, C.textSoft.g, C.textSoft.b)
+    siteLine:SetPoint("BOTTOMLEFT", 14, 19)
+    siteLine:Hide()
+    f.siteLine = siteLine
+    local siteBtn = UI:CreateButton(f, L["Edit on the site"], 140, 28)
+    siteBtn:SetPoint("BOTTOMRIGHT", -8, 11)
+    -- The line takes the width the button leaves and wraps, so a long translation never runs under it.
+    siteLine:ClearAllPoints()
+    siteLine:SetPoint("BOTTOMLEFT", 14, 11)
+    siteLine:SetPoint("RIGHT", siteBtn, "LEFT", -8, 0)
+    siteLine:SetHeight(28)
+    siteLine:SetJustifyH("LEFT")
+    siteLine:SetJustifyV("MIDDLE")
+    siteLine:SetWordWrap(true)
+    siteBtn:SetScript("OnClick", function() AmazingHub:ShowExportPopup(L["Edit on the site"], SITE_WISHLIST_URL) end)
+    siteBtn:Hide()
+    f.siteBtn = siteBtn
 
     AmazingHub.WishlistFrame = f
     return f
@@ -4046,8 +2046,9 @@ function AmazingHub:ShowWishlistFrame()
         BuildWishlistFrame()
     end
     -- Pre-request item info for all wishlist entries so the client
-    -- fetches any uncached items before (or just after) we display them.
-    local list = (AmazingHub.Wishlist and AmazingHub.Wishlist:GetMyList()) or {}
+    -- fetches any uncached items before (or just after) we display them: the site's list when it holds mine.
+    local site = AmazingHub.Wishlist and AmazingHub.Wishlist:SiteListInForce()
+    local list = (site and site.wishlist) or (AmazingHub.Wishlist and AmazingHub.Wishlist:GetMyList()) or {}
     for _, entry in ipairs(list) do
         AmazingHub.Compat.GetItemInfo(entry.itemId)
     end
@@ -4059,7 +2060,15 @@ function AmazingHub:RefreshWishlistFrame()
     local f = self.WishlistFrame
     if not f then return end
 
-    local rawList = (AmazingHub.Wishlist and AmazingHub.Wishlist:GetMyList()) or {}
+    -- The site is the source of this list: the editor only shows it, and what it shows is the site's list in
+    -- force (#385, R23), never the game's own list under the site's name.
+    local site = AmazingHub.Wishlist and AmazingHub.Wishlist:SiteListInForce()
+    local fromSite = site ~= nil
+    local rawList = (site and site.wishlist) or (AmazingHub.Wishlist and AmazingHub.Wishlist:GetMyList()) or {}
+    for _, n in ipairs({ "msBtn", "osBtn", "addBox", "addBtn", "syncBtn" }) do
+        if fromSite then f[n]:Hide() else f[n]:Show() end
+    end
+    if fromSite then f.dropdown:Hide(); f.siteLine:Show(); f.siteBtn:Show() else f.siteLine:Hide(); f.siteBtn:Hide() end
 
     -- Split into active and delivered; delivered entries appear at the bottom.
     local active    = {}
@@ -4104,9 +2113,11 @@ function AmazingHub:RefreshWishlistFrame()
             row.itemId   = entry.itemId
             row.itemLink = entry.itemLink or ""
 
-            -- Order number: show "✓" for delivered items
+            -- Order number, or for a delivered item the game's ready mark: a texture, since a check-mark
+            -- character drew a box in the client's font (the "game font" setting, Korean and Chinese
+            -- clients), which has no such glyph (issue #391).
             if isDelivered then
-                row.numText:SetText("|cff44FF44✓|r")
+                row.numText:SetText("|TInterface\\RaidFrame\\ReadyCheck-Ready:14:14|t")
             else
                 row.numText:SetText(entry.order or dataIdx)
             end
@@ -4129,14 +2140,13 @@ function AmazingHub:RefreshWishlistFrame()
             if isDelivered then
                 row.itemText:SetTextColor(0.45, 0.45, 0.45)
             else
-                row.itemText:SetTextColor(C.white.r, C.white.g, C.white.b)
+                row.itemText:SetTextColor(C.text.r, C.text.g, C.text.b)
             end
 
-            if entry.isOffspec then
-                row.typeText:SetText("|cffAAAAAA  " .. L["OS"] .. "|r")
-            else
-                row.typeText:SetText("|cff4CB5FF  " .. L["MS"] .. "|r")
-            end
+            -- The spec in the text colours, main spec first: no blue of its own (#371).
+            local typeInk = entry.isOffspec and C.textSoft or C.text
+            row.typeText:SetTextColor(typeInk.r, typeInk.g, typeInk.b)
+            row.typeText:SetText("  " .. (entry.isOffspec and L["OS"] or L["MS"]))
 
             -- Show/hide action buttons based on delivered state
             for _, child in pairs({ row:GetChildren() }) do
@@ -4149,6 +2159,7 @@ function AmazingHub:RefreshWishlistFrame()
                     end
                 end
             end
+            if fromSite then row.upBtn:Hide(); row.downBtn:Hide(); row.removeBtn:Hide() end
 
             row:Show()
         else
@@ -4162,6 +2173,7 @@ end
 -- Accessible via the Wishlist panel "Gerenciar Prios" button.
 ----------------------------------------------------------------------
 local PRIO_ROW_HEIGHT = 28
+local PRIO_SITE_ROW = 40   -- the bar's extra height while the site line shows (three lines at size 9)
 local PRIO_VISIBLE    = 14
 
 local function BuildPrioModal()
@@ -4171,10 +2183,10 @@ local function BuildPrioModal()
     f:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(f),
     })
     f:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
-    f:SetBackdropBorderColor(C.gold.r, C.gold.g, C.gold.b, 0.8)
+    f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)   -- a popup's line, not gold (#371)
     UI:StylePopup(f)
     f:SetFrameStrata("DIALOG")
     f:SetFrameLevel(60)
@@ -4194,13 +2206,13 @@ local function BuildPrioModal()
     titleBg:SetVertexColor(C.headerBg.r, C.headerBg.g, C.headerBg.b, 1.0)
 
     local titleText = f:CreateFontString(nil, "OVERLAY")
-    AmazingHub:ApplyFont(titleText, 13)
+    AmazingHub:ApplyFont(titleText, nil, "sectionTitle")
     titleText:SetPoint("LEFT", 14, 0); titleText:SetPoint("TOP", 0, -12)
-    titleText:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
+    titleText:SetTextColor(C.text.r, C.text.g, C.text.b)
     titleText:SetText(L["MANAGE PRIORITIES"])
     f.titleText = titleText
 
-    local titleLine = UI:CreateAccentLine(f, 2)
+    local titleLine = UI:CreateSeparator(f)   -- a 1px line: gold is the selection's (#371)
     titleLine:SetPoint("TOPLEFT", 0, -40); titleLine:SetPoint("TOPRIGHT", 0, -40)
 
     local closeBtn = UI:CreateCloseButton(f)
@@ -4223,23 +2235,9 @@ local function BuildPrioModal()
 
     local LoadItem  -- forward declaration
 
-    local searchBox = CreateFrame("EditBox", "AmazingHubPrioSearchBox", f, "BackdropTemplate")
-    searchBox:SetSize(320, 26)
+    -- The shared field and its placeholder (#371).
+    local searchBox = UI:CreateInput(f, 320, 26, { max = 200, placeholder = L["Search item, paste link or ID..."] })
     searchBox:SetPoint("LEFT", 10, 0); searchBox:SetPoint("TOP", 0, -52)
-    searchBox:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-    searchBox:SetBackdropColor(0.050, 0.050, 0.066, 1.0)
-    searchBox:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
-    AmazingHub:ApplyFont(searchBox, 11)
-    searchBox:SetTextColor(C.white.r, C.white.g, C.white.b)
-    searchBox:SetTextInsets(6, 6, 0, 0)
-    searchBox:SetAutoFocus(false)
-    searchBox:SetMaxLetters(200)
-
-    local placeholder = searchBox:CreateFontString(nil, "OVERLAY")
-    AmazingHub:ApplyFont(placeholder, 11)
-    placeholder:SetPoint("LEFT", 6, 0)
-    placeholder:SetTextColor(0.4, 0.4, 0.4)
-    placeholder:SetText(L["Search item, paste link or ID..."])
 
     -- Search dropdown
     local PDROP_ROWS  = 6
@@ -4252,7 +2250,7 @@ local function BuildPrioModal()
     prioDropdown:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(prioDropdown),
     })
     -- A dropdown is elevation 4: popup surface, lineHi border.
     prioDropdown:SetBackdropColor(C.popup.r, C.popup.g, C.popup.b, 1)
@@ -4268,7 +2266,7 @@ local function BuildPrioModal()
         dr:SetPoint("TOPLEFT",  1, -((i - 1) * PDROP_ROW_H) - 1)
         dr:SetPoint("TOPRIGHT", -1, -((i - 1) * PDROP_ROW_H) - 1)
         dr:SetHighlightTexture("Interface\\Buttons\\WHITE8x8")
-        dr:GetHighlightTexture():SetVertexColor(C.lineHi.r, C.lineHi.g, C.lineHi.b, 1)
+        dr:GetHighlightTexture():SetVertexColor(C.line.r, C.line.g, C.line.b, 1)
         local drText = dr:CreateFontString(nil, "OVERLAY")
         AmazingHub:ApplyFont(drText, 11)
         drText:SetPoint("LEFT", 6, 0)
@@ -4282,7 +2280,6 @@ local function BuildPrioModal()
             f.suppressPrioSearch = true
             searchBox:SetText(dr.itemName or "")
             f.suppressPrioSearch = nil
-            placeholder:Hide()
             prioDropdown:Hide()
             if LoadItem then LoadItem() end
         end)
@@ -4329,21 +2326,19 @@ local function BuildPrioModal()
         prioDropdown:Show()
     end
 
-    searchBox:SetScript("OnTextChanged", function(self)
+    -- Hooked: the field shows and hides its own placeholder and lets go on Escape (#371).
+    searchBox:HookScript("OnTextChanged", function(self)
         local t = self:GetText()
-        if t and t ~= "" then placeholder:Hide() else placeholder:Show() end
         if f.suppressPrioSearch then return end
         if f.prioSearchItemName and t == f.prioSearchItemName then return end
         f.prioSearchItemId   = nil
         f.prioSearchItemName = nil
         UpdatePrioDropdown(t)
     end)
-    searchBox:SetScript("OnEscapePressed", function(self)
-        self:ClearFocus()
-        prioDropdown:Hide()
-    end)
+    searchBox:HookScript("OnEscapePressed", function() prioDropdown:Hide() end)
 
     local loadBtn = UI:CreateButton(f, L["Load"], 90, 26)
+    f.searchBox, f.loadBtn = searchBox, loadBtn
     loadBtn:SetPoint("LEFT", searchBox, "RIGHT", 8, 0)
 
     -- Status line
@@ -4355,20 +2350,14 @@ local function BuildPrioModal()
     statusText:SetText("")
     f.statusText = statusText
 
-    -- Column headers: #PRIO | NOME | WL# | ACOES
-    local hdrBg = f:CreateTexture(nil, "BACKGROUND")
-    hdrBg:SetTexture("Interface\\Buttons\\WHITE8x8")
-    hdrBg:SetPoint("TOPLEFT", 1, -78); hdrBg:SetPoint("TOPRIGHT", -1, -78)
-    hdrBg:SetHeight(22)
-    hdrBg:SetVertexColor(C.headerBg.r, C.headerBg.g, C.headerBg.b, 0.9)
+    -- Column headers: #PRIO | NOME | WL# | ACOES, on the shared header: no band, a 1px rule (#371).
+    local hdr = UI:CreateTableHeader(f)
+    hdr:SetPoint("TOPLEFT", 1, -78); hdr:SetPoint("TOPRIGHT", -1, -78)
 
     local function PrioHdr(lbl, x, w, justify)
-        local t = f:CreateFontString(nil, "OVERLAY")
-        AmazingHub:ApplyFont(t, 10)
-        t:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-        t:SetPoint("TOPLEFT", x, -82)
+        local t = UI:CreateHeaderText(hdr, lbl)
+        t:SetPoint("LEFT", x - 1, 0)
         t:SetWidth(w); t:SetJustifyH(justify or "LEFT")
-        t:SetText(lbl)
     end
     PrioHdr(L["#PRIO"],  10,  40, "CENTER")
     PrioHdr(L["NAME"],   56, 170, "LEFT")
@@ -4379,6 +2368,7 @@ local function BuildPrioModal()
     local scrollCont = CreateFrame("Frame", nil, f)
     scrollCont:SetPoint("TOPLEFT",     1, -100)
     scrollCont:SetPoint("BOTTOMRIGHT", -1,  44)
+    f.scrollCont = scrollCont
 
     local scrollFrame = CreateFrame("ScrollFrame", "AmazingHubPrioScroll", scrollCont, "FauxScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", 0, 0); scrollFrame:SetPoint("BOTTOMRIGHT", 0, 0)
@@ -4398,9 +2388,9 @@ local function BuildPrioModal()
 
         -- #PRIO number
         local prioOrderText = row:CreateFontString(nil, "OVERLAY")
-        AmazingHub:ApplyFont(prioOrderText, 11)
+        AmazingHub:ApplyFont(prioOrderText, nil, "tableNum")
         prioOrderText:SetPoint("LEFT", 10, 0); prioOrderText:SetWidth(40); prioOrderText:SetJustifyH("CENTER")
-        prioOrderText:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
+        prioOrderText:SetTextColor(C.text.r, C.text.g, C.text.b)
         row.prioOrderText = prioOrderText
 
         -- Character name (class-colored)
@@ -4411,7 +2401,7 @@ local function BuildPrioModal()
 
         -- WL order
         local wlOrderText = row:CreateFontString(nil, "OVERLAY")
-        AmazingHub:ApplyFont(wlOrderText, 10)
+        AmazingHub:ApplyFont(wlOrderText, nil, "tableNum")
         wlOrderText:SetPoint("LEFT", 230, 0); wlOrderText:SetWidth(50); wlOrderText:SetJustifyH("CENTER")
         row.wlOrderText = wlOrderText
 
@@ -4456,11 +2446,13 @@ local function BuildPrioModal()
     bottomBg:SetTexture("Interface\\Buttons\\WHITE8x8")
     bottomBg:SetPoint("BOTTOMLEFT"); bottomBg:SetPoint("BOTTOMRIGHT"); bottomBg:SetHeight(44)
     bottomBg:SetVertexColor(C.headerBg.r, C.headerBg.g, C.headerBg.b, 1.0)
-    local bottomLine = UI:CreateAccentLine(f, 1)
+    local bottomLine = UI:CreateSeparator(f)   -- a 1px line, not gold (#371)
     bottomLine:SetPoint("BOTTOMLEFT", 0, 44); bottomLine:SetPoint("BOTTOMRIGHT", 0, 44)
+    f.bottomBg, f.bottomLine = bottomBg, bottomLine
 
     local saveBtn = UI:CreateButton(f, L["Save and Sync"], 130, 26)
     saveBtn:SetPoint("BOTTOMRIGHT", -10, 10)
+    f.saveBtn = saveBtn
     saveBtn:SetScript("OnClick", function()
         if not f.prioData or not f.currentItemId then
             f.statusText:SetText(L["|cffFF4444No item loaded.|r"])
@@ -4486,10 +2478,32 @@ local function BuildPrioModal()
     local cancelBtn = UI:CreateButton(f, L["Cancel"], 80, 26)
     cancelBtn:SetPoint("BOTTOMRIGHT", saveBtn, "BOTTOMLEFT", -8, 0)
     cancelBtn:SetScript("OnClick", function() f:Hide() end)
+    f.cancelBtn = cancelBtn
 
     -- Help text in bottom bar
     local bottomHelp = UI:CreateText(f, L["Reorder with the arrows. Only you see this before saving."], 9, 0.4, 0.4, 0.5)
     bottomHelp:SetPoint("BOTTOMLEFT", 10, 14)
+    f.bottomHelp = bottomHelp
+
+    -- Some core's nights play by the site's priorities: the modal still edits the game's (R22, #385), and
+    -- this line, in the help's place, says that those nights use the site's, beside "Edit on the site".
+    local siteBtn = UI:CreateButton(f, L["Edit on the site"], 130, 26)
+    siteBtn:SetPoint("BOTTOMRIGHT", cancelBtn, "BOTTOMLEFT", -8, 0)
+    siteBtn:SetScript("OnClick", function() AmazingHub:ShowExportPopup(L["Edit on the site"], SITE_URL) end)
+    siteBtn:Hide()
+    f.siteBtn = siteBtn
+    local siteLine = UI:CreateText(f, L["Nights of cores whose priorities live on the site use the site's."], 9,
+        C.textSoft.r, C.textSoft.g, C.textSoft.b)
+    -- Its own row above the buttons, across the modal's width, with room for three wrapped lines (the German,
+    -- French and Russian texts are long): ApplyPrioSource grows the bar by PRIO_SITE_ROW while it shows.
+    siteLine:SetPoint("BOTTOMLEFT", 10, 48)
+    siteLine:SetPoint("BOTTOMRIGHT", -10, 48)
+    siteLine:SetHeight(PRIO_SITE_ROW - 6)
+    siteLine:SetJustifyH("LEFT")
+    siteLine:SetJustifyV("MIDDLE")
+    siteLine:SetWordWrap(true)
+    siteLine:Hide()
+    f.siteLine = siteLine
 
     -- Wire up LoadItem
     LoadItem = function()
@@ -4556,7 +2570,7 @@ local function BuildPrioModal()
         end
 
         local itemName = AmazingHub.Compat.GetItemInfo(itemId) or (L["Item #"] .. itemId)
-        f.statusText:SetText("|cffFFD700" .. itemName .. "|r  " .. format(L["%d interested"], #f.prioData))
+        f.statusText:SetText(itemName .. "  " .. format(L["%d interested"], #f.prioData))
         subtitleText:SetText(itemName)
         AmazingHub:RefreshPrioModal()
     end
@@ -4581,14 +2595,34 @@ function AmazingHub:ShowPrioModal()
         return
     end
     if not self.PrioModal then BuildPrioModal() end
+    self:ApplyPrioSource()
     self:RefreshPrioModal()
     self.PrioModal:Show()
+end
+
+-- The modal always edits the game's priorities (R22, #385). While some raid of the site's plays by the site's
+-- priorities, one line in the help's place says that those nights use the site's, with "Edit on the site".
+function AmazingHub:ApplyPrioSource()
+    local f = self.PrioModal
+    if not f then return end
+    local fromSite = AmazingHub.Wishlist:PriosAreFromSite()
+    if fromSite then
+        f.bottomHelp:Hide(); f.siteLine:Show(); f.siteBtn:Show()
+    else
+        f.bottomHelp:Show(); f.siteLine:Hide(); f.siteBtn:Hide()
+    end
+    -- The site line takes a row of its own above the buttons: the bar, its rule and the list's bottom follow.
+    local bar = 44 + (fromSite and PRIO_SITE_ROW or 0)
+    f.bottomBg:SetHeight(bar)
+    f.bottomLine:SetPoint("BOTTOMLEFT", 0, bar); f.bottomLine:SetPoint("BOTTOMRIGHT", 0, bar)
+    f.scrollCont:SetPoint("BOTTOMRIGHT", -1, bar)
 end
 
 function AmazingHub:RefreshPrioModal()
     local f = self.PrioModal
     if not f or not f.prioData then return end
 
+    self:ApplyPrioSource()
     local data   = f.prioData
     local total  = #data
     local offset = FauxScrollFrame_GetOffset(f.scrollFrame)

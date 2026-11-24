@@ -15,7 +15,10 @@ AmazingHub.ADDON_NAME        = "Amazing Hub"
 AmazingHub.NAMESPACE         = "AmazingHub"
 
 -- ── Version ───────────────────────────────────────────────────────
-AmazingHub.VERSION           = "0.6.0"  -- kept in sync with AmazingHub.toc by the release workflow
+-- Amazing Hub: true only with the AmazingHubDev addon (never in the CurseForge pack): group posts and
+-- auto-invite, reminder whispers, bulk rank changes, bank cleanup, warning whispers and chat alerts.
+AmazingHub.DEV = AmazingHubDevFeatures == true
+AmazingHub.VERSION           = "0.7.0"  -- kept in sync with AmazingHub.toc by the release workflow
 AmazingHub.COMM_VERSION      = 1
 
 -- ── SavedVariables ────────────────────────────────────────────────

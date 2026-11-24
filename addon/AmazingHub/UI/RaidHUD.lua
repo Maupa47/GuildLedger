@@ -326,7 +326,7 @@ function AmazingHub:CreateRaidHUD()
     f:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(f),
     })
     f:SetBackdropColor(C.bg.r, C.bg.g, C.bg.b, 0.92)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 1)
@@ -607,7 +607,7 @@ function AmazingHub:ShowConsumablePopup()
     local f = CreateFrame("Frame", "AmazingHubConsPopup", UIParent, "BackdropTemplate")
     f:SetSize(CP_W, 160)
     f:SetPoint("CENTER")
-    f:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 })
+    f:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = AmazingHub.UI:Edge(f) })
     f:SetBackdropColor(C.bg.r, C.bg.g, C.bg.b, 0.97)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 1)
     f:SetFrameStrata("HIGH")

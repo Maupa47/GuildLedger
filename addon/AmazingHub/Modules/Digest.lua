@@ -40,7 +40,9 @@ end
 -- Build the digest lines for everything that changed since `since`
 -- (a server timestamp). Returns an array of strings.
 ----------------------------------------------------------------------
-function Digest:Build(since)
+-- opts.login: the login's digest, where the bulletin tells only the notices not told yet (#418); elsewhere (the
+-- Activity sub-tab, /amazing digest) it lists the notices posted since `since`, as it always did.
+function Digest:Build(since, opts)
     since = since or AmazingHub.db.digest.lastSeen or 0
     local lines = {}
     local feed, told = fromSite()
@@ -112,6 +114,13 @@ function Digest:Build(since)
         end
     end
 
+    -- Today's birthdays and join anniversaries (#428): at the first login of the day, and on demand.
+    if AmazingHub.Birthdays and not (opts and opts.login and AmazingHub.Birthdays:ToldToday(GetServerTime())) then
+        for _, line in ipairs(AmazingHub.Birthdays:GetDigestLines(GetServerTime())) do
+            lines[#lines + 1] = "|cffEDCC7B" .. line .. "|r"
+        end
+    end
+
     -- Upcoming raid reminder (event within the next 24h)
     if AmazingHub.Calendar and AmazingHub.Calendar.GetDigestLines then
         local calLines = AmazingHub.Calendar:GetDigestLines()
@@ -140,13 +149,21 @@ function Digest:Build(since)
         end
     end
 
-    -- New bulletin notices (most recent few)
+    -- Bulletin notices. At login, the active ones this player has not been told about (issue #418), the newest
+    -- few: each once, whenever it was posted, never one that has ended; ShowOnLogin marks them told. Anywhere
+    -- else, the most recent few posted since `since`.
     if AmazingHub.Bulletin then
-        local shown = 0
-        for _, m in ipairs(AmazingHub.Bulletin:GetMessages()) do
-            if (m.ts or 0) > since and shown < 3 then
-                lines[#lines + 1] = "|cffEDCC7B" .. L["Notice:"] .. "|r " .. (m.text or "")
-                shown = shown + 1
+        if opts and opts.login then
+            for _, m in ipairs(AmazingHub.Bulletin:Unseen(GetServerTime(), 3)) do
+                lines[#lines + 1] = AmazingHub.Bulletin.Line(m)
+            end
+        else
+            local shown = 0
+            for _, m in ipairs(AmazingHub.Bulletin:GetMessages()) do
+                if type(m) == "table" and (tonumber(m.ts) or 0) > since and shown < 3 then
+                    lines[#lines + 1] = AmazingHub.Bulletin.Line(m)
+                    shown = shown + 1
+                end
             end
         end
     end
@@ -221,7 +238,7 @@ function Digest:Show(lines)
         f = CreateFrame("Frame", "AmazingHubDigestFrame", UIParent, "BackdropTemplate")
         f:SetSize(360, 280)
         f:SetPoint("TOP", UIParent, "TOP", 0, -140)
-        f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+        f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(f) })
         f:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
         f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
         UI:StylePopup(f, { shadowSize = 16 })
@@ -283,19 +300,38 @@ end
 -- Auto-show once on login (skipped on first run and when disabled).
 ----------------------------------------------------------------------
 function Digest:ShowOnLogin()
-    if not AmazingHub.db.digest or not AmazingHub.db.digest.enabled then return end
+    local B = AmazingHub.Bulletin
+    -- From now on a notice that arrives is told in the chat (issue #418).
+    if B then B:LoginDone() end
+    if not AmazingHub.db.digest or not AmazingHub.db.digest.enabled then
+        -- No digest: the notices not told yet get a chat line each, and so do today's birthdays (#428).
+        if B then B:TellInChat(GetServerTime()) end
+        if AmazingHub.Birthdays then AmazingHub.Birthdays:TellInChat(GetServerTime()) end
+        return
+    end
     if self.shownThisSession then return end
+    -- A raid owner's prompt took this login (issue #400): one popup at a time, and the raid about to start is the
+    -- one that cannot wait. Nothing is marked seen: the digest shows once the prompt is put off (Later or its close,
+    -- RaidStart:PromptDismissed), and after Raid ready waits for the next login, or /amazing digest.
+    if AmazingHub.RaidStart and AmazingHub.RaidStart:PromptedAtLogin() then
+        self.deferred = true
+        return
+    end
 
     local since = AmazingHub.db.digest.lastSeen or 0
     -- First ever run: nothing to compare against — just start the clock.
     if since == 0 then
         AmazingHub.db.digest.lastSeen = GetServerTime()
+        -- The board is not part of that clock: what is on it now is told in the chat.
+        if B then B:TellInChat(GetServerTime()) end
         return
     end
 
-    local lines = self:Build(since)
+    local lines = self:Build(since, { login = true })
     self:MarkFeedSeen(GetServerTime())
+    if B then B:MarkSeen(GetServerTime()) end
     if AmazingHub.Achievements then AmazingHub.Achievements:MarkSeen() end
+    if AmazingHub.Birthdays then AmazingHub.Birthdays:MarkTold(GetServerTime()) end
     if AmazingHub.Activation then
         if AmazingHub.Activation:GetDigestLine(GetServerTime()) then AmazingHub.Activation:Reminded(GetServerTime()) end
     end

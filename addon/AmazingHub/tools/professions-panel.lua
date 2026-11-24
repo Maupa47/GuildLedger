@@ -129,6 +129,7 @@ FauxScrollFrame_GetOffset = function() return 0 end
 FauxScrollFrame_Update, FauxScrollFrame_OnVerticalScroll, FauxScrollFrame_SetOffset = noop, noop, noop
 local told
 ChatFrame_SendTell = function(name) told = name end
+function IsShiftKeyDown() return false end
 
 local registry = {}
 LibStub = setmetatable({
@@ -155,18 +156,24 @@ AmazingHub.ProfCatalog = {
                   [185] = { child = 2939, primary = false, en = "Cooking" } },
   specs = { [9788] = 164 },
   stations = { [3] = "Forge" },
-  byLine = { [186] = { 2657, 3304 }, [164] = { 2660, 9950 }, [185] = { 2538 } },
+  -- Season of Discovery's category (issue #396): its recipe shows only while someone knows it.
+  seasonal = { [2598] = true },
+  byLine = { [186] = { 2657, 3304 }, [164] = { 2660, 9950, 9951 }, [185] = { 2538 } },
   recipes = {
     [2657] = { 186, 1, 25, 2840, 1, 0, 0, 0, 3, 3, 0, 0, { 2770, 1 } },
     [3304] = { 186, 65, 90, 3576, 1, 0, 0, 0, 3, 1, 0, 0, { 2771, 1 } },
     [2660] = { 164, 1, 15, 2862, 1, 0, 0, 0, 0, 1, 0, 0, { 2835, 1 } },
     [9950] = { 164, 210, 230, 7934, 1, 0, 210, 9788, 0, 2, 7978, 0, {} },
     [2538] = { 185, 1, 45, 2679, 1, 0, 0, 0, 0, 1, 0, 0, { 2672, 1 } },
+    [9951] = { 164, 210, 230, 7999, 1, 0, 210, 0, 0, 2, 0, 2598, { 2835, 9 } },
   },
 }
 dofile(ADDON .. "/Modules/Professions.lua")
 dofile(ADDON .. "/Modules/ProfDirectory.lua")
 dofile(ADDON .. "/UI/ProfessionsPanel.lua")
+-- The opened recipe's block and the orders it places (issue #389).
+dofile(ADDON .. "/Modules/CraftOrders.lua")
+dofile(ADDON .. "/UI/CraftOrdersPanel.lua")
 local P = AmazingHub.Professions
 local ME, BOB, CID = P.OwnKey(), AmazingHub:GetPlayerKey("Bob"), AmazingHub:GetPlayerKey("Cid")
 AmazingHub.db = { members = {}, recipes = {}, professions = {
@@ -176,7 +183,7 @@ AmazingHub.db = { members = {}, recipes = {}, professions = {
     [164] = { rank = 210, max = 300, spec = 9788, h = 1, n = 1, recipes = { 9950 }, extra = {} } } },
   [CID] = { src = "native", ts = NOW, profs = { [164] = {} } },
 } }
--- Nine more who smelt copper: the card lists eight crafters and says how many more.
+-- Nine more who smelt copper: the opened recipe names three crafters and counts the rest.
 for i = 1, 9 do
   AmazingHub.db.professions[AmazingHub:GetPlayerKey("Miner" .. i)] = { src = "addon", ts = NOW, profs = {
     [186] = { rank = 30, max = 75, h = 1, n = 1, recipes = { 2657 }, extra = {} } } }
@@ -196,9 +203,19 @@ check(showing("Spell 2660") and showing("nobody"), "a recipe nobody knows says s
 check(showing("Ana Silva") and showing("Bob"), "crafters show by name")
 check(showing("Spell 9788") and showing("Forge"), "requirements show the specialization and the station")
 check(showing("The guild knows 3 of 5 recipes"), "the footer counts what the guild knows")
+check(not showing("Spell 9951"), "a Season of Discovery recipe nobody knows is not listed, nor counted")
+check(#AmazingHub.ProfDirectory.ItemRecipes(7999) == 0, "nor taken as a recipe of its item")
 panel.railButtons[2].scripts.OnClick(panel.railButtons[2])
 check(st.line == 164 and #st.results == 2 and showing("Blacksmithing"), "a profession on the rail filters the recipes")
 check(showing("2 crafters · 50%"), "the rail shows crafters and coverage")
+AmazingHub.db.professions[BOB].profs[164].recipes = { 9950, 9951 }
+AmazingHub.Professions.index = nil
+panel:Refresh(true)
+check(#st.results == 3 and showing("Spell 9951") and showing("2 crafters · 67%"),
+      "once a member knows it, it is listed and counted")
+AmazingHub.db.professions[BOB].profs[164].recipes = { 9950 }
+AmazingHub.Professions.index = nil
+panel:Refresh(true)
 for _, t in ipairs(panel.filterTabs) do
   if t.key == "gaps" then t.scripts.OnClick(t) end
 end
@@ -221,27 +238,33 @@ row.scripts.OnEnter(row)
 row.scripts.OnLeave(row)
 UNCACHED[7978] = true
 row.scripts.OnClick(row)
-local card = _G.AmazingHubRecipeCard
-check(card and card.shown, "a click opens the recipe card")
+check(st.open == 9950 and st.detailAt ~= nil, "a click opens the recipe in place")
+check(panel.detail and panel.detail.shown, "its block shows over the rows it takes")
+local holes = 0
+for _, e in ipairs(st.results) do if e.__detail then holes = holes + 1 end end
+check(holes == st.detailRows and holes > 0 and st.results[st.detailAt].__detail == 1,
+      "the list makes room for it right after the recipe")
 check(not showing("Item 7978") and showing("Recipe item"), "an uncached recipe item shows as a plain source")
 UNCACHED[7978] = nil
-card:ClearAllPoints()
-card:SetPoint("CENTER", UIParent, "CENTER", 40, 40)   -- the user drags it away
 panel.itemEvents.scripts.OnEvent(panel.itemEvents, "GET_ITEM_INFO_RECEIVED", 7978)
 runTimers()
-check(card.movedTo == "CENTER", "a repaint keeps the card where the user dragged it")
-check(showing("Item 7978"), "the card repaints when the item's data arrives")
-check(card.h > 100 and card.h < 300, "the card is as tall as what it shows: " .. tostring(card.h))
-local whispered = false
+check(showing("Item 7978"), "the block repaints when the item's data arrives")
+check(showing("CRAFTERS · 1"), "it says who makes it")
+local asked = false
 for _, o in ipairs(all) do
   local label = rawget(o, "label")
-  if o.kind == "Button" and o.shown and label and label.text == "Whisper" and o.scripts.OnClick then
+  if o.kind == "Button" and o.shown and label and label.text == "Ask them" and o.scripts.OnClick then
     o.scripts.OnClick(o)
-    whispered = true
+    asked = true
     break
   end
 end
-check(whispered and told == "Bob", "Whisper opens a tell to the online crafter")
+check(asked and panel.detail.toKey == BOB and showing("To Bob only"), "Ask them sends the order to that crafter alone")
+panel.itemEvents.scripts.OnEvent(panel.itemEvents, "GET_ITEM_INFO_RECEIVED", 2770)
+runTimers()
+check(panel.detail.toKey == BOB, "and a repaint (an item's data arriving, an order synced) keeps that choice")
+row.scripts.OnClick(row)
+check(st.open == nil and not panel.detail.shown, "a second click closes it")
 local smelt
 panel.railButtons[1].scripts.OnClick(panel.railButtons[1])
 for _, r in ipairs(panel.rows) do
@@ -249,15 +272,15 @@ for _, r in ipairs(panel.rows) do
   if d and d.id == 2657 then smelt = r end
 end
 smelt.scripts.OnClick(smelt)
-check(showing("+2 more crafters"), "past eight crafters the card says how many more")
-local tall = card.h
-check(tall > 300, "and grows to hold them: " .. tostring(tall))
-container.scripts.OnHide(container)
-check(not card.shown, "the card closes with the panel")
+check(showing("CRAFTERS · 10") and showing("+7 more"), "past three crafters the block counts the rest")
+check(showing("you craft"), "a recipe I know is marked in the list")
+smelt.scripts.OnClick(smelt)
 panel.railButtons[2].scripts.OnClick(panel.railButtons[2])
 panel.tabCrafters.scripts.OnClick(panel.tabCrafters)
 check(st.mode == "crafters" and #st.results == 2 and st.results[1].name == "Bob" and st.results[2].native,
       "Crafters lists the members, native last")
+panel:UpdateRows()
+check(not panel.detail.shown, "an opened recipe never shows over the Crafters view, even after a scroll")
 check(showing("210 / 300") and showing("no addon"), "ranks and native members show")
 panel.railButtons[1].scripts.OnClick(panel.railButtons[1])
 check(#st.results == 0 and showing("Pick a profession on the left."), "Crafters with All asks for a profession")
@@ -267,7 +290,7 @@ panel:Relayout(520, 400)
 check(panel.visibleRows > 0, "a narrow window still lays out")
 panel:Relayout(560, 500)
 local filtersW = 0
-for _, t in ipairs(panel.filterTabs) do filtersW = filtersW + t.w + 4 end
+for _, t in ipairs(panel.filterTabs) do if t.shown ~= false then filtersW = filtersW + t.w + 4 end end
 local inner = 560 - 10 * 2 - 176 - 12
 check(panel.search.w < 220 and panel.search.w + filtersW + 12 <= inner,
       "the search box gives way to the filters in a narrow window: " .. tostring(panel.search.w))

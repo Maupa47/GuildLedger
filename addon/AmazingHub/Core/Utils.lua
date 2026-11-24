@@ -62,30 +62,57 @@ end
 ----------------------------------------------------------------------
 -- Alt / Main linking (account-wide attunement propagation)
 ----------------------------------------------------------------------
+-- The officers' links are AltSync's entries, synced per alt (issue #424); `db.altLinks` is the view
+-- rebuilt from them. Each officer edit plans the new view and AltSync:Commit writes what changed, and
+-- confirms the alts in `confirm` whose link was only unconfirmed (from before #424).
+local function commitLinks(self, links, confirm)
+    if self.AltSync then return self.AltSync:Commit(links, confirm) end
+    self.db.altLinks = links
+    return 0
+end
+
+-- Pure: `links` with altKey linked to mainKey, a new table, or nil when mainKey is itself an alt (no
+-- loop). An alt that was altKey's own follows it to mainKey, so no alt ever points at an alt.
+function AmazingHub:_PlanLink(links, altKey, mainKey)
+    if links[mainKey] then return nil end
+    local out = {}
+    for k, v in pairs(links) do out[k] = (v == altKey) and mainKey or v end
+    out[altKey] = mainKey
+    return out
+end
+
 function AmazingHub:LinkAlt(altKey, mainKey)
     if not self:IsOfficer() then return false end
     if not altKey or not mainKey or altKey == mainKey then return false end
-    self.db.altLinks = self.db.altLinks or {}
+    local planned = self:_PlanLink(self.db.altLinks or {}, altKey, mainKey)
     -- Prevent circular links: mainKey must not itself be an alt
-    if self.db.altLinks[mainKey] then
+    if not planned then
         self:Print(L["Error: "] .. mainKey .. L[" is already an alt. Unlink it first."])
         return false
     end
-    self.db.altLinks[altKey] = mainKey
-    if self.CommSystem then
-        self.CommSystem:BroadcastAltLinks()
-    end
+    commitLinks(self, planned, { [altKey] = true })
     return true
 end
 
 function AmazingHub:UnlinkAlt(altKey)
     if not self:IsOfficer() then return false end
-    self.db.altLinks = self.db.altLinks or {}
-    self.db.altLinks[altKey] = nil
-    if self.CommSystem then
-        self.CommSystem:BroadcastAltLinks()
-    end
+    local links = {}
+    for k, v in pairs(self.db.altLinks or {}) do links[k] = v end
+    links[altKey] = nil
+    commitLinks(self, links)
     return true
+end
+
+-- Unlink every alt of `mainKey` at once (issue #426: the main left and the officer said the group is over). Officers
+-- only. Returns how many alts were unlinked.
+function AmazingHub:UnlinkGroup(mainKey)
+    if not self:IsOfficer() or not mainKey then return 0 end
+    local links, n = {}, 0
+    for k, v in pairs(self.db.altLinks or {}) do
+        if v == mainKey then n = n + 1 else links[k] = v end
+    end
+    if n > 0 then commitLinks(self, links) end
+    return n
 end
 
 -- Returns all keys in the same account group as playerKey (includes playerKey itself)
@@ -137,10 +164,7 @@ function AmazingHub:SetMain(newMainKey)
     local group = self:GetLinkedChars(newMainKey)
     if #group < 2 then return false end                 -- nothing to re-main
     if self.db.altLinks[newMainKey] == nil then return false end  -- already main
-    self.db.altLinks = self:_RepointGroup(self.db.altLinks, group, newMainKey)
-    if self.CommSystem then
-        self.CommSystem:BroadcastAltLinks()
-    end
+    commitLinks(self, self:_RepointGroup(self.db.altLinks, group, newMainKey))
     return true
 end
 
@@ -217,14 +241,51 @@ local function normalizedRealm(realm)
     return (realm:gsub("[%s%-]", ""))
 end
 
--- The client's realm for member keys: GetRealmName(), else GetNormalizedRealmName() (a
+-- The realm this character had, from the account's record of its characters (AltAutoDetect's
+-- accountChars): its own latest entry with a realm, else the account's when every character with
+-- one agrees; nil with neither. Read once per accountChars table: the one the SavedVariables load is
+-- a new table, and while the client answers no realm nothing adds one with a realm to it.
+local savedRealm, scanned
+local function rememberedRealm()
+    local chars = type(AmazingHubDB) == "table" and AmazingHubDB.accountChars
+    if type(chars) ~= "table" then return nil end
+    if chars == scanned then return savedRealm end
+    scanned = chars
+    local me = AmazingHub.Compat and AmazingHub.Compat.PlayerName()
+    local mine, mineTs, account
+    for _, c in pairs(chars) do
+        local realm = type(c) == "table" and c.realm
+        if type(realm) == "string" and realm ~= "" then
+            local ts = tonumber(c.ts) or 0
+            if c.name == me and (not mine or ts > mineTs) then mine, mineTs = realm, ts end
+            if account == nil then account = realm elseif account ~= realm then account = false end
+        end
+    end
+    savedRealm = mine or account or nil
+    return savedRealm
+end
+
+-- The client's realm name, GetRealmName(). WoW: Forever's client has answered it with "" since its
+-- patch of 2026-11-21 (issue #394), and every key saved before carries the realm it answered then:
+-- the guild's db, each member and the guild the site knows. With it empty they all changed, and the
+-- addon opened an empty db over the intact one. On Forever (not RealmBound) an empty answer is the
+-- realm this character had; with none saved, "" as the client gave it.
+-- ponytail: a character first seen after that patch has no realm to remember, so if the client
+-- ever answers one again its keys change once; a realm stored per character would cover it.
+function AmazingHub:RealmName()
+    local realm = GetRealmName()
+    if (realm and realm ~= "") or self:RealmBound() then return realm end
+    return rememberedRealm() or realm
+end
+
+-- The client's realm for member keys: RealmName(), else GetNormalizedRealmName() (a
 -- client with no realm name may still suffix roster names with a normalized one), else
 -- nil; "" counts as nothing. Anniversary always answers the first, so its keys keep their bytes.
 -- Retail asks for the normalized one first: that is how its roster writes everybody (#165).
 function AmazingHub:GetClientRealm()
     local realm
     if isRetail() and GetNormalizedRealmName then realm = GetNormalizedRealmName() end
-    if not realm or realm == "" then realm = GetRealmName() end
+    if not realm or realm == "" then realm = AmazingHub:RealmName() end
     if not realm or realm == "" then realm = GetNormalizedRealmName and GetNormalizedRealmName() end
     if realm == "" then return nil end
     if realm and isRetail() then realm = normalizedRealm(realm) end
@@ -233,15 +294,15 @@ end
 
 -- The realm a guild is from. On retail a guild spans connected realms, so it is its home realm
 -- (GetGuildInfo's fourth answer, nil when it is this character's own), normalized: one guild,
--- whichever of its realms a character is on. Elsewhere GetRealmName(). The guild's database key
--- and the companion payload's guildKey both use it (ADR-0026, issue #182).
+-- whichever of its realms a character is on. Elsewhere the client's (RealmName). The guild's database
+-- key and the companion payload's guildKey both use it (ADR-0026, issues #182, #394).
 function AmazingHub:GuildRealm()
     if isRetail() then
         local home = IsInGuild() and select(4, GetGuildInfo("player"))
         if not home or home == "" then home = GetRealmName() end
         return home and normalizedRealm(home)
     end
-    return GetRealmName()
+    return self:RealmName()
 end
 
 -- A member's key is "Name-Realm", byte for byte as it has always been. WoW: Forever has
@@ -284,6 +345,112 @@ end
 function AmazingHub:WhisperTarget(name)
     if self.Client.has.surnames then return (name:gsub(" ", "-")) end
     return name
+end
+
+----------------------------------------------------------------------
+-- The "No player named" line of our own addon whispers (issue #326).
+-- An addon whisper to somebody who has just logged off makes the client print ERR_CHAT_PLAYER_NOT_FOUND_S in every
+-- chat frame: a yellow line about a message the player never sent. Every addon whisper of AmazingHub notes its target
+-- first (AmazingHub:NoteWhisper), and the line for a name noted within WHISPER_TRIED_SECONDS is hidden. Each line hidden
+-- renews the name's window: a long message leaves in many parts, and each part to somebody gone prints its own line
+-- for as long as the parts take to go. Anybody else's line passes.
+-- The vendored mesh hides the lines of the whispers it picks itself, not ours: its WhisperTried is local, Mesh:Whisper
+-- notes nothing, and its filter is only in once its directory started, which on Anniversary it never does.
+-- Session state, in AmazingHub.State.whispers; made on first use, after Core.lua made AmazingHub.State.
+----------------------------------------------------------------------
+local WHISPER_TRIED_SECONDS = 30 -- seconds the line of a name we whispered stays hidden, renewed by each line hidden
+
+local function whispers()
+    local s = AmazingHub.State.whispers
+    if not s then
+        s = { tried = {}, gone = {}, failed = {} } -- [key] = GetTime() it is ours until; fn(name) listeners; errors
+        AmazingHub.State.whispers = s
+    end
+    return s
+end
+
+-- A name as a whisper target and a "No player named" line can both spell it: no case, hyphens as spaces.
+local function whisperKey(name)
+    return (name:lower():gsub("[%s%-]+", " "))
+end
+
+-- The keys a name answers to: whole, and without what follows its last hyphen. WoW: Forever echoes "First Surname"
+-- to a whisper to "First-Surname" or "First Surname-Realm"; elsewhere a realm may come back on a name or not.
+local function whisperKeys(name)
+    local short = name:match("^(.+)%-[^%-]+$")
+    return whisperKey(name), short and whisperKey(short) or nil
+end
+
+local function renew(tried, key, now)
+    local till = key and tried[key]
+    if not till or now > till then return false end
+    tried[key] = now + WHISPER_TRIED_SECONDS
+    return true
+end
+
+local function whisperFail(err)
+    local s, msg = whispers(), "Whispers: " .. tostring(err)
+    if s.failed[msg] then return end
+    s.failed[msg] = true
+    AmazingHub:RecordError(msg)
+end
+
+-- The line for a name we whispered a moment ago. Chat in lockdown is secret: left alone, unread. Every chat frame
+-- runs the filter, so what it does more than once for one line must not matter.
+local function ourNotFound(msg)
+    local s = whispers()
+    if AmazingHub.Compat.IsSecret(msg) or type(msg) ~= "string" or not next(s.tried) then return false end
+    local args = AmazingHub:MatchFormat(msg, ERR_CHAT_PLAYER_NOT_FOUND_S)
+    local name = args and args[1]
+    if not name then return false end
+    local now, whole, short = GetTime(), whisperKeys(name)
+    local hit = renew(s.tried, whole, now)
+    hit = renew(s.tried, short, now) or hit
+    if not hit then return false end
+    for _, fn in ipairs(s.gone) do
+        local ok, err = pcall(fn, name)
+        if not ok then whisperFail(err) end
+    end
+    return true
+end
+
+-- A chat frame is no place to raise: a filter that breaks lets the line through and is recorded once.
+local function hideNotFound(_, _, msg)
+    local ok, hide = pcall(ourNotFound, msg)
+    if ok then return hide end
+    whisperFail(hide)
+    return false
+end
+
+-- Puts in the filter that hides those lines, once. True when the client has a chat filter, false when not.
+function AmazingHub:HideWhisperErrors()
+    local s = whispers()
+    if s.filtered == nil then
+        local ok, added = pcall(AmazingHub.Compat.AddChatFilter, "CHAT_MSG_SYSTEM", hideNotFound)
+        if not ok then whisperFail(added) end
+        s.filtered = (ok and added) and true or false
+    end
+    return s.filtered
+end
+
+-- Notes an addon whisper about to go to `name`: its "No player named" line is hidden for WHISPER_TRIED_SECONDS.
+-- Every addon whisper of ours calls it right before it sends. Returns whether a filter is there to hide the line.
+function AmazingHub:NoteWhisper(name)
+    if self.Compat.IsSecret(name) or type(name) ~= "string" or name == "" then return false end
+    local s, now = whispers(), GetTime()
+    for key, till in pairs(s.tried) do
+        if now > till then s.tried[key] = nil end
+    end
+    local whole, short = whisperKeys(name)
+    s.tried[whole] = now + WHISPER_TRIED_SECONDS
+    if short then s.tried[short] = now + WHISPER_TRIED_SECONDS end
+    return self:HideWhisperErrors()
+end
+
+-- `fn(name)` runs for each of those lines hidden, `name` as the line spells it, maybe more than once for one line.
+function AmazingHub:OnWhisperNotFound(fn)
+    local gone = whispers().gone
+    gone[#gone + 1] = fn
 end
 
 -- How a guildmate's key reads on screen: the name alone when they are on this character's realm, the
@@ -406,6 +573,13 @@ function AmazingHub:LocalizeStoredMemberTables()
             db.altLinks = links
         end,
         function() points(db.points) end,
+        -- The disciplinary record (#402): each warning names its member by key.
+        function()
+            local d = type(db.discipline) == "table" and db.discipline.warnings
+            for _, w in pairs(type(d) == "table" and d or {}) do
+                if type(w) == "table" and type(w.subject) == "string" then w.subject = self:LocalMemberKey(w.subject) end
+            end
+        end,
         function()
             for _, core in pairs(type(db.cores) == "table" and db.cores or {}) do
                 if type(core) == "table" then
@@ -602,6 +776,48 @@ function AmazingHub:Utf8Len(s)
     return n
 end
 
+-- `s` cut to `maxBytes` without splitting a UTF-8 codepoint, and nothing else touched: a line of chat keeps
+-- its links (issue #348).
+function AmazingHub:CutBytes(s, maxBytes)
+    s = tostring(s or "")
+    if #s <= maxBytes then return s end
+    return utf8Backoff(s:sub(1, maxBytes))
+end
+
+-- `s` in lower case past ASCII (issue #400): the site holds a guild's name to the game's with JavaScript's
+-- toLowerCase, which lowers every letter, and string.lower lowers A-Z alone, so "ÉBANO" or "ОРДЕН" would never be the
+-- site's "ébano" or "орден" here. Latin-1's capitals (À to Þ, not the ×) and Cyrillic's (Ѐ to Я) are lowered too, in
+-- UTF-8: the cased letters of the game's languages but Latin Extended's few (Œ, Ł) and Greek.
+local LATIN1_TIMES = 151   -- the second byte of "×" (U+00D7), among Latin-1's capitals and not a letter
+function AmazingHub.FoldCase(s)
+    s = tostring(s or ""):lower()
+    s = s:gsub("\195([\128-\158])", function(c)
+        local b = c:byte()
+        if b ~= LATIN1_TIMES then return "\195" .. string.char(b + 32) end
+    end)
+    return (s:gsub("\208([\128-\175])", function(c)
+        local b = c:byte()
+        if b >= 144 and b <= 159 then return "\208" .. string.char(b + 32) end   -- А-П -> а-п
+        if b >= 160 then return "\209" .. string.char(b - 32) end                 -- Р-Я -> р-я
+        return "\209" .. string.char(b + 16)                                       -- Ѐ-Џ -> ѐ-џ
+    end))
+end
+
+--- A guild's name as the game shows it, made the way the site makes it (amazinghub-web's bareGuildName): trimmed, and
+--- a pair of angle brackets around the whole name taken off ("<Sons of Lothar>"), unless nothing would be left.
+function AmazingHub.BareGuildName(name)
+    local t = strtrim(tostring(name or ""))
+    local inner = t:match("^<%s*(.-)%s*>$")
+    return (inner and inner ~= "") and inner or t
+end
+
+--- Whether two names are one guild's, as the site takes them (amazinghub-web's sameGuildName): the brackets aside, and
+--- capitals aside past ASCII (FoldCase). An accent is another letter.
+function AmazingHub.SameGuildName(a, b)
+    if type(a) ~= "string" or type(b) ~= "string" then return false end
+    return AmazingHub.FoldCase(AmazingHub.BareGuildName(a)) == AmazingHub.FoldCase(AmazingHub.BareGuildName(b))
+end
+
 function AmazingHub:SanitizeUserText(text, maxBytes)
     local s = (tostring(text or ""):gsub("|", ""):gsub("%c", " "):gsub("%s+", " "))
     s = strtrim(s)
@@ -614,8 +830,14 @@ end
 ----------------------------------------------------------------------
 -- Minimal recursive-descent JSON decoder
 -- Handles objects, arrays, strings, numbers, booleans, null.
+-- What it reads comes from outside the game (the site's packages, a pasted soft-reserve export): text
+-- that is not JSON stops the read (`malformed`), and the caller gets nil. It used to stand still on a
+-- character it did not expect inside a list or an object, a number written with an exponent among
+-- them (`1e-7`), and the game froze with it.
 ----------------------------------------------------------------------
-local function JsonDecode(s)
+local function malformed() error("json", 0) end
+
+local function decodeJson(s)
     local pos = 1
 
     local function skip()
@@ -651,8 +873,14 @@ local function JsonDecode(s)
 
     local function parseNumber()
         local n, np = s:match("^(-?%d+%.?%d*)()", pos)
-        if n then pos = np end
-        return tonumber(n)
+        if not n then malformed() end
+        -- An exponent, as any JSON writer may give a very small or a very large number.
+        local e, ep = s:match("^([eE][-+]?%d+)()", np)
+        if e then n, np = n .. e, ep end
+        pos = np
+        local value = tonumber(n)
+        if not value then malformed() end
+        return value
     end
 
     local function parseArray()
@@ -665,7 +893,8 @@ local function JsonDecode(s)
             skip()
             local c = s:sub(pos, pos)
             if c == ']' then pos = pos + 1; break end
-            if c == ',' then pos = pos + 1 end
+            if c ~= ',' then malformed() end
+            pos = pos + 1
         end
         return arr
     end
@@ -677,14 +906,17 @@ local function JsonDecode(s)
         if s:sub(pos, pos) == '}' then pos = pos + 1; return obj end
         while true do
             skip()
+            if s:sub(pos, pos) ~= '"' then malformed() end
             local k = parseString()
             skip()
+            if k == nil or s:sub(pos, pos) ~= ':' then malformed() end
             pos = pos + 1  -- consume :
             obj[k] = parseValue()
             skip()
             local c = s:sub(pos, pos)
             if c == '}' then pos = pos + 1; break end
-            if c == ',' then pos = pos + 1 end
+            if c ~= ',' then malformed() end
+            pos = pos + 1
         end
         return obj
     end
@@ -703,6 +935,15 @@ local function JsonDecode(s)
     end
 
     return parseValue()
+end
+
+-- nil for text that is not JSON, whatever stopped the read (a character out of place, nesting too
+-- deep for the client): the caller never sees an error, as it never did.
+local function JsonDecode(s)
+    if type(s) ~= "string" then return nil end
+    local ok, value = pcall(decodeJson, s)
+    if ok then return value end
+    return nil
 end
 
 -- Shared: SoftRes reads Gargul's JSON with it and the companion import the site's. It lives here,
@@ -786,9 +1027,15 @@ function AmazingHub:HookChatInvite()
         if not link then return end
 
         local name = link:match("^player:([^:]+)")
-        if name and name ~= "" and AmazingHub.Compat.GuildInvite(name) then
-            AmazingHub:Print(L["Guild invite sent to "] .. name .. L[". (Alt+Click)"])
+        if not name or name == "" then return end
+        local function send()
+            if AmazingHub.Compat.GuildInvite(name) then
+                AmazingHub:Print(L["Guild invite sent to "] .. name .. L[". (Alt+Click)"])
+            end
         end
+        -- The alliance has banned them: the officer reads why first (#408).
+        local BL = AmazingHub.BanList
+        if not (BL and BL.HoldInvite and BL:HoldInvite(name, send)) then send() end
     end)
 end
 
@@ -844,7 +1091,7 @@ function AmazingHub:ShowProfessionReminder(staleProfessions)
     frame:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(frame),
     })
     frame:SetBackdropColor(0.066, 0.066, 0.084, 0.95)
     frame:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 0.8)
@@ -1103,6 +1350,8 @@ function AmazingHub:DropDeparted()
     end
     -- A founder who left loses the badge before their date goes (WoW: Forever, issue #209).
     if self.Founding then self.Founding:Departed(present) end
+    -- A birthday is personal data: it goes with its member (issue #428).
+    if self.Birthdays then self.Birthdays:Departed(present) end
     for _, store in ipairs({ "firstSeen", "recipes" }) do
         for key in pairs(self.db[store] or {}) do
             if not present[key] then self.db[store][key] = nil end

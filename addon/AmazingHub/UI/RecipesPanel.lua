@@ -21,7 +21,7 @@ local COLUMNS = {
 local COL_GAP    = 10
 local ROW_INSET  = 10   -- x of the first cell inside a row
 local SIDE_MARGIN = 10  -- panel edge to the list
-local ROW_GUTTER = 10   -- rows stop short of the scrollbar
+local ROW_GUTTER = UI.SCROLL_GUTTER   -- rows stop clear of the scrollbar (#371)
 local TOP_PAD    = 8    -- panel top to the top bar
 local TITLE_H    = 26   -- title + search row, above the profession filters
 local HEADER_H   = 24   -- column header strip
@@ -73,7 +73,11 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
         profFilter = "All",
         results = {},
         scrollOffset = 0,
+        open = nil,      -- the recipe opened in place (issue #389), by its key
     }
+
+    -- A recipe's identity in the list: its item, else its name and profession.
+    local function keyOf(e) return e.itemId and ("i" .. e.itemId) or ((e.name or "?") .. "|" .. (e.profName or "")) end
 
     ----------------------------------------------------------------
     -- Top bar: search + profession filters
@@ -91,28 +95,9 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
     local countText = UI:CreateText(topBar, "", 10, C.silver.r, C.silver.g, C.silver.b)
     countText:SetPoint("LEFT", title, "RIGHT", 12, 0)
 
-    -- Search box
-    local searchBox = CreateFrame("EditBox", "AmazingHubRecipeSearch", topBar, "BackdropTemplate")
-    searchBox:SetSize(220, 24)
+    -- Search box: the shared field, with its own hint while empty (#371).
+    local searchBox = UI:CreateInput(topBar, 220, 24, { max = 50, placeholder = L["Search recipes..."] })
     searchBox:SetPoint("TOPRIGHT", 0, 0)
-    searchBox:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
-    })
-    searchBox:SetBackdropColor(0.050, 0.050, 0.066, 1.0)
-    searchBox:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
-    AmazingHub:ApplyFont(searchBox, 11)
-    searchBox:SetTextColor(C.white.r, C.white.g, C.white.b)
-    searchBox:SetTextInsets(8, 8, 0, 0)
-    searchBox:SetAutoFocus(false)
-    searchBox:SetMaxLetters(50)
-
-    local searchPlaceholder = searchBox:CreateFontString(nil, "OVERLAY")
-    AmazingHub:ApplyFont(searchPlaceholder, 11)
-    searchPlaceholder:SetPoint("LEFT", 8, 0)
-    searchPlaceholder:SetTextColor(0.4, 0.4, 0.4)
-    searchPlaceholder:SetText(L["Search recipes..."])
 
     -- Realm-wide crafter finder (guild + mesh) — opens the CraftFinder popup.
     local realmBtn = UI:CreateButton(topBar, L["Find a Crafter"], 120, 24)
@@ -128,6 +113,7 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
     filterRow:SetSize(400, 26)
 
     local filterButtons = {}
+    local detail   -- the opened recipe's block, made with the list below
 
     local function RefreshResults()
         if not AmazingHub.RecipeTracker then
@@ -135,74 +121,70 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
         else
             state.results = AmazingHub.RecipeTracker:Search(state.query, state.profFilter)
         end
+        -- Opened on an item (Alt-click, an order's card): only the recipes that make it, and the
+        -- title says so until a filter or the search lets go of it.
+        local itemName = state.item and (AmazingHub.Compat.GetItemInfo(state.item) or ("item:" .. state.item))
+        title:SetText(itemName and string.format(L["Recipes for %s"], itemName) or L["Guild Recipes"])
+        if state.item then
+            local only = {}
+            for _, e in ipairs(state.results) do if e.itemId == state.item then only[#only + 1] = e end end
+            state.results = only
+        end
         state.scrollOffset = 0
         countText:SetText(string.format(L["|cff888888%d results|r"], #state.results))
+        -- The marks after a name: the recipes I make, and how many orders ask for each item.
+        local O = AmazingHub.CraftOrders
+        state.byItem = O and O:OrdersByItem() or {}
+        state.me = O and O:MyKey()
+        local at, n
+        if UI.WithDetail then
+            state.results, at, n = UI.WithDetail(state.results, function(e) return keyOf(e) == state.open end, ROW_HEIGHT, detail)
+        end
+        state.detailAt, state.detailRows = at, n
+        if not at then state.open = nil end
     end
 
+    -- The chosen filter carries the shared selection mark (#371), not a tinted fill.
+    local function PaintFilters()
+        for _, fb in ipairs(filterButtons) do UI:SetSelected(fb, fb.profName == state.profFilter) end
+    end
+
+    -- A filter is a shared button: "All" by name, a profession by its icon, or by its first letters
+    -- in its colour where the client has no icon for it.
     local function CreateFilterButton(profName)
-        local btn = CreateFrame("Button", nil, filterRow, "BackdropTemplate")
-        btn:SetHeight(22)
-        btn:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-        btn:SetBackdropColor(0.100, 0.100, 0.130, 1.0)
+        local isAll = profName == "All"
+        local iconTex = not isAll and PROF_ICONS[profName] or nil
+        local text = (isAll and L["All"]) or (iconTex and "") or AmazingHub:Utf8Head(L[profName], 3)
+        local btn = UI:CreateButton(filterRow, text, isAll and 40 or 26, 22)
         btn.profName = profName
 
         local icon
-        local label = btn:CreateFontString(nil, "OVERLAY")
-        AmazingHub:ApplyFont(label, 10)
-
-        if profName == "All" then
-            btn:SetWidth(40)
-            label:SetPoint("CENTER")
-            label:SetText(L["All"])
-            label:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
-        else
-            local iconTex = PROF_ICONS[profName]
-            if iconTex then
-                icon = btn:CreateTexture(nil, "ARTWORK")
-                icon:SetSize(16, 16)
-                icon:SetPoint("CENTER")
-                icon:SetTexture(iconTex)
-            else
-                label:SetPoint("CENTER")
-                label:SetText(AmazingHub:Utf8Head(L[profName], 3))
-                local pc = PROF_COLORS[profName] or C.silver
-                label:SetTextColor(pc.r, pc.g, pc.b)
-            end
-            btn:SetWidth(26)
+        if iconTex then
+            icon = btn:CreateTexture(nil, "ARTWORK")
+            icon:SetSize(16, 16)
+            icon:SetPoint("CENTER")
+            icon:SetTexture(iconTex)
+        elseif not isAll then
+            local pc = PROF_COLORS[profName] or C.silver
+            btn.baseLabelColor = { pc.r, pc.g, pc.b }
         end
-
-        btn.label = label
         btn.icon = icon
         -- Position comes from UI:FlowBar, which wraps the row when the
         -- window is too narrow to hold every profession on one line.
 
         btn:SetScript("OnClick", function()
-            state.profFilter = profName
-            -- Update active state visuals
-            for _, fb in ipairs(filterButtons) do
-                if fb.profName == state.profFilter then
-                    fb:SetBackdropColor(C.headerBg.r, C.headerBg.g, C.headerBg.b, 1.0)
-                else
-                    fb:SetBackdropColor(0.100, 0.100, 0.130, 1.0)
-                end
-            end
+            state.profFilter, state.item = profName, nil
+            PaintFilters()
             RefreshResults()
             panel:UpdateRows()
         end)
-        btn:SetScript("OnEnter", function(self)
-            if state.profFilter ~= self.profName then
-                self:SetBackdropColor(C.lineHi.r, C.lineHi.g, C.lineHi.b, 1.0)
-            end
+        -- Hooked, not set: the button's own hover state lives on OnEnter and OnLeave.
+        btn:HookScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_TOP")
             GameTooltip:SetText(L[profName], 1, 1, 1)
             GameTooltip:Show()
         end)
-        btn:SetScript("OnLeave", function(self)
-            if state.profFilter ~= self.profName then
-                self:SetBackdropColor(0.100, 0.100, 0.130, 1.0)
-            end
-            GameTooltip:Hide()
-        end)
+        btn:HookScript("OnLeave", function() GameTooltip:Hide() end)
 
         table.insert(filterButtons, btn)
         return btn
@@ -226,43 +208,29 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
         end
 
         -- Mark active
-        for _, fb in ipairs(filterButtons) do
-            if fb.profName == state.profFilter then
-                fb:SetBackdropColor(C.headerBg.r, C.headerBg.g, C.headerBg.b, 1.0)
-            end
-        end
+        PaintFilters()
 
         -- New buttons need placing straight away; the layout pass only
         -- runs on resize.
         if panel.Relayout then panel:Relayout() end
     end
 
-    searchBox:SetScript("OnTextChanged", function(self)
+    -- Hooked, not set: the field keeps its own Escape, focus and hint handlers.
+    searchBox:HookScript("OnTextChanged", function(self)
         local text = self:GetText()
-        if text and text ~= "" then
-            searchPlaceholder:Hide()
-        else
-            searchPlaceholder:Show()
-        end
-        state.query = text or ""
+        state.query, state.item = text or "", nil
         RefreshResults()
         panel:UpdateRows()
     end)
-    searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     searchBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
 
     ----------------------------------------------------------------
     -- Column headers
     ----------------------------------------------------------------
-    local headerFrame = CreateFrame("Frame", nil, panel)
+    -- The shared table header (#371): no fill, a 1px rule under the column labels.
+    local headerFrame = UI:CreateTableHeader(panel, HEADER_H)
     headerFrame:SetPoint("TOPLEFT", topBar, "BOTTOMLEFT", 0, -4)
     headerFrame:SetPoint("TOPRIGHT", topBar, "BOTTOMRIGHT", 0, -4)
-    headerFrame:SetHeight(HEADER_H)
-
-    local headerBg = headerFrame:CreateTexture(nil, "BACKGROUND")
-    headerBg:SetTexture("Interface\\Buttons\\WHITE8x8")
-    headerBg:SetAllPoints()
-    headerBg:SetVertexColor(C.headerBg.r, C.headerBg.g, C.headerBg.b, 1.0)
 
     -- Header cells are positioned by the layout pass, keyed the same way
     -- the row cells are so the two can never drift apart.
@@ -286,6 +254,14 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
     local scrollFrame = CreateFrame("ScrollFrame", "AmazingHubRecipeScroll", listFrame, "FauxScrollFrameTemplate")
     scrollFrame:SetAllPoints()
     UI:SkinScrollBar(scrollFrame, "AmazingHubRecipeScroll")
+    -- The opened recipe sits over the rows it takes; what scrolls past the list's edge is cut.
+    if listFrame.SetClipsChildren then listFrame:SetClipsChildren(true) end
+    detail = AmazingHub.CreateCraftDetail and AmazingHub:CreateCraftDetail(listFrame)
+    if detail then
+        detail:SetFrameLevel(listFrame:GetFrameLevel() + 5)
+        -- Resized past where the order fits beside the columns: it takes other rows (#415).
+        detail.onReflow = function() panel:Reload() end
+    end
 
     -- Create row frames
     local rows = {}
@@ -361,7 +337,7 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
 
         -- Whisper button
         local whisperBtn = UI:CreateButton(row, L["Whisper"], 60, 20)
-        whisperBtn:SetPoint("RIGHT", -4, 0)
+        whisperBtn:SetPoint("RIGHT", 0, 0)
         whisperBtn:SetFrameLevel(row:GetFrameLevel() + 2)
         whisperBtn:Hide()
         row.whisperBtn = whisperBtn
@@ -395,6 +371,21 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
 
         row:SetScript("OnEnter", RowEnter)
         row:SetScript("OnLeave", RowLeave)
+        -- A click opens the recipe in place (issue #389); Shift-click links its item.
+        row:SetScript("OnClick", function(self)
+            local e = self.data
+            if not e then return end
+            if IsShiftKeyDown() and e.itemId and HandleModifiedItemClick then
+                local _, link = AmazingHub.Compat.GetItemInfo(e.itemId)
+                if link then HandleModifiedItemClick(link) end
+                return
+            end
+            if not detail then return end
+            local k = keyOf(e)
+            if state.open == k then state.open = nil else state.open = k end
+            state.openTo = nil
+            panel:Reload()
+        end)
 
         -- When mouse leaves the whisper button, check if still on the row
         whisperBtn:HookScript("OnLeave", function(self)
@@ -436,8 +427,8 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
         for i = 1, visible do
             local row = rows[i]
             local dataIdx = offset + i
-            if dataIdx <= total then
-                local entry = state.results[dataIdx]
+            local entry = state.results[dataIdx]
+            if entry and not entry.__detail then
                 row.data = entry
                 row:Show()
 
@@ -452,9 +443,21 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
                     row.statusDot:SetVertexColor(C.offline.r, C.offline.g, C.offline.b, 0.5)
                 end
 
-                -- Recipe name
-                row.recipeName:SetText(entry.name or "?")
-                row.recipeName:SetTextColor(C.white.r, C.white.g, C.white.b)
+                -- Recipe name, and its marks
+                local marks = ""
+                for _, c in ipairs(entry.crafters or {}) do
+                    if state.me and c.playerKey == state.me then
+                        marks = string.format("  |cff%02x%02x%02x%s|r", C.ok.r * 255, C.ok.g * 255, C.ok.b * 255, L["you craft"])
+                    end
+                end
+                local orders = entry.itemId and state.byItem and state.byItem[entry.itemId]
+                if orders and orders > 0 then
+                    marks = marks .. string.format("  |cff%02x%02x%02x%s|r", C.gold.r * 255, C.gold.g * 255, C.gold.b * 255,
+                        string.format(L["%d orders"], orders))
+                end
+                row.recipeName:SetText((entry.name or "?") .. marks)
+                row.recipeName:SetTextColor(C.text.r, C.text.g, C.text.b)
+                if keyOf(entry) == state.open then row:SetBackdropColor(C.panel.r, C.panel.g, C.panel.b, 1) end
 
                 -- Profession
                 local iconPath = PROF_ICONS[entry.profName]
@@ -474,7 +477,7 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
                 for _, crafter in ipairs(entry.crafters or {}) do
                     local memberData = AmazingHub.db.members[crafter.playerKey]
                     local pClass = memberData and memberData.class
-                    local cc = pClass and AmazingHub.ClassColors[pClass] or C.white
+                    local cc = pClass and AmazingHub.ClassColors[pClass] or C.text
                     local hex = string.format("%02x%02x%02x", cc.r * 255, cc.g * 255, cc.b * 255)
                     local alpha = crafter.isOnline and "" or "|cff666666"
                     local resetAlpha = crafter.isOnline and "" or "|r"
@@ -507,6 +510,9 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
                 row.data = nil
             end
         end
+        if detail then
+            UI.PlaceDetail(detail, listFrame, state.detailAt, state.detailRows or 0, offset, visible, ROW_HEIGHT, ROW_GUTTER)
+        end
     end
 
     scrollFrame:SetScript("OnVerticalScroll", function(self, offset)
@@ -514,6 +520,51 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
             panel:UpdateRows()
         end)
     end)
+
+    -- The opened recipe's block: its item, its crafters online first, and what it takes.
+    function panel:PaintDetail(fresh)
+        if not detail then return end
+        if not state.open then detail:Hide(); return end
+        local e
+        for _, x in ipairs(state.results) do if not x.__detail and keyOf(x) == state.open then e = x end end
+        if not e then detail:Hide(); return end
+        local crafters = {}
+        for _, c in ipairs(e.crafters or {}) do
+            local m = AmazingHub.db.members and AmazingHub.db.members[c.playerKey]
+            crafters[#crafters + 1] = { key = c.playerKey, name = c.playerName, class = m and m.class, online = c.isOnline == true }
+        end
+        table.sort(crafters, function(a, b)
+            if a.online ~= b.online then return a.online end
+            return (a.name or "") < (b.name or "")
+        end)
+        detail:SetRecipe({ id = keyOf(e), item = e.itemId, crafters = crafters, meta = e.profName and L[e.profName] or nil },
+            state.openTo, fresh)
+    end
+
+    -- Search again, keeping the scroll, and paint the rows and the opened recipe.
+    function panel:Reload()
+        local offset = FauxScrollFrame_GetOffset(scrollFrame)
+        RefreshResults()
+        if FauxScrollFrame_SetOffset then FauxScrollFrame_SetOffset(scrollFrame, offset) end
+        self:UpdateRows()
+        self:PaintDetail()
+    end
+    panel.Refresh = panel.Reload
+
+    -- Open the recipe that makes `itemId`: the Crafts tab's Alt-click, an order's card.
+    function panel:FocusItem(itemId, toKey)
+        state.profFilter, state.query = "All", ""
+        searchBox:SetText("")
+        state.item, state.open = itemId, "i" .. itemId     -- after SetText: its handler clears the item
+        RefreshResults()
+        if not state.detailAt then state.item = nil; RefreshResults(); return false end
+        PaintFilters()
+        state.openTo = toKey
+        if FauxScrollFrame_SetOffset then FauxScrollFrame_SetOffset(scrollFrame, 0) end
+        self:UpdateRows()
+        self:PaintDetail(true)
+        return true
+    end
 
     ----------------------------------------------------------------
     -- Info bar at bottom
@@ -523,10 +574,12 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
     infoBar:SetPoint("BOTTOMRIGHT", -10, 8)
     infoBar:SetHeight(24)
 
-    local infoText = UI:CreateText(infoBar, "", 9, 0.5, 0.5, 0.6)
+    local infoText = UI:CreateText(infoBar, "", 10, C.label.r, C.label.g, C.label.b)
     infoText:SetPoint("LEFT", 0, 0)
 
-    local scanHint = UI:CreateText(infoBar, L["Open your tradeskill window to share your recipes"], 9, C.accentDim.r, C.accentDim.g, C.accentDim.b)
+    -- A hint, in `textSoft`: not the dimmed gold it used to be (#371).
+    local scanHint = UI:CreateText(infoBar, L["Open your tradeskill window to share your recipes"], 10,
+        C.textSoft.r, C.textSoft.g, C.textSoft.b)
     scanHint:SetPoint("RIGHT", 0, 0)
 
     ----------------------------------------------------------------

@@ -19,7 +19,7 @@ Recruitment.DEFAULT_SETTINGS = {
     message = "",             -- recruitment message text
     channels = {},            -- list of channel names to post to (e.g. {"LookingForGroup", "Trade"})
     minRankIndex = 2,         -- max rank index allowed (0 = GM, 1 = first officer, 2 = second officer, etc.)
-    welcomeEnabled = true,
+    welcomeEnabled = false, -- Amazing Hub: no welcome lines in guild chat, even with recruitment on
     welcomeMessage = "",      -- auto-filled on init
     discord = "",
 }
@@ -430,6 +430,109 @@ function Recruitment.ChatTextProblem(msg)
     return nil
 end
 
+-- The welcome as it goes out: the officers' text and, when they chose it and the guild has rules, the
+-- invitation to /amazing rules (#407), only when the whole still fits the game's 255 bytes (else the text
+-- alone, as before). Pure on its arguments.
+function Recruitment.WelcomeWithRules(base, withRules, hasRules)
+    if type(base) ~= "string" or base == "" or not (withRules and hasRules) then return base end
+    local full = base .. " " .. L["Type /amazing rules to read the guild's rules."]
+    if #full > 255 then return base end
+    return full
+end
+
+-- Several welcomes, one drawn each time (#419). `welcomeMessages` is the whole list; its first is
+-- also `welcomeMessage`, the one setting a client before #419 reads and writes, and that one wins
+-- for the first place: a text set by such a client, or by /amazing recruit welcome msg, is not lost.
+Recruitment.WELCOME_MAX = 10
+
+-- The officers' welcomes in order, the empty ones left out. Pure on `r`.
+function Recruitment.WelcomeList(r)
+    local out = {}
+    if type(r) ~= "table" then return out end
+    local function add(t)
+        if type(t) == "string" and t ~= "" and #out < Recruitment.WELCOME_MAX then out[#out + 1] = t end
+    end
+    add(r.welcomeMessage)
+    local list = r.welcomeMessages
+    if type(list) == "table" then
+        for i = 2, #list do add(list[i]) end
+    end
+    return out
+end
+
+local function writeWelcomes(r, list)
+    local copy = {}
+    for i, t in ipairs(list) do copy[i] = t end
+    r.welcomeMessages = copy
+    r.welcomeMessage = copy[1] or ""
+end
+
+-- Puts `text` at place `i` of the list, or adds it at the end when `i` is past it. False and why
+-- when the game would refuse it, or when the list is full.
+function Recruitment:SetWelcome(i, text)
+    local r = AmazingHub.db.recruitment
+    if not r then return false end
+    local problem = Recruitment.ChatTextProblem(text)
+    if problem then return false, problem end
+    local list = Recruitment.WelcomeList(r)
+    if i > #list then
+        if #list >= Recruitment.WELCOME_MAX then return false end
+        list[#list + 1] = text
+    else
+        list[i] = text
+    end
+    writeWelcomes(r, list)
+    return true
+end
+
+-- Takes place `i` off the list; the last welcome left stays.
+function Recruitment:RemoveWelcome(i)
+    local r = AmazingHub.db.recruitment
+    local list = Recruitment.WelcomeList(r)
+    if #list <= 1 or not list[i] then return false end
+    table.remove(list, i)
+    writeWelcomes(r, list)
+    return true
+end
+
+-- One of `list`, never `last` while another one is there. `rnd(n)` gives 1..n (math.random). Pure.
+function Recruitment.PickWelcome(list, last, rnd)
+    if type(list) ~= "table" or #list == 0 then return nil end
+    local pool = {}
+    for _, t in ipairs(list) do
+        if t ~= last then pool[#pool + 1] = t end
+    end
+    if #pool == 0 then pool = list end
+    return pool[(rnd or math.random)(#pool)]
+end
+
+-- The welcome this client would send now (and shows in the Forever popup before the click). The
+-- one drawn stays until it is sent, so the popup shows the line the click posts; a draw no longer
+-- on the list is drawn again.
+function Recruitment:WelcomeMessage()
+    local r = AmazingHub.db.recruitment
+    local GR = AmazingHub.GuildRules
+    local list = Recruitment.WelcomeList(r)
+    local drawn = self._drawnWelcome
+    local still = false
+    for _, t in ipairs(list) do
+        if t == drawn then still = true break end
+    end
+    if not still then
+        drawn = Recruitment.PickWelcome(list, r and r.welcomeLast)
+        self._drawnWelcome = drawn
+    end
+    return Recruitment.WelcomeWithRules(drawn, r ~= nil and r.welcomeRules == true,
+        GR ~= nil and GR:HasRules())
+end
+
+-- A welcome went out: the next one is drawn among the others.
+function Recruitment:_WelcomeSent()
+    local r = AmazingHub.db.recruitment
+    if r and self._drawnWelcome then r.welcomeLast = self._drawnWelcome end
+    self._drawnWelcome = nil
+end
+
 -- The one way a welcome reaches guild chat, clicked (Forever) or on its own (Anniversary): the text
 -- is checked first and a send the game raises on is said, never lost (#270). True when it went.
 function Recruitment:SendWelcomeText(msg, who)
@@ -443,6 +546,7 @@ function Recruitment:SendWelcomeText(msg, who)
         AmazingHub:Print(string.format(L["The welcome was not sent: %s"], tostring(err)))
         return false
     end
+    self:_WelcomeSent()
     if who then AmazingHub:Print(L["Welcome message sent for |cffFFFFFF"] .. who .. L["|r in guild chat."]) end
     return true
 end
@@ -451,7 +555,7 @@ end
 -- game would not take the text: whoever waits keeps waiting for the fixed one.
 function Recruitment:SendPendingWelcome()
     local list = self._pendingWelcomes
-    local msg = AmazingHub.db.recruitment and AmazingHub.db.recruitment.welcomeMessage
+    local msg = self:WelcomeMessage()
     if not list or #list == 0 or not msg or msg == "" then return false end
     if not self:SendWelcomeText(msg) then return false end
     AmazingHub:Print(L["Welcome message sent for |cffFFFFFF"] .. table.concat(list, ", ") .. L["|r in guild chat."])
@@ -589,6 +693,8 @@ function Recruitment:Initialize()
             r.welcomeMessage = string.format(L["Welcome to %s - Have fun!"], guildName)
         end
     end
+    -- The list of welcomes (#419): today's one is its first; nothing else changes for it.
+    writeWelcomes(r, Recruitment.WelcomeList(r))
 
     -- Listen for new guild members joining
     self:RegisterWelcomeEvent()
@@ -622,7 +728,7 @@ function Recruitment:StartAutoRecruit()
     end
     -- /amazing recruit on reaches here with the module switched off and its tab hidden (issue #84).
     if not AmazingHub:IsFeatureEnabled("recruitment") then
-        AmazingHub:Print(L["The Recruitment module is off. Turn it on in Settings > General > Modules."])
+        AmazingHub:Print(L["The Recruitment module is off. Turn it on in Settings > Modules."])
         return false
     end
 
@@ -1032,7 +1138,7 @@ function Recruitment:CreatePopupFrame()
     f:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
+        edgeSize = AmazingHub.UI:Edge(f),
     })
     f:SetBackdropColor(0.082, 0.082, 0.105, 0.97)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
@@ -1045,11 +1151,12 @@ function Recruitment:CreatePopupFrame()
     f:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     f:Hide()
 
-    -- Title: brand + localized subtitle ("Amazing Hub  ·  Recruitment").
+    -- Title: brand + localized subtitle ("Amazing Hub  ·  Recruitment"), in the text colour: gold is the
+    -- selection's, the primary button's and the active tab's (#371).
     local title = f:CreateFontString(nil, "OVERLAY")
     AmazingHub:ApplyFont(title, 13)
     title:SetPoint("TOPLEFT", PAD, -12)
-    title:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
+    title:SetTextColor(C.text.r, C.text.g, C.text.b)
     title:SetText("Amazing Hub  |cff6c6c78" .. L["Recruitment"] .. "|r")
 
     local sep = UI:CreateSeparator(f)
@@ -1097,9 +1204,10 @@ function Recruitment:CreatePopupFrame()
     f.hint = hint
 
     -- Postar (the send): a hardware OnClick so SendChatMessage to a channel works.
+    -- The popup's one action is its primary button, not a green fill (#371).
     local postBtn = UI:CreateButton(f, L["Post"], 120, 26)
     postBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOM", -5, 14)
-    postBtn:SetBaseColor(C.online.r * 0.30, C.online.g * 0.30, C.online.b * 0.30, 0.9)
+    UI:SetButtonVariant(postBtn, "primary")
     postBtn:SetScript("OnClick", function()
         Recruitment:DoSendRecruitmentMessage()
         f:Hide()
@@ -1125,7 +1233,7 @@ local function ActionPopup(title, y, okText, laterText)
     local f = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
     f:SetSize(WIDTH, 120)
     f:SetPoint("TOP", UIParent, "TOP", 0, y)
-    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(f) })
     f:SetBackdropColor(0.082, 0.082, 0.105, 0.97)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
     f:SetFrameStrata("DIALOG")
@@ -1140,7 +1248,7 @@ local function ActionPopup(title, y, okText, laterText)
     local t = f:CreateFontString(nil, "OVERLAY")
     AmazingHub:ApplyFont(t, 13)
     t:SetPoint("TOPLEFT", PAD, -12)
-    t:SetTextColor(C.gold.r, C.gold.g, C.gold.b)
+    t:SetTextColor(C.text.r, C.text.g, C.text.b)   -- the text colour, as the recruit popup's (#371)
     t:SetText("Amazing Hub  |cff6c6c78" .. title .. "|r")
     local sep = UI:CreateSeparator(f)
     sep:SetPoint("TOPLEFT", PAD, -30)
@@ -1162,7 +1270,7 @@ local function ActionPopup(title, y, okText, laterText)
 
     f.okBtn = UI:CreateButton(f, okText, 140, 26)
     f.okBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOM", -5, 12)
-    f.okBtn:SetBaseColor(C.online.r * 0.30, C.online.g * 0.30, C.online.b * 0.30, 0.9)
+    UI:SetButtonVariant(f.okBtn, "primary")   -- the click the popup carries, not a green fill (#371)
     f.laterBtn = UI:CreateButton(f, laterText, 140, 26)
     f.laterBtn:SetPoint("BOTTOMLEFT", f, "BOTTOM", 5, 12)
     -- Grow to the text, like the recruit popup: the note is the line the click posts.
@@ -1184,7 +1292,7 @@ function Recruitment:ShowWelcomePopup()
     local list = self._pendingWelcomes or {}
     if #list == 0 then f:Hide() return end
     f.line:SetText(string.format(L["|cffFFFFFF%s|r joined the guild."], table.concat(list, ", ")))
-    f.note:SetText((AmazingHub.db.recruitment and AmazingHub.db.recruitment.welcomeMessage) or "")
+    f.note:SetText(self:WelcomeMessage() or "")
     f:Fit()
     f:Show()
 end
@@ -1329,7 +1437,7 @@ function Recruitment:HandleCommand(args)
     -- has, and every branch below but `invite` reads them.
     if not AmazingHub.db.recruitment and cmd and cmd ~= "invite" then
         AmazingHub:Print(AmazingHub:IsFeatureEnabled("recruitment") and L["Recruitment settings are available to officers after login."]
-            or L["The Recruitment module is off. Turn it on in Settings > General > Modules."])
+            or L["The Recruitment module is off. Turn it on in Settings > Modules."])
         return
     end
 
@@ -1401,6 +1509,8 @@ function Recruitment:HandleCommand(args)
         AmazingHub:Print(L["Message: |cffFFFFFF"] .. s.message .. "|r")
         AmazingHub:Print(L["Welcome: "] .. wStatus)
         AmazingHub:Print(L["Welcome msg: |cffFFFFFF"] .. s.welcomeMessage .. "|r")
+        local more = #Recruitment.WelcomeList(s) - 1
+        if more > 0 then AmazingHub:Print(string.format(L["(+%d more, one drawn at random each time)"], more)) end
         AmazingHub:Print(L["Discord: |cffFFFFFF"] .. s.discord .. "|r")
     elseif cmd == "welcome" then
         local sub = args[2]
@@ -1418,7 +1528,7 @@ function Recruitment:HandleCommand(args)
             if problem then
                 AmazingHub:Print(problem)
             elseif newMsg and newMsg ~= "" then
-                AmazingHub.db.recruitment.welcomeMessage = newMsg
+                Recruitment:SetWelcome(1, newMsg)
                 AmazingHub:Print(L["Welcome message set to: |cffFFFFFF"] .. newMsg .. "|r")
             else
                 AmazingHub:Print(L["Current: |cffFFFFFF"] .. AmazingHub.db.recruitment.welcomeMessage .. "|r")
@@ -1441,10 +1551,15 @@ function Recruitment:HandleCommand(args)
                 AmazingHub:Print(L["|cffFF4444You don't have permission to invite.|r"])
                 return
             end
-            if AmazingHub.Compat.GuildInvite(target) then
-                if AmazingHub.RecruitEngagement then AmazingHub.RecruitEngagement:RecordInvite(target) end
-                AmazingHub:Print(L["Guild invite sent to |cffFFFFFF"] .. target .. "|r.")
+            local function invite()
+                if AmazingHub.Compat.GuildInvite(target) then
+                    if AmazingHub.RecruitEngagement then AmazingHub.RecruitEngagement:RecordInvite(target) end
+                    AmazingHub:Print(L["Guild invite sent to |cffFFFFFF"] .. target .. "|r.")
+                end
             end
+            -- The alliance has banned them: the officer reads why first (#408).
+            local BL = AmazingHub.BanList
+            if not (BL and BL.HoldInvite and BL:HoldInvite(target, invite)) then invite() end
         else
             AmazingHub:Print(L["Usage: /amazing recruit invite <PlayerName>"])
         end
@@ -1633,8 +1748,7 @@ function Recruitment:RegisterWelcomeEvent()
                     AmazingHub.CommSystem.MSG_TYPES.WELCOME_CLAIM, newMember, nil, "NORMAL")
             end
 
-            local settings = AmazingHub.db.recruitment
-            local welcomeMsg = settings.welcomeMessage
+            local welcomeMsg = Recruitment:WelcomeMessage()
             if welcomeMsg and welcomeMsg ~= "" then
                 if AmazingHub.Compat.NeedsClick() then
                     -- Forever drops a line sent from this timer: the officer's click sends it (#61).

@@ -19,15 +19,28 @@ local GLOBALS = {
   -- WoW: Forever professions (issue #31).
   "GetProfessions", "GetProfessionInfo",
   "GetContainerNumSlots", "GetContainerItemLink", "GetContainerItemInfo", "UseContainerItem",
+  -- Moved to C_Container as well (craft orders, issue #389).
+  "PickupContainerItem", "SplitContainerItem",
   "GuildRoster", "RegisterAddonMessagePrefix", "SendAddonMessage", "SendAddonMessageLogged",
   -- Moved to C_PartyInfo / C_Item, and the globals gone on WoW: Forever (issue #43).
   "InviteUnit", "InviteByName", "GetItemQualityColor", "GetItemCount",
+  -- Moved to C_PartyInfo as well (issue #378).
+  "ConvertToRaid",
+  -- Raid groups: moving and swapping go through Compat, which knows what a client lacks (issue #400).
+  "SetRaidSubgroup", "SwapRaidSubgroup",
   -- Forbidden to addons on WoW: Forever 1.60.1.70790: Compat.GuildInvite (issue #256).
   "GuildInvite",
+  -- A rank's rights to change ranks and remove (issue #420): Compat nil-guards them.
+  "CanGuildPromote", "CanGuildDemote", "CanGuildRemove",
   -- What a tooltip is showing: the Classic readers, and the data type the retail client
   -- registers by (issue #19). Reading one behind Compat's back is a feature that goes quiet
   -- on the other client, which is the failure this guard exists to make loud.
   "GetItem", "GetSpell", "GetUnit", "TooltipDataType",
+  -- The guild bank (issue #380): its switch differs by client and its calls may be missing.
+  "GetNumGuildBankTabs", "GetGuildBankTabInfo", "GetGuildBankItemInfo", "GetGuildBankItemLink",
+  "QueryGuildBankTab", "QueryGuildBankLog", "GetGuildBankTransaction", "GetGuildBankMoneyTransaction",
+  "PickupGuildBankItem", "SplitGuildBankItem", "SetCurrentGuildBankTab", "GetCurrentGuildBankTab",
+  "AutoStoreGuildBankItem", "DepositGuildBankMoney",
 }
 -- Names only these APIs have: as a field or method of anything but Compat they are flagged too.
 local API_ONLY = { GuildRoster = true, RegisterAddonMessagePrefix = true, SendAddonMessage = true,
@@ -39,7 +52,11 @@ local COMPAT_SOURCES = { ["AmazingHub.Compat"] = true, ["AmazingHub.Compat"] = t
 local NAMESPACES = { "C_Item", "C_Spell", "C_UnitAuras", "C_Container", "C_TradeSkillUI", "C_Club", "ChatThrottleLib",
                      "TooltipUtil", "TooltipDataProcessor", "C_ClassTalents", "C_Traits",
                      -- Retail's Mythic+ and Great Vault (issue #187).
-                     "C_MythicPlus", "C_ChallengeMode", "C_WeeklyRewards", "C_Calendar" }
+                     "C_MythicPlus", "C_ChallengeMode", "C_WeeklyRewards", "C_Calendar",
+                     -- The game's addon CPU meter, retail 11.0.2 on (issue #324).
+                     "C_AddOnProfiler",
+                     -- Whether the server opens a guild bank (issue #380).
+                     "C_GuildBank" }
 
 -- Blank comments and strings, keeping every newline so line numbers stay true.
 local function blank(src)

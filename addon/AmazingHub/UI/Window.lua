@@ -15,7 +15,6 @@ local UI = AmazingHub.UI
 local C  = AmazingHub.Colors
 local L  = AmazingHub.L
 
-local WHITE        = "Interface\\Buttons\\WHITE8x8"
 local NAME         = "AmazingHubWindow"
 local DEFAULT_W    = 1000
 local DEFAULT_H    = 620
@@ -29,11 +28,16 @@ local RULE_H       = 28
 local RULE_PAD     = 6
 local TAB_GAP      = 2
 local TAB_MIN_W    = 48
-local TAB_TEXT_PAD = 20
+local TAB_TEXT_PAD = 18      -- 20 until the Groups tab (#341): an officer's sixteen tabs still fit at 1000px
 local MORE_W       = 36
 local FOOT_H       = 22
 local FOOT_PAD     = 10
-local FOOT_GAP     = 8
+local LINK_PAD     = 4       -- a footer link's button past its label, each side (#377)
+local FOOT_GAP     = 4       -- so 12px parts one link's text from the next, as the sketch has it
+local CLOSE_X      = 6       -- the close button in from the title bar's right edge
+local TITLE_GAP    = 8       -- between the title bar's items (#377)
+local META_MIN     = 80      -- the meta line keeps at least this much, so the guild's name stays readable
+local BAR_BTN_H    = 20      -- Search and Sync, as tall as the minimise and close buttons
 local GRIP         = 16
 -- The room the game's metal frame (the Forever style) takes above the title and below the footer, set
 -- by eye in the beta: its atlas pieces are far taller than what they show, and lifted by the bottom
@@ -156,62 +160,19 @@ local function showTabMenu(f, anchor, keys)
 end
 
 ----------------------------------------------------------------------
--- Footer: quick actions, dropped lowest priority first as the window
--- narrows, and the invite field for whoever can invite.
+-- Footer (#377): links and the version, nothing else. The actions it held
+-- went where they are used: Search and Sync to the title bar, the invite
+-- field to the Members bar, Core Sign-up to the Raids screen. The links drop
+-- lowest priority first as the window narrows; the version stays.
 ----------------------------------------------------------------------
+local SITE = "the guild website"
 local FOOTER = {
-    { key = "search", label = L["Search"], priority = 100,
-      run = function() if AmazingHub.Search then AmazingHub.Search:Show() end end },
-    { key = "sync", label = L["Sync"], priority = 90,
-      run = function() if AmazingHub.CommSystem then AmazingHub.CommSystem:FullSync() end end },
-    { key = "invite", priority = 80 },
-    { key = "cores", label = L["Core Sign-up"], priority = 60,
-      run = function() if AmazingHub.ShowCoreSignupFrame then AmazingHub:ShowCoreSignupFrame() end end },
+    { key = "site",     label = "the guild website", priority = 100 },   -- its click is the copy box, below
+    { key = "help",     label = "/amazing help",  priority = 80,
+      run = function() if SlashCmdList.AMAZINGHUB then SlashCmdList.AMAZINGHUB("help") end end },
     { key = "blizzard", label = "Game guild window", priority = 95, -- Amazing Hub: always shown
       run = function() if AmazingHub.OpenBlizzardGuildUI then AmazingHub:OpenBlizzardGuildUI() end end },
 }
-
-local function inviteField(parent)
-    local holder = CreateFrame("Frame", nil, parent)
-    local box = CreateFrame("EditBox", nil, holder, "BackdropTemplate")
-    box:SetSize(130, 18)
-    box:SetPoint("LEFT", 0, 0)
-    box:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 })
-    box:SetBackdropColor(C.well.r, C.well.g, C.well.b, 1)
-    box:SetBackdropBorderColor(C.line.r, C.line.g, C.line.b, 1)
-    AmazingHub:ApplyFont(box, 10)
-    box:SetTextColor(C.text.r, C.text.g, C.text.b)
-    box:SetTextInsets(6, 6, 0, 0)
-    box:SetAutoFocus(false)
-    box:SetMaxLetters(50)
-
-    local hint = box:CreateFontString(nil, "OVERLAY")
-    AmazingHub:ApplyFont(hint, 10)
-    hint:SetPoint("LEFT", 6, 0)
-    hint:SetTextColor(C.labelDim.r, C.labelDim.g, C.labelDim.b)
-    hint:SetText(L["Player name..."])
-    box:SetScript("OnTextChanged", function(self) hint:SetShown((self:GetText() or "") == "") end)
-
-    local btn = UI:CreateButton(holder, L["Invite"], 64, 18)
-    btn:SetPoint("LEFT", box, "RIGHT", 4, 0)
-
-    local function invite()
-        local target = strtrim(box:GetText() or "")
-        if target == "" then
-            AmazingHub:Print(L["Enter a player name to invite."])
-            return
-        end
-        if AmazingHub.Compat.GuildInvite(target) then AmazingHub:Print(string.format(L["Guild invite sent to %s."], target)) end
-        box:SetText("")
-    end
-    btn:SetScript("OnClick", function() invite(); box:ClearFocus() end)
-    box:SetScript("OnEnterPressed", function(self) invite(); self:ClearFocus() end)
-    box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-    holder:SetSize(130 + 4 + btn:GetWidth(), 18)  -- the invite label may have grown its button (issue #28)
-    holder.box = box
-    return holder
-end
 
 ----------------------------------------------------------------------
 -- Build the window. Tab content is NOT built here: each panel builds the
@@ -232,6 +193,7 @@ local function createWindow()
     end
     f:Hide()
     f:SetScale(AmazingHub:GetSetting("uiScale") or 1)
+    UI:RefreshHairlines()   -- its border was sized before the scale (#369)
     UI:RestoreWindowGeometry(f)
     f.tabs, f.tabPanels, f.overflow, f.footItems = {}, {}, {}, {}
 
@@ -294,14 +256,23 @@ local function createWindow()
     minimise:SetScript("OnClick", function() f:ToggleCollapsed() end)
     f.minimise = minimise
 
+    -- Search and Sync left the footer for the title bar (#377). Children of the bar through
+    -- UI:TitleBarButton: as siblings its drag would take every click. Placed by f:LayoutTitle.
+    local function barButton(label, run)
+        local b = UI:SetButtonVariant(UI:TitleBarButton(bar, "text", label, 40, BAR_BTN_H), "ghost")
+        b:SetWidth(math.max(40, math.ceil(b.label:GetStringWidth()) + 12))
+        b:SetScript("OnClick", run)
+        return b
+    end
+    local searchBtn = barButton(L["Search"], function() if AmazingHub.Search then AmazingHub.Search:Show() end end)
+    local syncBtn = barButton(L["Sync"], function() if AmazingHub.CommSystem then AmazingHub.CommSystem:FullSync() end end)
+    f.searchButton, f.syncButton = searchBtn, syncBtn
+
     local sync = text(10, "caption", C.label)
-    sync:SetPoint("RIGHT", minimise, "LEFT", -8, 0)
     sync:SetJustifyH("RIGHT")
     f.syncText = sync
 
-    local meta = text(10, "caption", C.labelDim)
-    meta:SetPoint("LEFT", wordmark, "RIGHT", 10, 0)
-    meta:SetPoint("RIGHT", sync, "LEFT", -10, 0)
+    local meta = text(10, "caption", C.label)
     meta:SetJustifyH("LEFT")
     f.metaText = meta
 
@@ -376,18 +347,44 @@ local function createWindow()
     footLine:SetPoint("TOPRIGHT", -sideR, 0)
     f.footer = foot
 
-    for _, item in ipairs(FOOTER) do
-        local frame
-        if item.key == "invite" then
-            frame = inviteField(foot)
-        else
-            frame = UI:SetButtonVariant(UI:CreateButton(foot, item.label, 40, 18), "ghost")
-            frame:SetWidth(math.max(40, math.ceil(frame.label:GetStringWidth()) + 12))
-            frame:SetScript("OnClick", item.run)
+    -- WoW opens no browser: the guild website puts the address in a read-only box over the links, selected
+    -- for Ctrl+C, until it lets go (the Web tab's idiom).
+    local siteBox = UI:CreateInput(foot, 150, 18)
+    siteBox:SetFrameLevel(foot:GetFrameLevel() + 5)
+    siteBox:SetPoint("LEFT", foot, "LEFT", FOOT_PAD - LINK_PAD, 0)
+    siteBox:SetScript("OnEnterPressed", function(s) s:ClearFocus() end)
+    siteBox:HookScript("OnTextChanged", function(s)
+        if s:GetText() ~= SITE then
+            s:SetText(SITE)
+            s:HighlightText()
         end
-        frame:Hide()
-        f.footItems[item.key] = frame
+    end)
+    siteBox:HookScript("OnEditFocusLost", function(s) s:Hide() end)
+    siteBox:Hide()
+    f.siteBox = siteBox
+    local function showSite()
+        siteBox:Show()
+        siteBox:SetText(SITE)
+        siteBox:HighlightText()
+        siteBox:SetFocus()
+        AmazingHub:Print(L["Press Ctrl+A to select all, then Ctrl+C to copy"])
     end
+
+    for _, item in ipairs(FOOTER) do
+        local link = UI:SetButtonVariant(UI:CreateButton(foot, item.label, 40, 18), "ghost")
+        link:SetWidth(math.ceil(link.label:GetStringWidth()) + 2 * LINK_PAD)
+        link:SetScript("OnClick", item.run or showSite)
+        link:Hide()
+        f.footItems[item.key] = link
+    end
+
+    local version = foot:CreateFontString(nil, "OVERLAY")
+    AmazingHub:ApplyFont(version, 10, "caption")
+    version:SetShadowOffset(0, 0)
+    version:SetTextColor(C.label.r, C.label.g, C.label.b)
+    version:SetText("v" .. tostring(AmazingHub.VERSION or ""))
+    version:SetPoint("RIGHT", foot, "RIGHT", -(FOOT_PAD + GRIP), 0)   -- the grip keeps the corner
+    f.versionText = version
 
     local grip = CreateFrame("Button", nil, f)
     grip:SetSize(GRIP, GRIP)
@@ -497,23 +494,62 @@ local function createWindow()
         end
     end
 
+    -- The links from the left, their text FOOT_PAD in; the version and the grip keep the right.
     function f:LayoutFooter(w)
         w = w or self:GetWidth() or 0
         local spec = {}
         for _, item in ipairs(FOOTER) do
-            local frame = self.footItems[item.key]
-            frame:Hide()
-            if item.key ~= "invite" or AmazingHub.Compat.AddonMayInvite() then   -- Anniversary only (#256)
-                spec[#spec + 1] = { key = item.key, min = frame:GetWidth(), weight = 0, priority = item.priority }
+            local link = self.footItems[item.key]
+            link:Hide()
+            spec[#spec + 1] = { key = item.key, min = link:GetWidth(), weight = 0, priority = item.priority }
+        end
+        local room = w - 2 * FOOT_PAD + LINK_PAD - GRIP - math.ceil(version:GetStringWidth()) - FOOT_GAP
+        for _, col in ipairs(UI:ResolveColumns(spec, room, FOOT_GAP)) do
+            if col.shown then
+                local link = self.footItems[col.key]
+                link:ClearAllPoints()
+                link:SetPoint("LEFT", foot, "LEFT", FOOT_PAD - LINK_PAD + col.x, 0)
+                link:Show()
             end
         end
-        -- The grip keeps the right-hand corner.
-        for _, col in ipairs(UI:ResolveColumns(spec, w - 2 * FOOT_PAD - GRIP, FOOT_GAP)) do
+    end
+
+    -- Between the wordmark and the minimise button (#377). The meta line never goes; as the window
+    -- narrows the sync time goes first, then Search, then Sync, so nothing runs under the minimise
+    -- button at any width. Folded to the bar only the three numbers stay, as before: buttons that
+    -- came and went with the countdown's width would jump on every tick.
+    local TITLE_ITEMS = {
+        { key = "meta",   frame = meta,      priority = 100, required = true, weight = 1 },
+        { key = "time",   frame = sync,      priority = 40,  text = true },
+        { key = "search", frame = searchBtn, priority = 60 },
+        { key = "sync",   frame = syncBtn,   priority = 80 },
+    }
+    function f:LayoutTitle(w)
+        w = w or self:GetWidth() or 0
+        local isBar = self.band == "bar"
+        summary:SetShown(isBar)
+        if isBar then
+            for _, item in ipairs(TITLE_ITEMS) do item.frame:Hide() end
+            return
+        end
+        local left = 10 + math.ceil(wordmark:GetStringWidth()) + 10
+        local right = CLOSE_X + close:GetWidth() + 2 + minimise:GetWidth() + TITLE_GAP
+        local spec = {}
+        for i, item in ipairs(TITLE_ITEMS) do
+            local min = (item.key == "meta" and META_MIN)
+                or (item.text and math.ceil(item.frame:GetStringWidth())) or item.frame:GetWidth()
+            spec[i] = { key = item.key, min = min, weight = item.weight or 0, priority = item.priority,
+                        required = item.required }
+        end
+        -- Shown or not, never hidden and shown again: this runs on the 10s tick and every roster update,
+        -- and a button hidden mid-press loses its click (#377).
+        for i, col in ipairs(UI:ResolveColumns(spec, w - left - right, TITLE_GAP)) do
+            local item = TITLE_ITEMS[i]
+            item.frame:SetShown(col.shown)
             if col.shown then
-                local frame = self.footItems[col.key]
-                frame:ClearAllPoints()
-                frame:SetPoint("LEFT", foot, "LEFT", FOOT_PAD + col.x, 0)
-                frame:Show()
+                item.frame:ClearAllPoints()
+                item.frame:SetPoint("LEFT", bar, "LEFT", left + col.x, 0)
+                if item.key == "meta" or item.text then item.frame:SetWidth(col.w) end
             end
         end
     end
@@ -533,6 +569,7 @@ local function createWindow()
             sync:SetText(last and string.format(L["sync %s"], AmazingHub:TimeAgo(last)) or L["not synced yet"])
             -- The three numbers walk the officer work, so only while they show.
             if self.band == "bar" then summary:SetText(A:BarText()) end
+            self:LayoutTitle()   -- the sync time's width changes with its text (#377)
         end)
     end
 
@@ -600,12 +637,10 @@ local function createWindow()
         bar:ClearAllPoints()
         bar:SetPoint("TOPLEFT", 0, -top)
         bar:SetPoint("TOPRIGHT", 0, -top)
-        meta:SetShown(not isBar)
-        sync:SetShown(not isBar)
-        summary:SetShown(isBar)
         minimise.x:SetText(isBar and "+" or DASH)
         close:ClearAllPoints()
-        close:SetPoint("RIGHT", bar, "RIGHT", isBar and -(GRIP + 4) or -6, 0)
+        close:SetPoint("RIGHT", bar, "RIGHT", isBar and -(GRIP + 4) or -CLOSE_X, 0)
+        self:LayoutTitle(w)
 
         rule:SetShown(not isBar)
         content:SetShown(not isBar)
@@ -658,9 +693,13 @@ local function createWindow()
     AmazingHub.Compat.RegisterEvent(f, "RAID_ROSTER_UPDATE")
     AmazingHub.Compat.RegisterEvent(f, "PARTY_LOOT_METHOD_CHANGED")
     AmazingHub.Compat.RegisterEvent(f, "GUILD_ROSTER_UPDATE")
+    -- The title counts who is online over the whole roster: at most once every ROSTER_GAP (issue #324).
+    local function shownTitle()
+        if f:IsShown() then f:RefreshTitle() end
+    end
     f:SetScript("OnEvent", function(self, event)
         if event == "GUILD_ROSTER_UPDATE" then
-            if self:IsShown() then self:RefreshTitle() end
+            AmazingHub:Coalesce("windowTitle", AmazingHub.ROSTER_GAP, shownTitle)
         else
             self:UpdateTabVisibility()
         end
@@ -689,6 +728,27 @@ end
 -- every entry point uses. Returns true when the tab opened.
 function UI:OpenWindow(id, sub, filter)
     local def = self:GetFeature(id)
+    -- A feature that lives in another tab's sub-tab (issue #346: DKP, the wishlists) opens it.
+    if def and not def.tab and def.opens then
+        if self:IsFeatureAbsent(def) then
+            AmazingHub:Print(L["Not available on this client."])
+            return false
+        end
+        -- Said as a tab says it (issue #367: Trials, the Journal and Achievements became sub-tabs).
+        if not AmazingHub:IsFeatureEnabled(id) then
+            AmazingHub:Print(string.format(L["%s is disabled in Settings."], def.label))
+            return false
+        end
+        if AmazingHub:FeatureStartFailed(id) then
+            AmazingHub:Print(string.format(L["%s could not start on this client. Type /amazing errors for details."], def.label))
+            return false
+        end
+        if def.officerOnly and not AmazingHub:IsOfficer() then
+            AmazingHub:Print(string.format(L["%s is officer-only."], def.label))
+            return false
+        end
+        return self:OpenWindow(def.opens[1], sub or def.opens[2], filter)
+    end
     if not (def and def.tab) then return false end
     -- Checked here with their own messages, before the tab gate that covers
     -- all four: an absent feature, a disabled one, a failed one and a rank
@@ -728,6 +788,7 @@ end
 function UI:ApplyScale()
     local f = AmazingHub.RosterFrame
     if f then f:SetScale(AmazingHub:GetSetting("uiScale") or 1) end
+    self:RefreshHairlines()
 end
 
 -- A feature turned off in Settings loses its tab at once.

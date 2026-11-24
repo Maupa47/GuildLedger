@@ -28,7 +28,13 @@ AmazingHub.State = {
     -- (AmazingHub:RecordMissing). Feeds /amazing errors and the login line.
     startup     = { failed = {}, failedFeatures = {}, stacks = {} },
     missing     = {},
+    perf        = { rows = {} },              -- AmazingHub.Perf: calls and ms per label (issue #324)
+    coalesce    = { at = {}, waiting = {} },  -- AmazingHub:Coalesce: last run and the call held, per name
 }
+
+-- Confirmation dialogs, by name, in StaticPopup's own field names. Shown by AmazingHub:ShowDialog
+-- (UI/Helpers.lua) in AmazingHub's own frame, never by StaticPopup (#315).
+AmazingHub.Dialogs = {}
 
 ----------------------------------------------------------------------
 -- Database defaults
@@ -98,6 +104,16 @@ eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("GUILD_ROSTER_UPDATE")
 eventFrame:RegisterEvent("PLAYER_GUILD_UPDATE")
+-- pcall: a client that lacks an event raises on it (Compat.RegisterEvent, which loads later), and this
+-- frame drives the whole addon.
+pcall(eventFrame.RegisterEvent, eventFrame, "UI_SCALE_CHANGED")
+pcall(eventFrame.RegisterEvent, eventFrame, "DISPLAY_SIZE_CHANGED")
+
+-- Borders and rules are one screen pixel at the scale they were drawn at (#369): size them again a
+-- frame after a scale change, once UIParent has taken it in its own handler for the same event.
+local function refreshHairlines()
+    C_Timer.After(0, function() if AmazingHub.UI then AmazingHub.UI:RefreshHairlines() end end)
+end
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
@@ -109,11 +125,14 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         AmazingHub:OnLogin()
     elseif event == "PLAYER_ENTERING_WORLD" then
         local isInitialLogin, isReloadingUi = ...
+        if isInitialLogin or isReloadingUi then refreshHairlines() end
         AmazingHub:OnEnterWorld(isInitialLogin, isReloadingUi)
     elseif event == "GUILD_ROSTER_UPDATE" then
         AmazingHub:OnGuildRosterUpdate()
     elseif event == "PLAYER_GUILD_UPDATE" then
         AmazingHub:OnGuildRosterUpdate()
+    elseif event == "UI_SCALE_CHANGED" or event == "DISPLAY_SIZE_CHANGED" then
+        refreshHairlines()
     end
 end)
 
@@ -180,6 +199,10 @@ function AmazingHub:ResolveGuildDB()
         AmazingHubDB._dbVersion = 2
     end
 
+    -- Amazing Hub: data the 0.6 hub saved under "<guild>-" (no realm) is copied over once (UI/PackMigrate.lua)
+    if guilded and AmazingHub.PackMigrate then
+        AmazingHub:SafeCall(AmazingHub.PackMigrate.MergeRealmless, AmazingHub.PackMigrate, dbKey, realmName)
+    end
     if not AmazingHubDB[dbKey] then
         AmazingHubDB[dbKey] = {}
     end
@@ -258,9 +281,28 @@ local MODULE_START = {
     { "Alliance", ui = "alliance" },
     { "AllianceSync" },
     { "AllianceChat" },
+    -- The alliance set in the guild info, its hidden channel and the allied /g (issues #344, #348).
+    { "AllianceLink" },
     { "GuildChat" },
     { "RosterLog" },
+    -- Each member's passages and rank changes, kept past the log's 90 days (issue #425).
+    { "MemberHistory" },
+    -- The officers' safe list and nicknames (issue #429), synced among them; dates in the notes.
+    { "MemberMarks" },
+    { "NoteDates" },
     { "BanList" },
+    -- The alt links, one synced entry per alt (issue #424): before the readers of db.altLinks.
+    { "AltSync" },
+    -- The disciplinary record (issue #402): officers only, synced among them.
+    { "Discipline" },
+    -- The officers' chat alerts (issue #404): after GuildChat, whose log gives the context.
+    { "ModAlerts" },
+    -- And the anti-flood (issue #405), delivering into the same panel.
+    { "ModFlood" },
+    -- And the newcomer's quarantine (issue #406): stricter alerts in a member's first days.
+    { "Newcomer" },
+    -- The guild's rules (issue #407): written by the officers, read by everybody.
+    { "GuildRules" },
     { "CommSystem", feature = "commSystem" },
     { "Wishlist", ui = "wishlist" },
     { "SoftRes" },
@@ -275,9 +317,14 @@ local MODULE_START = {
     { "TradeCouncil" },
     { "Digest" },
     { "Bulletin" },
+    -- The guild bank (issue #380): where the client has one.
+    { "GuildBank", feature = "bank", ui = "bank" },
+    { "GuildBankCleanup", feature = "bank" },
     { "CallToArms" },
     { "Polls" },
     { "Calendar" },
+    -- Each member's birthday and join anniversary (issue #428): drawn on the calendar, never stored as events.
+    { "Birthdays" },
     { "Milestones" },
     -- WoW: Forever only (issue #205): what happened to me, for the guild's feed on the guild website.
     { "Journal", feature = "journal" },
@@ -296,10 +343,14 @@ local MODULE_START = {
     { "NoteCommand" },
     { "LevelQuery" },
     { "LFGBoard" },
+    -- The groups being formed (issue #341). After the board, whose listings and cooldown line it shares.
+    { "Groups" },
     { "GuildMap" },
     { "PugInspector" },
     { "RecipeTracker", ui = "recipes" },
     { "CraftNet" },
+    -- Craft orders (issue #389): ask the guild's crafters to make an item, deliver by trade or mail.
+    { "CraftOrders", ui = "recipes" },
     -- WoW: Forever only (issue #31); on Anniversary the module does not exist and is skipped.
     { "Professions" },
     { "ProfSync" },
@@ -328,6 +379,10 @@ local MODULE_START = {
     { "ChatTweaks" },
     { "GuildManager", feature = "guildManager", ui = "management" },
     { "ModPresets" },
+    -- Promote, demote or remove by rules, one member a click (issue #420).
+    { "BulkActions", feature = "guildManager" },
+    -- Who has no AmazingHub, and a reminder whispered one member a click (issue #422).
+    { "AddonReminder", feature = "guildManager" },
     -- The roster is not compared for new members' trials until the guild's settings have arrived (#249).
     { "TrialTracker", method = "Arm" },
 }
@@ -339,6 +394,8 @@ local OFFICER_START = {
     { "TrialTracker", feature = "trialTracker", ui = "trials", after = "CheckReady" },
     -- What the Discord's cores changed at login, to the other officers (#135).
     { "CoreManager", method = "SendDiscordChanges" },
+    -- A linked guild with no package from the site for 30 days hears it once (#339).
+    { "CoreManager", method = "TellQuietLink" },
     -- The requests from the site: read at the start with no rank known, they reached no officer's notice.
     { "JoinRequests", method = "Refresh" },
     -- Repeating events: the next weeks of every series, filled in by an officer's client (#267).
@@ -346,6 +403,7 @@ local OFFICER_START = {
 }
 
 local OFFICER_START_DELAY = 5  -- seconds; the guild rank is not known at PLAYER_LOGIN
+local RAID_PROMPT_DELAY = 4    -- seconds from the inbox read to the raid owner's prompt; the login digest comes at 9
 local OFFICER_START_TRIES = 12 -- asks, OFFICER_START_DELAY apart, before giving up on the rank
 
 -- The rank IsOfficer reads, or no guild at all: either way there is an answer to act on.
@@ -387,6 +445,11 @@ function AmazingHub:InitModules()
     -- raid from it when the session starts. Its calendar half waits for the rank, below (#146).
     if AmazingHub.CompanionImport and AmazingHub.CompanionImport.ReadInbox then
         AmazingHub.CompanionImport:ReadInbox()
+    end
+    -- The owner of a raid about to start is asked, once the inbox is read (issue #400): a moment later, so the guild
+    -- roster asked for below is in for the button, and before the digest, which gives way to it.
+    if AmazingHub.RaidStart and AmazingHub.RaidStart.OnLogin then
+        AmazingHub.Compat.After(RAID_PROMPT_DELAY, function() AmazingHub:SafeCall(AmazingHub.RaidStart.OnLogin, AmazingHub.RaidStart) end)
     end
 
     for _, entry in ipairs(MODULE_START) do
@@ -564,12 +627,28 @@ function AmazingHub:OnEnterWorld(isInitialLogin, isReloadingUi)
     end)
 end
 
-function AmazingHub:OnGuildRosterUpdate()
+-- The passes over the whole roster, each a loop over every member (issue #324: on a 700-member guild the
+-- event comes in bursts, and four passes ran on every one of them).
+local function rosterPass()
+    local t = AmazingHub.Perf:Start()
     if AmazingHub.RecordFirstSeen then AmazingHub:RecordFirstSeen() end
     if AmazingHub.DropDeparted then AmazingHub:DropDeparted() end
     -- Who joined since this client last saw the whole roster: a trial each, with the guild's switch on (#249).
     if AmazingHub.TrialTracker then AmazingHub:SafeCall(AmazingHub.TrialTracker.ScanRoster, AmazingHub.TrialTracker) end
+    -- What changed since the roster last seen (#425): at most a pass a minute, whatever the bursts.
+    if AmazingHub.MemberHistory then AmazingHub.MemberHistory:Schedule() end
+    AmazingHub.Perf:Stop("roster pass", t)
+    t = AmazingHub.Perf:Start()
     AmazingHub:RefreshRosterUI()
+    AmazingHub.Perf:Stop("roster window", t)
+end
+
+-- At most one pass every ROSTER_GAP seconds: the first of a burst at once, the rest as one at its end.
+AmazingHub.ROSTER_GAP = 5
+
+function AmazingHub:OnGuildRosterUpdate()
+    self.Perf:Count("roster event")
+    self:Coalesce("roster", self.ROSTER_GAP, rosterPass)
 end
 
 ----------------------------------------------------------------------
@@ -815,6 +894,111 @@ function AmazingHub:SafeCall(fn, ...)
 end
 
 ----------------------------------------------------------------------
+-- Coalesce (issue #324): runs `fn` now, or, when `name` ran less than `gap` seconds ago, once at the
+-- end of that window, with the last `fn` it was handed. A burst of calls costs two runs and the last
+-- call is never lost. True when it ran now.
+----------------------------------------------------------------------
+function AmazingHub:Coalesce(name, gap, fn)
+    local st = self.State.coalesce
+    local now, last = GetTime(), st.at[name]
+    if not last or now - last >= gap then
+        st.at[name], st.waiting[name] = now, nil
+        fn()
+        return true
+    end
+    local held = st.waiting[name] ~= nil
+    st.waiting[name] = fn
+    if not held then
+        self.Compat.After(last + gap - now, function()
+            local w = st.waiting[name]
+            if not w then return end
+            st.at[name], st.waiting[name] = GetTime(), nil
+            w()
+        end)
+    end
+    return false
+end
+
+----------------------------------------------------------------------
+-- Where the time goes (issue #324): calls, milliseconds and bytes per label since login or the last
+-- reset, for /amazing perf and Audit > Sync. A report of high CPU came with no logs, and nothing kept
+-- how often the guild's traffic or the roster events arrive. Session only; two clock reads a call.
+----------------------------------------------------------------------
+local Perf = {}
+AmazingHub.Perf = Perf
+local clock = debugprofilestop   -- the client's milliseconds; absent off the game, and only counts then
+
+function Perf:Start() return clock and clock() or nil end
+
+local function perfRow(label)
+    local st = AmazingHub.State.perf
+    st.since = st.since or GetTime()
+    local row = st.rows[label]
+    if not row then
+        row = { n = 0, ms = 0, max = 0, bytes = 0 }
+        st.rows[label] = row
+    end
+    return row
+end
+
+function Perf:Count(label)
+    local row = perfRow(label)
+    row.n = row.n + 1
+end
+
+function Perf:Stop(label, t0, bytes)
+    local row = perfRow(label)
+    row.n = row.n + 1
+    if t0 and clock then
+        local ms = clock() - t0
+        row.ms = row.ms + ms
+        if ms > row.max then row.max = ms end
+    end
+    if bytes then row.bytes = row.bytes + bytes end
+end
+
+function Perf:Reset()
+    AmazingHub.State.perf = { rows = {}, since = GetTime() }
+end
+
+-- What /amazing perf says: the game's own profiler when this client has one, then every label by time spent.
+function Perf:Lines()
+    local st = AmazingHub.State.perf
+    local mins = math.max(1, math.floor((GetTime() - (st.since or GetTime())) / 60 + 0.5))
+    local lines = { string.format(L["Amazing Hub performance, last %d min:"], mins) }
+    local cpu = AmazingHub.Compat.AddOnCPU("AmazingHub")
+    if cpu then
+        lines[#lines + 1] = string.format(L["Game profiler: Amazing Hub %.2f ms a frame now, %.2f this session, peak %.1f ms; every addon %.2f ms a frame."],
+            cpu.recent or 0, cpu.session or 0, cpu.peak or 0, cpu.all or 0)
+    else
+        lines[#lines + 1] = L["This client has no addon profiler; the times below are Amazing Hub's own."]
+    end
+    local rows = {}
+    for label, row in pairs(st.rows) do rows[#rows + 1] = { label = label, row = row } end
+    if #rows == 0 then
+        lines[#lines + 1] = L["Nothing measured yet."]
+        return lines
+    end
+    table.sort(rows, function(a, b)
+        if a.row.ms ~= b.row.ms then return a.row.ms > b.row.ms end
+        if a.row.n ~= b.row.n then return a.row.n > b.row.n end
+        return a.label < b.label
+    end)
+    for _, r in ipairs(rows) do
+        local row = r.row
+        local line = string.format("%s: %d (%.1f/min)", r.label, row.n, row.n / mins)
+        if row.ms > 0 then line = line .. string.format(", %.0f ms, max %.1f", row.ms, row.max) end
+        if row.bytes > 0 then line = line .. string.format(", %.1f KB", row.bytes / 1024) end
+        lines[#lines + 1] = line
+    end
+    return lines
+end
+
+function Perf:Print()
+    for _, line in ipairs(self:Lines()) do AmazingHub:Print(line) end
+end
+
+----------------------------------------------------------------------
 -- Permission checks
 ----------------------------------------------------------------------
 function AmazingHub:IsOfficer()
@@ -842,7 +1026,10 @@ function AmazingHub:SetOfficerMaxRank(maxRank)
     if not self:IsOfficer() then return false end
     local s = self.db.settings
     s.officerMaxRank = maxRank
-    s.officerMaxRankAt = math.max(GetServerTime(), (s.officerMaxRankAt or 0) + 1)
+    local at = math.max(GetServerTime(), (s.officerMaxRankAt or 0) + 1)
+    -- Never the stamp and ranks of an event limit: receivers would take it for an old client's copy (#331).
+    while self:_IsEventLimitCopy(at, maxRank) do at = at + 1 end
+    s.officerMaxRankAt = at
     self:PublishOfficerMaxRank(true)
     return true
 end
@@ -870,7 +1057,33 @@ function AmazingHub:OnOfficerMaxRankSync(env)
     -- same answer on every client whatever order they arrive in.
     local held = s.officerMaxRankAt
     if held and (at < held or (at == held and max >= (s.officerMaxRank or 1))) then return end
+    -- A client up to 1.12 read the event limit as this one and its officers re-send it as
+    -- theirs, with the event limit's own stamp (#331): that copy is not an officer change.
+    if AmazingHub:_IsEventLimitCopy(at, max) then return end
+    -- Kept so the event limit, arriving after such a copy, can put the officers back.
+    s.officerMaxRankPrev, s.officerMaxRankPrevAt = s.officerMaxRank, s.officerMaxRankAt
     s.officerMaxRank, s.officerMaxRankAt = max, at
+end
+
+-- Every event limit an officer stamped, held a while (#331): an old client's officer copy carries one of
+-- these exact (stamp, ranks) pairs, also of a limit that has since been replaced.
+local EVENT_SEEN_KEEP = 8
+function AmazingHub:_SeeEventLimit(at, max)
+    local s = self.db.settings
+    s.eventMaxRankSeen = s.eventMaxRankSeen or {}
+    s.eventMaxRankSeen[at] = max
+    local stamps = {}
+    for k in pairs(s.eventMaxRankSeen) do stamps[#stamps + 1] = k end
+    if #stamps <= EVENT_SEEN_KEEP then return end
+    table.sort(stamps)
+    for i = 1, #stamps - EVENT_SEEN_KEEP do s.eventMaxRankSeen[stamps[i]] = nil end
+end
+
+function AmazingHub:_IsEventLimitCopy(at, max)
+    local s = self.db and self.db.settings
+    if not (s and at and max) then return false end
+    if s.eventMaxRankAt == at and s.eventMaxRank == max then return true end
+    return s.eventMaxRankSeen ~= nil and s.eventMaxRankSeen[at] == max
 end
 
 -- Who creates calendar events (issue #283): ranks 0 to this. The guild's, stamped and published as the
@@ -898,7 +1111,10 @@ function AmazingHub:SetEventMaxRank(maxRank)
     if type(maxRank) ~= "number" or maxRank < 0 or maxRank > MAX_RANK_INDEX or maxRank ~= math.floor(maxRank) then return false end
     local s = self.db.settings
     s.eventMaxRank = maxRank
-    s.eventMaxRankAt = math.max(GetServerTime(), (s.eventMaxRankAt or 0) + 1)
+    local at = math.max(GetServerTime(), (s.eventMaxRankAt or 0) + 1)
+    while s.officerMaxRankAt == at and s.officerMaxRank == maxRank do at = at + 1 end
+    s.eventMaxRankAt = at
+    self:_SeeEventLimit(s.eventMaxRankAt, maxRank)
     self:PublishEventMaxRank(true)
     return true
 end
@@ -918,9 +1134,19 @@ function AmazingHub:OnEventMaxRankSync(env)
     if max < 0 or max > MAX_RANK_INDEX or max ~= math.floor(max) then return end
     at = math.min(at, GetServerTime() + RANK_FUTURE_SLACK)
     local s = self.db.settings
+    self:_SeeEventLimit(at, max)
+    -- The officer threshold we hold is an old client's copy of this change (#331), even of one
+    -- older than the limit we keep: back to the one before it, unless that was a copy too.
+    if s.officerMaxRankAt == at and s.officerMaxRank == max then
+        local prev, prevAt = s.officerMaxRankPrev, s.officerMaxRankPrevAt
+        if self:_IsEventLimitCopy(prevAt, prev) then prev, prevAt = nil, nil end
+        s.officerMaxRank, s.officerMaxRankAt = prev, prevAt
+    end
     local held = s.eventMaxRankAt
     if held and (at < held or (at == held and max >= (s.eventMaxRank or 0))) then return end
     s.eventMaxRank, s.eventMaxRankAt = max, at
+    -- An open calendar shows the New Event button the moment the limit lets this rank in.
+    if self.Calendar and self.Calendar.Refresh then self.Calendar:Refresh() end
 end
 
 -- Check whether a named player (may include realm, e.g. "Name-Realm") is an officer
@@ -986,6 +1212,40 @@ function AmazingHub:ShowsItemTooltipInfo(tooltip)
 end
 
 ----------------------------------------------------------------------
+-- Dates in the client's language (issue #307)
+----------------------------------------------------------------------
+-- The game's date() names the weekday and the month (%a %A %b %B) in English on every client, so a
+-- frFR calendar said "Monday, 09 Nov 2026". LocalDate takes date()'s own format and fills those four
+-- from the translations; the rest (%d %H %M %Y, %%) is date()'s. A whole date's layout is the
+-- translation's too: callers pass it as L["%A, %d %b %Y"], which a language may reorder, put the year
+-- first or name the month in full (%B). tools/date-names.lua fails on a date() whose format names one.
+-- "May" is the month's one key for both: every language's full name, short enough for either.
+local dateNames   -- built at the first call, once every Locales file has filled L
+local function namesOfDates()
+    dateNames = dateNames or {
+        a = { L["Sun"], L["Mon"], L["Tue"], L["Wed"], L["Thu"], L["Fri"], L["Sat"] },
+        A = { L["Sunday"], L["Monday"], L["Tuesday"], L["Wednesday"], L["Thursday"], L["Friday"], L["Saturday"] },
+        b = { L["Jan"], L["Feb"], L["Mar"], L["Apr"], L["May"], L["Jun"],
+              L["Jul"], L["Aug"], L["Sep"], L["Oct"], L["Nov"], L["Dec"] },
+        B = { L["January"], L["February"], L["March"], L["April"], L["May"], L["June"],
+              L["July"], L["August"], L["September"], L["October"], L["November"], L["December"] },
+    }
+    return dateNames
+end
+
+function AmazingHub:LocalDate(fmt, timestamp)
+    local t = date("*t", timestamp)
+    local names = namesOfDates()
+    local localized = tostring(fmt or ""):gsub("%%(.)", function(c)
+        local list = names[c]
+        if not list then return "%" .. c end   -- date()'s own, %% included
+        local name = list[(c == "a" or c == "A") and t.wday or t.month] or ""
+        return (name:gsub("%%", "%%%%"))       -- a name is text to date(), never a format
+    end)
+    return date(localized, timestamp)
+end
+
+----------------------------------------------------------------------
 -- Feature toggles (Rule 8 — never read db.settings.modules directly).
 -- Keys are the feature ids from UI/FeatureRegistry.lua. Default is ON:
 -- an absent key means "never touched", not "off". `core` features can
@@ -1036,17 +1296,26 @@ end
 -- lists, "dkp" = the Points economy.
 ----------------------------------------------------------------------
 -- `retail = false`: not offered on retail. That's My BiS is Classic only (issue #185).
+-- "plus1", "dkpbid" and "dkpsealed" (issue #334) are ready-made loot rules of the loot master
+-- (LootRule:FromLegacy), which retail does not have: the +1 counter, and DKP won by an open bid or by
+-- a sealed one that pays the second price. "sk" and "karma" (issue #337) are two more: Suicide Kings,
+-- a list whose winner drops to the end, and karma, a bonus added to the roll of which the winner
+-- loses half. "council" (issue #336): the guild's officers vote among whoever asked, and the master
+-- looter confirms.
 AmazingHub.LOOT_SYSTEMS = {
     { key = "rolls",    label = "/roll (MS/OS)" },
+    { key = "plus1",    label = "MS > OS +1", retail = false },
     { key = "tmb",      label = "TMB", retail = false },
     { key = "wishlist", label = "Wishlist" },
     { key = "dkp",      label = "DKP / Points" },
+    { key = "dkpbid",   label = "DKP bidding", retail = false },
+    { key = "dkpsealed", label = "DKP sealed second-price", retail = false },
+    { key = "epgp",     label = "EPGP" },
+    { key = "sk",       label = "Suicide Kings", retail = false },
+    { key = "karma",    label = "Karma", retail = false },
+    { key = "council",  label = "Loot council", retail = false },
     { key = "external", label = "External / Off" },
 }
-
-function AmazingHub:GetLootSystem()
-    return self:GetSetting("lootSystem") or "rolls"
-end
 
 -- The loot systems this client offers, in order.
 function AmazingHub:LootSystemsHere()
@@ -1057,13 +1326,6 @@ function AmazingHub:LootSystemsHere()
     return out
 end
 
--- A loot system's name on its button. On retail nobody /rolls: "rolls" is the free roll, where whoever
--- received a tradeable item awards it to the raid's best answer (TradeCouncil, issue #185).
-function AmazingHub:LootSystemLabel(sys)
-    if sys.key == "rolls" and self.Client.isRetail then return L["Free roll"] end
-    return sys.label
-end
-
 -- Whether `key` is a loot system this client offers.
 local function lootSystemHere(key)
     for _, sys in ipairs(AmazingHub:LootSystemsHere()) do
@@ -1071,22 +1333,90 @@ local function lootSystemHere(key)
     end
     return false
 end
+function AmazingHub:IsLootSystemHere(key) return lootSystemHere(key) end
 
--- True unless the guild has opted out of AmazingHub loot handling entirely
+-- The loot system in force (issue #338): the one the raid's active core chose for itself, else the
+-- guild's. `coreName` asks for another core; "" is the guild's own, whatever core is active.
+-- With the raid night's own rule in force (the site's, amazinghub-web#516), the loot system of before
+-- that rule reads closest to, so the announce and the screens follow the rule being played.
+function AmazingHub:GetLootSystem(coreName)
+    if coreName == nil then
+        local LR = self.LootRule
+        local night = LR and LR.Night and self.db and LR:Night()
+        if night then return LR:SystemOf(night) end
+    end
+    return self:BaseLootSystem(coreName)
+end
+
+-- The same without the night's rule: what the core, or the guild, chose.
+function AmazingHub:BaseLootSystem(coreName)
+    local CM = self.CoreManager
+    if coreName ~= "" and CM and CM.GetLootSystem and self.db and self.db.cores then
+        local own = CM:GetLootSystem(coreName)
+        if own and lootSystemHere(own) then return own end
+    end
+    return self:GetSetting("lootSystem") or "rolls"
+end
+
+-- A loot system's name on its button. On retail nobody /rolls: "rolls" is the free roll, where whoever
+-- received a tradeable item awards it to the raid's best answer (TradeCouncil, issue #185).
+function AmazingHub:LootSystemLabel(sys)
+    if sys.key == "rolls" and self.Client.isRetail then return L["Free roll"] end
+    if sys.key == "dkpbid" then return L["DKP bidding"] end
+    if sys.key == "dkpsealed" then return L["DKP sealed second-price"] end
+    if sys.key == "sk" then return L["Suicide Kings"] end
+    if sys.key == "karma" then return L["Karma"] end
+    if sys.key == "council" then return L["Loot council"] end
+    return sys.label
+end
+
+-- True unless the loot system in force has opted out of AmazingHub loot handling entirely
 -- ("external": loot is run by Gargul/RCLootCouncil/etc.).
 function AmazingHub:LootSystemActive()
     return self:GetLootSystem() ~= "external"
 end
 
-function AmazingHub:SetLootSystem(sys)
-    self:SetSetting("lootSystem", sys)
+-- The guild's loot system, or with `coreName` that core's own (issue #338; nil for a core goes back to
+-- following the guild). Returns false when a core's choice was not saved.
+function AmazingHub:SetLootSystem(sys, coreName)
+    local ofCore = coreName ~= nil and coreName ~= ""
+    if ofCore then
+        if not (self.CoreManager and self.CoreManager:SetLootSystem(coreName, sys)) then return false end
+    else
+        self:SetSetting("lootSystem", sys)
+    end
+    -- EPGP is its own system (issue #319): choosing it puts the points in EPGP, and going back to DKP
+    -- takes them out of it. The standings are the same rows either way: nothing is lost.
+    -- A core's choice moves that core's own pool.
+    local pool = ofCore and coreName or nil
+    if self.Points and self.Points.GetMode and self.db and self.db.points and self:IsOfficer() then
+        local mode = self.Points:GetMode(pool)
+        if sys == "epgp" and mode ~= "epgp" then self.Points:SetMode("epgp", pool)
+        elseif (sys == "dkp" or sys == "dkpbid" or sys == "dkpsealed") and mode == "epgp" then
+            self.Points:SetMode("dkp", pool)
+        end
+    end
+    -- A loot system is a ready-made loot rule: choosing one puts its rule in force again, over the
+    -- changes an officer had made to the one before (issue #334). A core's own rule went with its
+    -- choice (CoreManager:SetLootSystem).
+    if not ofCore and self.LootRule and self.db and self.db.settings and self.db.settings.lootRule ~= nil
+        and self:IsOfficer() then
+        self.LootRule:Set(nil)
+    end
     -- On retail the system decides who may award an offered item, on every member's client: an
     -- officer's choice is stamped and published, as the officer threshold is (issue #185).
-    if self.Client.isRetail and self:IsOfficer() then
+    if not ofCore and self.Client.isRetail and self:IsOfficer() then
         local s = self.db.settings
         s.lootSystemAt = math.max(GetServerTime(), (s.lootSystemAt or 0) + 1)
         self:PublishLootSystem()
     end
+    self:OnLootSystemChanged()
+    return true
+end
+
+-- The loot system in force may be another one: the guild's or a core's changed, or another core is
+-- now the raid's (issue #338).
+function AmazingHub:OnLootSystemChanged()
     -- Loot Master follows the system: "external" silences it entirely (no
     -- roll popups, ML window, council, or /roll capture — and with no awards
     -- the loot history stops growing too). SetEnabled hides any open frames
@@ -1104,7 +1434,7 @@ function AmazingHub:PublishLootSystem()
     if not self.Client.isRetail then return end
     local s = self.db and self.db.settings
     if not (s and s.lootSystemAt and self.SyncService and self:IsOfficer()) then return end
-    self.SyncService:Publish("guildcfg", "lootsys", { sys = self:GetLootSystem() }, { rev = s.lootSystemAt })
+    self.SyncService:Publish("guildcfg", "lootsys", { sys = self:GetLootSystem("") }, { rev = s.lootSystemAt })
 end
 
 -- The guild's loot system from an officer (SyncService has checked the officer and GUILD): the newest
@@ -1119,7 +1449,7 @@ function AmazingHub:OnLootSystemSync(env)
     at = math.min(at, GetServerTime() + RANK_FUTURE_SLACK)
     local s = self.db.settings
     local held = s.lootSystemAt
-    if held and (at < held or (at == held and sys >= self:GetLootSystem())) then return end
+    if held and (at < held or (at == held and sys >= self:GetLootSystem(""))) then return end
     s.lootSystem, s.lootSystemAt = sys, at
     if self.UpdateLootSystemUI then self:UpdateLootSystemUI() end
 end
@@ -1130,12 +1460,24 @@ end
 function AmazingHub:LootSystemShowsWishlist()
     if not self.Wishlist then return false end
     local s = self:GetLootSystem()
-    return s == "wishlist" or s == "tmb"
+    -- A loot council (issue #336) lists its candidates by the wishlist too.
+    return s == "wishlist" or s == "tmb" or s == "council"
 end
 
+-- Whether the loot system in force (or `sys`, the one an item was announced under) runs on the points
+-- economy: DKP, or EPGP (issue #319). And DKP by bids (issue #334), which spends the same points.
+function AmazingHub:LootSystemUsesPoints(sys)
+    local s = sys or self:GetLootSystem()
+    return s == "dkp" or s == "epgp" or s == "dkpbid" or s == "dkpsealed"
+end
+
+-- And where the rule in force keeps a queue or a bonus account (Suicide Kings, karma, issue #337): the
+-- points window is where each one is looked at.
 function AmazingHub:LootSystemShowsDKP()
     if not self.Points then return false end
-    return self:GetLootSystem() == "dkp"
+    if self:LootSystemUsesPoints() then return true end
+    local LR = self.LootRule
+    return (LR and LR.ShowsAccounts and self.db and self:LootSystemActive() and LR:ShowsAccounts()) and true or false
 end
 
 ----------------------------------------------------------------------

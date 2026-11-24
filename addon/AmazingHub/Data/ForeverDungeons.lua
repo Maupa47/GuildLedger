@@ -30,4 +30,11 @@ AmazingHub.ForeverDungeons = {
             bosses = { 3493, 3495, 3494, 3496 } },
         [3109] = { id = "manor-mistmantle", name = "Manor Mistmantle", bosses = {} },
     },
+    -- The classic dungeons guilds book most, highest level first, after the game's own: what the guild website
+    -- offers to book a night for (`bookableDungeons`, amazinghub-web #491), and the calendar's pick list for
+    -- a Dungeon event (issue #308). Names only and matched by nothing: the journal and the dungeon log
+    -- read `byInstance` alone.
+    classic = { "Scholomance", "Stratholme", "Upper Blackrock Spire", "Lower Blackrock Spire", "Dire Maul",
+        "Blackrock Depths", "Sunken Temple", "Maraudon", "Zul'Farrak", "Uldaman", "Scarlet Monastery",
+        "The Deadmines" },
 }

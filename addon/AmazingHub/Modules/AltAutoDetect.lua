@@ -34,10 +34,12 @@ function AltAutoDetect:RecordSelf()
     AmazingHubDB.accountChars = AmazingHubDB.accountChars or {}
     local name = AmazingHub.Compat.PlayerName()
     if not name then return end
-    local key = AmazingHub:GetPlayerKey(name, GetRealmName())
+    -- The realm AmazingHub:RealmName() reads back when the client answers none (issue #394).
+    local realm = AmazingHub:RealmName()
+    local key = AmazingHub:GetPlayerKey(name, realm)
     local _, classFile = UnitClass("player")
     AmazingHubDB.accountChars[key] = {
-        name = name, realm = GetRealmName(), class = classFile,
+        name = name, realm = realm, class = classFile,
         level = UnitLevel("player"), guild = GetGuildInfo("player"),
         ts = GetServerTime(),
     }
@@ -57,9 +59,37 @@ function AltAutoDetect:_GuildSet()
     return set
 end
 
+-- Pure: the links that make `main` the one main of `group`: every other member points at it,
+-- it points at nobody, and a character still pointing at a member that stops being a main
+-- follows to the new one (no alt of an alt). Returns a new table and how many entries changed.
+function AltAutoDetect:PlanGroup(altLinks, group, main)
+    local out = {}
+    for k, v in pairs(altLinks or {}) do out[k] = v end
+    local inGroup = {}
+    for _, k in ipairs(group or {}) do inGroup[k] = true end
+    for k, v in pairs(out) do
+        if inGroup[v] and v ~= main and not inGroup[k] then out[k] = main end
+    end
+    for k in pairs(inGroup) do
+        if k == main then out[k] = nil else out[k] = main end
+    end
+    local changed = 0
+    local seen = {}
+    for k, v in pairs(out) do
+        seen[k] = true
+        if (altLinks or {})[k] ~= v then changed = changed + 1 end
+    end
+    for k in pairs(altLinks or {}) do
+        if not seen[k] then changed = changed + 1 end
+    end
+    return out, changed
+end
+
 -- Pure: from the account chars that are ALSO current guild members, if 2+
--- exist and they are not already all linked under one main, return the group
--- and the suggested main (highest level). Else nil.
+-- exist and they do not already share one main (whichever of them it is),
+-- return the group and the suggested main. Else nil. The suggestion keeps the
+-- main the group already has; with none it is the highest level, and a tie
+-- goes to the name, so the same group always gets the same answer (#353).
 function AltAutoDetect:DetectOwnAlts(accountChars, guildSet, altLinks)
     altLinks = altLinks or {}
     local group = {}
@@ -68,36 +98,253 @@ function AltAutoDetect:DetectOwnAlts(accountChars, guildSet, altLinks)
         if guildSet[lk] then group[#group + 1] = { key = lk, level = info.level or 0 } end
     end
     if #group < 2 then return nil end
-    table.sort(group, function(a, b) return a.level > b.level end)
-    local main = group[1].key
-    -- already fully linked to this main?
-    local allLinked = true
-    for i = 2, #group do
-        if altLinks[group[i].key] ~= main then allLinked = false; break end
+    table.sort(group, function(a, b)
+        if a.level ~= b.level then return a.level > b.level end
+        return a.key < b.key
+    end)
+    local roots, nRoots = {}, 0
+    for _, g in ipairs(group) do
+        local root = altLinks[g.key] or g.key
+        if not roots[root] then roots[root] = 0; nRoots = nRoots + 1 end
+        roots[root] = roots[root] + 1
     end
-    if allLinked then return nil end
+    if nRoots == 1 then return nil end            -- already one person, whoever is the main
+    local main
+    for _, g in ipairs(group) do                 -- the main the group already has, if any
+        local c = roots[g.key]
+        if c and c >= 2 and altLinks[g.key] == nil and (not main or c > roots[main]) then main = g.key end
+    end
+    main = main or group[1].key
     local keys = {}
     for _, g in ipairs(group) do keys[#keys + 1] = g.key end
     return { group = keys, main = main }
 end
 
+-- Returns how many links changed. An officer writes and publishes them (AltSync, #424); a member
+-- applies them to their own view, asks the officers and keeps the claim until an officer's links
+-- carry it or a newer officer edit overrules it (#353, #424).
 function AltAutoDetect:LinkOwnAlts(mainKey, altKeys)
-    if not mainKey or not altKeys then return end
+    if not mainKey or not altKeys then return 0 end
+    local links, changed = self:PlanGroup(AmazingHub.db.altLinks, altKeys, mainKey)
     if AmazingHub:IsOfficer() then
-        -- authoritative path: LinkAlt writes db.altLinks + BroadcastAltLinks
-        for _, k in ipairs(altKeys) do
-            if k ~= mainKey then AmazingHub:LinkAlt(k, mainKey) end
+        if AmazingHub.AltSync then
+            -- The officer named these alts: a link of theirs from before #424 becomes an officer's.
+            local confirm = {}
+            for _, k in ipairs(altKeys) do if k ~= mainKey then confirm[k] = true end end
+            AmazingHub.AltSync:Commit(links, confirm)
+        elseif changed > 0 then
+            AmazingHub.db.altLinks = links
         end
-    else
-        -- member: apply locally (own view) + broadcast a self-claim officers replay
-        AmazingHub.db.altLinks = AmazingHub.db.altLinks or {}
-        for _, k in ipairs(altKeys) do
-            if k ~= mainKey then AmazingHub.db.altLinks[k] = mainKey end
+        return changed
+    end
+    AmazingHub.db.altLinks = links
+    local alts = {}
+    for _, k in ipairs(altKeys) do
+        if k ~= mainKey then alts[#alts + 1] = k end
+    end
+    self:_KeepPending(mainKey, alts)
+    self:_SendClaim(mainKey, alts)
+    return changed
+end
+
+function AltAutoDetect:_SendClaim(mainKey, alts)
+    if not AmazingHub.CommSystem then return end
+    local payload = LibSerialize:Serialize({ main = mainKey, alts = alts })
+    AmazingHub.CommSystem:SendMessage(AmazingHub.CommSystem.MSG_TYPES.SELF_ALT, payload)
+end
+
+function AltAutoDetect:_SendUnlink(key)
+    if not AmazingHub.CommSystem then return end
+    local payload = LibSerialize:Serialize({ unlink = { key } })
+    AmazingHub.CommSystem:SendMessage(AmazingHub.CommSystem.MSG_TYPES.SELF_ALT, payload)
+end
+
+-- A claim, as it goes to the officers: a group's link, or a member's own unlink.
+function AltAutoDetect:_Send(p)
+    if p.unlink then self:_SendUnlink(p.unlink) else self:_SendClaim(p.main, p.alts) end
+end
+
+local PENDING_TTL = 30 * 86400
+local function unlinkSig(key) return "unlink:" .. key end
+
+-- Account-wide like accountChars, tagged with the guild: the keys only mean something there. A claim for
+-- the group replaces a member's own unlink of any of its characters still waiting.
+function AltAutoDetect:_KeepPending(mainKey, alts)
+    if not AmazingHubDB then return end
+    AmazingHubDB.altPending = AmazingHubDB.altPending or {}
+    local group = { mainKey }
+    for _, k in ipairs(alts) do group[#group + 1] = k end
+    for _, k in ipairs(group) do AmazingHubDB.altPending[unlinkSig(k)] = nil end
+    AmazingHubDB.altPending[GroupSignature(group)] = {
+        main = mainKey, alts = alts, guild = GetGuildInfo("player"), ts = GetServerTime(),
+    }
+end
+
+-- A member's own unlink waits like a claim (#424): on the member's view (Overlay) until an officer's
+-- tombstone for it, or a newer officer link of that character, answers it.
+function AltAutoDetect:_KeepUnlink(key)
+    if not AmazingHubDB then return end
+    AmazingHubDB.altPending = AmazingHubDB.altPending or {}
+    AmazingHubDB.altPending[unlinkSig(key)] = { unlink = key, guild = GetGuildInfo("player"), ts = GetServerTime() }
+end
+
+-- Each pending claim of this guild, after dropping the ones past their time.
+function AltAutoDetect:_EachPending(fn)
+    local pending = AmazingHubDB and AmazingHubDB.altPending
+    if not pending then return end
+    local guild, now = GetGuildInfo("player"), GetServerTime()
+    for sig, p in pairs(pending) do
+        local valid = type(p) == "table"
+            and ((p.main and type(p.alts) == "table") or (type(p.unlink) == "string" and p.unlink ~= ""))
+        if not valid or now - (p.ts or 0) > PENDING_TTL then
+            pending[sig] = nil
+        elseif p.guild == guild then
+            fn(sig, p)
         end
-        if AmazingHub.CommSystem then
-            local payload = LibSerialize:Serialize({ main = mainKey, alts = altKeys })
-            AmazingHub.CommSystem:SendMessage(AmazingHub.CommSystem.MSG_TYPES.SELF_ALT, payload)
+    end
+end
+
+local function carries(links, p)
+    if links[p.main] ~= nil then return false end
+    for _, k in ipairs(p.alts) do
+        if links[k] ~= p.main then return false end
+    end
+    return true
+end
+
+-- Pure: whether an officer's edit newer than claim `p` overrules it: one of its alts unlinked or
+-- linked to another main, or its main made somebody's alt, after the claim was made. Only an
+-- officer's own entry counts (one with an author, not a link taken from an old client's table):
+-- a link merely missing from an officer's list, or an older edit, is no answer (#424).
+function AltAutoDetect.Overruled(p, entries)
+    local since = p.ts or 0
+    local function newer(e)
+        return type(e) == "table" and e.author ~= nil and not e.legacy and (e.ts or 0) > since
+    end
+    for _, k in ipairs(p.alts) do
+        local e = entries[k]
+        if newer(e) and (e.removed or e.main ~= p.main) then return true end
+    end
+    local e = entries[p.main]
+    return newer(e) and not e.removed and e.main ~= nil
+end
+
+-- Pure: whether a member's own unlink `p` is answered: the officers' entries hold no link for that
+-- character (a tombstone, or none at all), or an officer linked it again after the unlink was asked.
+-- A link this client only has from before #424, or an officer's older one, is no answer (#424).
+function AltAutoDetect.UnlinkAnswered(p, entries)
+    local e = entries[p.unlink]
+    if type(e) ~= "table" or e.removed then return true end
+    return e.author ~= nil and not e.legacy and (e.ts or 0) > (p.ts or 0)
+end
+
+-- An officer's word on the links just arrived (AltSync). A claim the officers' links carry is
+-- done, one a newer officer edit overrules goes; any other stays on our view (Overlay) and goes
+-- to the officers again, once a session each (an officer is online now).
+function AltAutoDetect:OnOfficerLinks()
+    if AmazingHub:IsOfficer() or not AmazingHub.AltSync then return end
+    self._resentAt = self._resentAt or {}
+    local base, entries = AmazingHub.AltSync:HeardView(), AmazingHub.AltSync:Entries()
+    self:_EachPending(function(sig, p)
+        local done
+        if p.unlink then
+            done = AltAutoDetect.UnlinkAnswered(p, entries)
+        else
+            done = carries(base, p) or AltAutoDetect.Overruled(p, entries)
         end
+        if done then
+            AmazingHubDB.altPending[sig] = nil
+        elseif not self._resentAt[sig] then
+            self._resentAt[sig] = GetTime()
+            self:_Send(p)
+        end
+    end)
+end
+
+-- The member's own claims still waiting, on top of the officers' links, oldest first: what a
+-- member's view shows until an officer applies them. An officer's view is the officers' links.
+function AltAutoDetect:Overlay(links)
+    if AmazingHub:IsOfficer() then return links end
+    local list = {}
+    self:_EachPending(function(_, p) list[#list + 1] = p end)
+    table.sort(list, function(a, b)
+        if (a.ts or 0) ~= (b.ts or 0) then return (a.ts or 0) < (b.ts or 0) end
+        return (a.main or ("\0" .. a.unlink)) < (b.main or ("\0" .. b.unlink))
+    end)
+    for _, p in ipairs(list) do
+        if p.unlink then
+            local out = {}
+            for k, v in pairs(links) do out[k] = v end
+            out[p.unlink] = nil
+            links = out
+        else
+            local group = { p.main }
+            for _, k in ipairs(p.alts) do group[#group + 1] = k end
+            links = self:PlanGroup(links, group, p.main)
+        end
+    end
+    return links
+end
+
+-- At login: an officer now on this account applies its own claims; a member sends them again.
+function AltAutoDetect:ResendPending()
+    self:_EachPending(function(sig, p)
+        if AmazingHub:IsOfficer() then
+            if p.unlink then
+                AmazingHub:UnlinkAlt(p.unlink)
+            else
+                local group = { p.main }
+                for _, k in ipairs(p.alts) do group[#group + 1] = k end
+                self:LinkOwnAlts(p.main, group)
+            end
+            AmazingHubDB.altPending[sig] = nil
+        else
+            -- Not marked as re-sent: nobody may be online to hear it, so the first officer
+            -- word on the links this session sends it again.
+            self:_Send(p)
+        end
+    end)
+end
+
+-- A member's own unlink takes that character out of any claim still waiting; a claim left with no
+-- alt, or about the character as its main, goes.
+function AltAutoDetect:_UnclaimPending(key)
+    local pending = AmazingHubDB and AmazingHubDB.altPending
+    if not pending then return end
+    local rewrite = {}   -- kept after the walk: a new key added during pairs() is undefined in Lua
+    for sig, p in pairs(pending) do
+        if type(p) ~= "table" or p.main == key or type(p.alts) ~= "table" then
+            if type(p) ~= "table" or p.main == key then pending[sig] = nil end
+        else
+            local alts = {}
+            for _, k in ipairs(p.alts) do if k ~= key then alts[#alts + 1] = k end end
+            if #alts < #p.alts then
+                pending[sig] = nil
+                if #alts > 0 then rewrite[#rewrite + 1] = { main = p.main, alts = alts, guild = p.guild, ts = p.ts } end
+            end
+        end
+    end
+    -- Same guild and age as the claim it came from: an unlink here neither moves another guild's
+    -- claim into this one nor restarts its thirty days.
+    for _, r in ipairs(rewrite) do
+        local group = { r.main }
+        for _, k in ipairs(r.alts) do group[#group + 1] = k end
+        pending[GroupSignature(group)] = r
+    end
+end
+
+-- A member's re-main replaces any claim waiting about the group's characters with the new one.
+function AltAutoDetect:_DropPendingWith(keys)
+    local pending = AmazingHubDB and AmazingHubDB.altPending
+    if not pending then return end
+    local hit = {}
+    for _, k in ipairs(keys) do hit[k] = true end
+    for sig, p in pairs(pending) do
+        local touches = type(p) ~= "table" or hit[p.main] or hit[p.unlink]
+        if not touches and type(p.alts) == "table" then
+            for _, k in ipairs(p.alts) do if hit[k] then touches = true; break end end
+        end
+        if touches then pending[sig] = nil end
     end
 end
 
@@ -118,6 +365,7 @@ function AltAutoDetect:SetOwnMain(newMainKey)
     local group = AmazingHub:GetLinkedChars(newMainKey)
     if #group < 2 then return end               -- nothing to re-main
     if links[newMainKey] == nil then return end -- already the main, no-op
+    self:_DropPendingWith(group)
     AmazingHub.db.altLinks = AmazingHub:_RepointGroup(links, group, newMainKey)
     if AmazingHub.CommSystem then
         local alts = {}
@@ -126,27 +374,29 @@ function AltAutoDetect:SetOwnMain(newMainKey)
         end
         local payload = LibSerialize:Serialize({ main = newMainKey, alts = alts })
         AmazingHub.CommSystem:SendMessage(AmazingHub.CommSystem.MSG_TYPES.SELF_ALT, payload)
+        self:_KeepPending(newMainKey, alts)   -- kept like an accepted prompt, until an officer's list has it
     end
 end
 
 -- Member-safe unlink of one's OWN alt: officers apply directly, members
--- broadcast a self-claim that officers replay.
+-- broadcast a self-claim that officers replay. The member's unlink waits like a link claim (#424):
+-- the view is rebuilt from the officers' entries, so a plain local edit would come back on the next
+-- rebuild; the waiting unlink keeps it off the member's view until an officer answers it.
 function AltAutoDetect:UnlinkOwnAlt(altKey)
     if not altKey then return end
     if AmazingHub:IsOfficer() then
         AmazingHub:UnlinkAlt(altKey)
     else
         AmazingHub.db.altLinks = AmazingHub.db.altLinks or {}
-        AmazingHub.db.altLinks[altKey] = nil
-        if AmazingHub.CommSystem then
-            local payload = LibSerialize:Serialize({ unlink = { altKey } })
-            AmazingHub.CommSystem:SendMessage(AmazingHub.CommSystem.MSG_TYPES.SELF_ALT, payload)
-        end
+        self:_UnclaimPending(altKey)
+        self:_KeepUnlink(altKey)
+        if AmazingHub.AltSync then AmazingHub.AltSync:Rebuild() else AmazingHub.db.altLinks[altKey] = nil end
+        self:_SendUnlink(altKey)
     end
 end
 
--- Officer applies a member's self-claim through the authoritative LinkAlt/
--- UnlinkAlt path. Link and unlink are validated and handled independently so
+-- Officer applies a member's self-claim with LinkAlt's and UnlinkAlt's rules,
+-- in one write of the officers' synced links (#424). Link and unlink are validated and handled independently so
 -- an unlink-only claim (no main/alts) isn't rejected by the link guard.
 -- Security: a claim is only ever trusted for the KEYS IT NAMES about the
 -- SENDER themselves — the sender's own player key is derived from the comm
@@ -170,6 +420,8 @@ function AltAutoDetect:HandleSelfClaim(sender, data)
         for i, k in ipairs(claim.unlink) do claim.unlink[i] = AmazingHub:LocalMemberKey(k) end
     end
 
+    local links, confirm = {}, {}
+    for k, v in pairs(AmazingHub.db.altLinks or {}) do links[k] = v end
     if claim.main and type(claim.alts) == "table" then
         -- Only apply if the sender is part of the group they're claiming
         -- (either the main or one of the alts) — never someone else's.
@@ -190,13 +442,15 @@ function AltAutoDetect:HandleSelfClaim(sender, data)
             -- would detach X from its real group. When not same-group we skip
             -- the clear, and LinkAlt's circular guard still blocks linking to an
             -- existing alt, so a member can only re-main a group they belong to.
-            AmazingHub.db.altLinks = AmazingHub.db.altLinks or {}
             local senderGroup = AmazingHub:GetLinkedChars(senderKey)
             for _, k in ipairs(senderGroup) do
-                if k == claim.main then AmazingHub.db.altLinks[claim.main] = nil; break end
+                if k == claim.main then links[claim.main] = nil; break end
             end
             for _, k in ipairs(claim.alts) do
-                if k ~= claim.main then AmazingHub:LinkAlt(k, claim.main) end
+                if k ~= claim.main then
+                    local planned = AmazingHub:_PlanLink(links, k, claim.main)
+                    if planned then links, confirm[k] = planned, true end
+                end
             end
         end
     end
@@ -204,12 +458,12 @@ function AltAutoDetect:HandleSelfClaim(sender, data)
         -- Only unlink a key the sender owns: themselves, or an alt whose
         -- main is the sender.
         for _, k in ipairs(claim.unlink) do
-            local links = AmazingHub.db.altLinks or {}
-            if k == senderKey or links[k] == senderKey then
-                AmazingHub:UnlinkAlt(k)
-            end
+            if k == senderKey or links[k] == senderKey then links[k] = nil end
         end
     end
+    -- One write for the whole claim, through the officers' synced links (#424).
+    -- The member named these alts: a link of theirs from before #424 becomes an officer's.
+    if AmazingHub.AltSync then AmazingHub.AltSync:Commit(links, confirm) else AmazingHub.db.altLinks = links end
 end
 
 ----------------------------------------------------------------------
@@ -220,17 +474,18 @@ end
 -- the signature and is re-offered).
 ----------------------------------------------------------------------
 function AltAutoDetect:_RegisterPopup()
-    if StaticPopupDialogs["AMAZINGHUB_ALT_AUTODETECT"] then return end
-    StaticPopupDialogs["AMAZINGHUB_ALT_AUTODETECT"] = {
+    if AmazingHub.Dialogs["AMAZINGHUB_ALT_AUTODETECT"] then return end
+    AmazingHub.Dialogs["AMAZINGHUB_ALT_AUTODETECT"] = {
         text = L["Found %d of your characters in this guild. Link them as alts of %s?"],
         button1 = L["Link"],
         button2 = L["Not now"],
         OnAccept = function(dlg, data)
             local r = data or (dlg and dlg.data)
             if not r then return end
-            AltAutoDetect:LinkOwnAlts(r.main, r.group)
-            local short = r.main:match("^([^-]+)") or r.main
-            AmazingHub:Print(string.format(L["Linked %d alt(s) to %s."], #r.group - 1, short))
+            if AltAutoDetect:LinkOwnAlts(r.main, r.group) > 0 then
+                local short = r.main:match("^([^-]+)") or r.main
+                AmazingHub:Print(string.format(L["Linked %d alt(s) to %s."], #r.group - 1, short))
+            end
         end,
         OnCancel = function(dlg, data)
             local r = data or (dlg and dlg.data)
@@ -243,12 +498,12 @@ function AltAutoDetect:_RegisterPopup()
 end
 
 -- Shows the confirm popup for a detected group `r` ({ group = {keys...}, main = key }).
--- `r` is passed through StaticPopup_Show's text/data args rather than captured
+-- `r` is passed through the dialog's text/data args rather than captured
 -- by closure, so a stale `r` from an earlier scan can never be shown/applied.
 function AltAutoDetect:_ShowPrompt(r)
     self:_RegisterPopup()
     local short = r.main:match("^([^-]+)") or r.main
-    local dlg = StaticPopup_Show("AMAZINGHUB_ALT_AUTODETECT", #r.group - 1, short, r)
+    local dlg = AmazingHub:ShowDialog("AMAZINGHUB_ALT_AUTODETECT", #r.group - 1, short, r)
     if dlg then dlg.data = r end
     self._prompted = true
 end
@@ -258,6 +513,7 @@ end
 -- seconds after login).
 function AltAutoDetect:_SchedulePrompt()
     AmazingHub.Compat.After(10, function()
+        AltAutoDetect:ResendPending()
         if AltAutoDetect._prompted then return end
         local r = AltAutoDetect:DetectOwnAlts(AmazingHubDB.accountChars, AltAutoDetect:_GuildSet(), AmazingHub.db.altLinks)
         if not r then return end

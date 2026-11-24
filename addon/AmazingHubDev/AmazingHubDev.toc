@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: |cffFFD700Amazing Hub|r |cffff7f00(developer features)|r
+## Notes: Only for the pack's maker: shows the Amazing Hub tools that act for the player (group posts and auto-invite, reminder whispers, bulk rank changes, bank cleanup, warning whispers, chat alerts). Never in the CurseForge pack.
+## Author: Maupa
+## Version: 1
+## DefaultState: enabled
+
+Dev.lua

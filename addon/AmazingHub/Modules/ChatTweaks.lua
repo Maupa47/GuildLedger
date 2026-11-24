@@ -1,8 +1,10 @@
 ----------------------------------------------------------------------
 -- Amazing Hub - Chat Tweaks
--- Optional guild/officer chat annotations (class icon + level + alt tag),
--- added as a safe MESSAGE PREFIX (never modifies the author/name link).
--- Off by default. Cache refreshed on GUILD_ROSTER_UPDATE, never per line.
+-- Optional guild/officer chat annotations (class icon + level + alt tag, and
+-- the officers' nickname for the member, #429), added as a safe MESSAGE PREFIX
+-- (never modifies the author/name link). Off by default; whispers, party and
+-- raid lines from guild members too when asked (#429). Cache refreshed on
+-- GUILD_ROSTER_UPDATE, never per line.
 ----------------------------------------------------------------------
 local ChatTweaks = {}
 AmazingHub.ChatTweaks = ChatTweaks
@@ -15,6 +17,16 @@ ChatTweaks.DEFAULTS = {
     level     = true,
     altTag    = true,
     altShort  = false,   -- "[Floyd]" / "[M]" instead of "(alt of Floyd)" (#269)
+    nick      = true,    -- the officers' nickname for the member (#429; only an officer's client has them)
+    whisper   = false,   -- a guild member's whispers too (#429)
+    group     = false,   -- a guild member's party and raid lines too (#429)
+}
+
+-- Which setting turns each chat event on (#429): guild and officer are read once at login, as before.
+local EVENT_SETTING = {
+    CHAT_MSG_WHISPER = "whisper",
+    CHAT_MSG_PARTY = "group", CHAT_MSG_PARTY_LEADER = "group",
+    CHAT_MSG_RAID = "group", CHAT_MSG_RAID_LEADER = "group", CHAT_MSG_RAID_WARNING = "group",
 }
 
 local CLASS_TEX = "Interface\\WorldStateFrame\\Icons-Classes"
@@ -28,10 +40,27 @@ function ChatTweaks:Initialize()
 
     local f = CreateFrame("Frame")
     AmazingHub.Compat.RegisterEvent(f, "GUILD_ROSTER_UPDATE")
-    f:SetScript("OnEvent", function() ChatTweaks:_RefreshCache() end)
+    -- A pass over the whole roster: at most one every ROSTER_GAP seconds (issue #324).
+    f:SetScript("OnEvent", function()
+        AmazingHub:Coalesce("chatTweaks", AmazingHub.ROSTER_GAP, ChatTweaks.TimedRefresh)
+    end)
 
     self:_RegisterFilters()
     self:_RegisterTests()
+end
+
+function ChatTweaks.TimedRefresh()
+    local t = AmazingHub.Perf:Start()
+    ChatTweaks:_RefreshCache()
+    AmazingHub.Perf:Stop("roster chat cache", t)
+end
+
+-- The cache's key for a roster name or a chat author: the whole name with its realm, the player's realm when it
+-- gives none. By the short name a "Bob-OtherRealm" from outside the guild, whispering or in a group, got the
+-- guild's Bob's nickname and alt tag (#429).
+function ChatTweaks.KeyOf(name)
+    if type(name) ~= "string" or name == "" then return nil end
+    return AmazingHub:GetPlayerKey(name:match("^([^-]+)") or name, name:match("-(.+)$") or GetRealmName())
 end
 
 function ChatTweaks:_RefreshCache()
@@ -40,9 +69,8 @@ function ChatTweaks:_RefreshCache()
     for i = 1, n do
         local name, _, _, level, _, _, _, _, _, _, classFile = GetGuildRosterInfo(i)
         if name then
-            local short = name:match("^([^-]+)") or name
-            local realm = name:match("-(.+)$") or GetRealmName()
-            cache[short] = { classFile = classFile, level = level, fullKey = AmazingHub:GetPlayerKey(short, realm) }
+            local key = ChatTweaks.KeyOf(name)
+            if key then cache[key] = { classFile = classFile, level = level, fullKey = key } end
         end
     end
     self._cache = cache
@@ -65,6 +93,9 @@ function ChatTweaks:_BuildPrefix(info, cfg)
         local ic = self:_ClassIcon(info.classFile)
         if ic ~= "" then parts[#parts + 1] = ic end
     end
+    if cfg.nick ~= false and info.nick then
+        parts[#parts + 1] = "|cffd8b34a\"" .. info.nick .. "\"|r"
+    end
     if cfg.level and info.level and info.level > 0 then
         parts[#parts + 1] = "[" .. info.level .. "]"
     end
@@ -84,11 +115,14 @@ end
 -- Chat filters (message-prefix only; returns false = keep line, modified)
 ----------------------------------------------------------------------
 function ChatTweaks:_MakeFilter()
-    return function(_, _, msg, author, ...)
+    return function(_, event, msg, author, ...)
         local cfg = AmazingHub.db.chatTweaks
         if not cfg or not cfg.enabled then return false end
-        local short = author and (author:match("^([^-]+)") or author)
-        local cached = short and ChatTweaks._cache[short]
+        local only = EVENT_SETTING[event]
+        if only and not cfg[only] then return false end
+        if AmazingHub.Compat.IsSecret and AmazingHub.Compat.IsSecret(msg, author) then return false end   -- chat in lockdown
+        local key = ChatTweaks.KeyOf(author)
+        local cached = key and ChatTweaks._cache[key]
         if not cached then return false end
         local info = {
             classFile = cached.classFile,
@@ -96,6 +130,7 @@ function ChatTweaks:_MakeFilter()
             altTag    = (AmazingHub.GetAltTag and cached.fullKey) and AmazingHub:GetAltTag(cached.fullKey) or nil,
             own       = AmazingHub.ChatTag and cached.fullKey and AmazingHub.ChatTag.For(cached.fullKey), -- Amazing Hub
             shortTag  = (cfg.altShort and AmazingHub.AltRoster and cached.fullKey) and AmazingHub.AltRoster:ShortTag(cached.fullKey) or nil,
+            nick      = (cfg.nick ~= false and AmazingHub.MemberMarks and cached.fullKey) and AmazingHub.MemberMarks:Nick(cached.fullKey) or nil,
         }
         local prefix = ChatTweaks:_BuildPrefix(info, cfg)
         if prefix == "" then return false end
@@ -111,6 +146,12 @@ function ChatTweaks:_RegisterFilters()
     if AmazingHub.db.chatTweaks.officer ~= false then
         ChatFrame_AddMessageEventFilter("CHAT_MSG_OFFICER", self:_MakeFilter())
     end
+    -- Whispers, party and raid (#429): always hooked, each line checked against its setting, so the
+    -- setting takes effect without a reload. Only a guild member (in the cache) gets a prefix.
+    local others = {}
+    for event in pairs(EVENT_SETTING) do others[#others + 1] = event end
+    table.sort(others)
+    for _, event in ipairs(others) do ChatFrame_AddMessageEventFilter(event, self:_MakeFilter()) end
 end
 
 ----------------------------------------------------------------------
@@ -133,6 +174,11 @@ function ChatTweaks:_RegisterTests()
     S:Register("chattweaks.off", function()
         local p = ChatTweaks:_BuildPrefix({ level = 70 }, { level = false })
         if p ~= "" then return false, "toggles off => empty" end
+        return true
+    end)
+    S:Register("chattweaks.nick", function()
+        local p = ChatTweaks:_BuildPrefix({ nick = "Big Bob" }, cfg)
+        if not p:find("Big Bob", 1, true) then return false, p end
         return true
     end)
     S:Register("chattweaks.nil_info", function()

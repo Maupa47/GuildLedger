@@ -21,10 +21,17 @@ local DEFAULT_SIZE = AmazingHub.Client.defaultRaidSize
 
 local COLS, ROWS = 7, 6
 local CELL_H  = 44
-local NAV_Y   = -6
-local WD_Y    = -34
-local GRID_Y  = -50
-local GRID_X  = 8
+-- The Guild tab's grid (#371): flush with the sub-tab bar's left edge, the first line GAP under the
+-- sub-panel's top, the grid ending GAP short of its right edge.
+local GAP     = UI.GAP
+local NAV_Y   = -GAP
+local WD_Y    = NAV_Y - 22 - GAP   -- under the 22px month buttons
+local GRID_Y  = WD_Y - 16
+local GRID_X  = 0
+
+-- Secondary bits of a line drawn in one string (a size, "(repeats)", a guild): the token's colour,
+-- so a palette the style re-points carries them too (#371).
+local function tint(text, c) return string.format("|cff%02x%02x%02x%s|r", c.r * 255, c.g * 255, c.b * 255, text) end
 
 -- Date helpers (noon avoids DST edge issues).
 local function noon(y, m, d) return time({ year = y, month = m, day = d, hour = 12 }) end
@@ -47,9 +54,13 @@ local KIND_COLOR = {
     FARM    = { r = 0.46, g = 0.78, b = 0.48 },
     SOCIAL  = { r = 0.40, g = 0.68, b = 0.92 },
     OTHER   = { r = 0.70, g = 0.72, b = 0.78 },
+    -- Not kinds of event: the calendar's drawn dates (#428).
+    BIRTHDAY = { r = 0.93, g = 0.80, b = 0.48 },
+    JOINDAY  = { r = 0.56, g = 0.80, b = 0.86 },
 }
 local function kindColor(k) return KIND_COLOR[k] or KIND_COLOR.RAID end
-local function kindLabel(k) return (CAL() and CAL().KindLabel and CAL():KindLabel(k)) or k end
+local VIRTUAL_LABEL = { BIRTHDAY = L["Birthday"], JOINDAY = L["Anniversary"] }
+local function kindLabel(k) return VIRTUAL_LABEL[k] or (CAL() and CAL().KindLabel and CAL():KindLabel(k)) or k end
 
 ----------------------------------------------------------------------
 -- Event editor popup (shared by create + edit).
@@ -77,7 +88,7 @@ local function buildEditor()
     f:SetSize(360, 392)
     f:SetPoint("CENTER")
     f:SetFrameStrata("DIALOG")
-    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(f) })
     f:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
     UI:StylePopup(f)
@@ -92,29 +103,18 @@ local function buildEditor()
     close:SetPoint("TOPRIGHT", -6, -6)
     close:SetScript("OnClick", function() f:Hide() end)
 
-    -- Labelled EditBox factory (single- or multi-line).
+    -- A labelled field (single- or multi-line): the shared field under a form label (#371).
     local function fieldBox(x, y, w, labelText, multiline, maxLetters)
-        local lbl = UI:CreateText(f, labelText, 10, C.silver.r, C.silver.g, C.silver.b)
+        local lbl = UI:CreateText(f, labelText, 11)
         lbl:SetPoint("TOPLEFT", x, y)
-        local box = CreateFrame("EditBox", nil, f, "BackdropTemplate")
-        box:SetSize(w, multiline and 84 or 22)
+        local box = UI:CreateInput(f, w, multiline and 84 or 22, { multiline = multiline, max = maxLetters })
         box:SetPoint("TOPLEFT", x, y - 14)
-        box:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-        box:SetBackdropColor(0.05, 0.05, 0.066, 1)
-        box:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
-        AmazingHub:ApplyFont(box, 11)
-        box:SetTextColor(C.white.r, C.white.g, C.white.b)
-        box:SetTextInsets(6, 6, multiline and 4 or 0, 0)
-        box:SetAutoFocus(false)
-        if multiline then box:SetMultiLine(true) end
-        if maxLetters then box:SetMaxLetters(maxLetters) end
-        box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
         return box
     end
 
     local dateBox  = fieldBox(14,  -42, 118, L["Date (YYYY-MM-DD)"], false, 10)
     local timeBox  = fieldBox(140, -42, 66,  L["Time (HH:MM)"],      false, 5)
-    local sizeLbl  = UI:CreateText(f, L["Size"], 10, C.silver.r, C.silver.g, C.silver.b)
+    local sizeLbl  = UI:CreateText(f, L["Size"], 11)
     sizeLbl:SetPoint("TOPLEFT", 216, -42)
     local sizeBtn  = UI:CreateButton(f, tostring(DEFAULT_SIZE), 44, 22)
     sizeBtn:SetPoint("TOPLEFT", 216, -56)
@@ -127,35 +127,39 @@ local function buildEditor()
         sizeBtn.label:SetText(tostring(sizeBtn.sizeVal))
     end)
 
-    -- Category picker (pill toggles). f.kind holds the current selection.
-    local kindLbl = UI:CreateText(f, L["Type"], 10, C.silver.r, C.silver.g, C.silver.b)
+    -- Category picker: one button per kind, the chosen one marked as every selection is (#371).
+    -- f.kind holds the current selection.
+    local kindLbl = UI:CreateText(f, L["Type"], 11)
     kindLbl:SetPoint("TOPLEFT", 14, -84)
     local kindPills = {}
+    local refreshDungeon   -- the dungeon picker beside the title (#308), built with the title below
     local function refreshKinds()
         for _, p in ipairs(kindPills) do
-            local col = kindColor(p.kind)
-            if p.kind == f.kind then
-                p:SetBackdropColor(col.r * 0.34, col.g * 0.34, col.b * 0.34, 0.95)
-                p:SetBackdropBorderColor(col.r, col.g, col.b, 0.9)
-                p.fs:SetTextColor(col.r, col.g, col.b)
-            else
-                p:SetBackdropColor(C.bg2.r, C.bg2.g, C.bg2.b, 0.9)
-                p:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
-                p.fs:SetTextColor(C.silver.r, C.silver.g, C.silver.b)
-            end
+            -- A kind this rank may not create (#308) stays in its place, dimmed and not clickable.
+            if CAL():MayCreateKind(p.kind) then p:Enable() else p:Disable() end
+            UI:SetSelected(p, p.kind == f.kind)
         end
+        if refreshDungeon then refreshDungeon() end
     end
     do
         local kinds = (CAL() and CAL().KINDS) or { "RAID", "DUNGEON", "PVP", "FARM", "SOCIAL", "OTHER" }
         for i, k in ipairs(kinds) do
-            local p = CreateFrame("Button", nil, f, "BackdropTemplate")
-            p:SetSize(52, 20)
+            -- Six fixed 52px places in the 360px editor, as before: a long translation ("Schlachtzug",
+            -- "Подземелье") is shortened to fit rather than pushing the row past the popup's edge.
+            local p = UI:CreateButton(f, "", 52, 20)
+            AmazingHub:ApplyFont(p.label, 11, "button")
             p:SetPoint("TOPLEFT", 14 + (i - 1) * 55, -98)
-            p:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-            local fs = p:CreateFontString(nil, "OVERLAY")
-            AmazingHub:ApplyFont(fs, 10)
-            fs:SetPoint("CENTER"); fs:SetText(kindLabel(k))
-            p.fs = fs; p.kind = k
+            -- Shortened by hand: UI:SetChipText would add a removable chip's "x" to a kind.
+            local text = kindLabel(k)
+            local chars = select(2, text:gsub("[^\128-\191]", ""))   -- UTF-8 characters, not bytes
+            p.label:SetText(text)
+            while p.label:GetStringWidth() > 44 and chars > 2 do
+                chars = chars - 1
+                p.label:SetText(AmazingHub:Utf8Head(text, chars) .. "..")
+            end
+            p:SetWidth(52)   -- back from the growth the label asked for
+            p.fs = p.label   -- the pill's label, under the name it always had
+            p.kind = k
             p:SetScript("OnClick", function()
                 f.kind = k; refreshKinds()
                 -- A size the new kind does not offer moves to one it does: a dungeon's five, or back to the raid default.
@@ -173,11 +177,62 @@ local function buildEditor()
     refreshKinds()
 
     local titleBox = fieldBox(14, -128, 332, L["Title"], false, 60)
+
+    -- A Dungeon event picks its dungeon from the game's list (#308), the one the guild website offers, or
+    -- "Other" and types it: the pick is the title. The list opens beside the editor.
+    local dungeonBtn = UI:CreateButton(f, L["Pick a dungeon"], 104, 22)
+    dungeonBtn:SetPoint("TOPLEFT", 242, -142)
+    local dungeonList
+    local function hideDungeonList() if dungeonList then dungeonList:Hide() end end
+    local function pickDungeon(name)
+        if name then
+            titleBox:SetText(name)
+        else
+            -- Other: a name the list put there gives way to the one typed.
+            for _, n in ipairs(CAL():DungeonChoices()) do
+                if strtrim(titleBox:GetText() or "") == n then titleBox:SetText("") end
+            end
+            titleBox:SetFocus()
+        end
+        hideDungeonList()
+    end
+    local function buildDungeonList()
+        local list = CreateFrame("Frame", nil, f, "BackdropTemplate")
+        list:SetFrameStrata("DIALOG")
+        list:SetFrameLevel(f:GetFrameLevel() + 10)
+        list:SetPoint("TOPLEFT", f, "TOPRIGHT", 4, 0)
+        list:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(list) })
+        list:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
+        list:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
+        local choices = CAL():DungeonChoices()
+        for i, name in ipairs(choices) do
+            local b = UI:CreateButton(list, name, 196, 20)
+            b:SetPoint("TOPLEFT", 6, -6 - (i - 1) * 22)
+            b:SetScript("OnClick", function() pickDungeon(name) end)
+        end
+        local other = UI:CreateButton(list, L["Other (type a name)"], 196, 20)
+        other:SetPoint("TOPLEFT", 6, -6 - #choices * 22)
+        other:SetScript("OnClick", function() pickDungeon(nil) end)
+        list:SetSize(208, 12 + (#choices + 1) * 22)
+        list:Hide()
+        return list
+    end
+    dungeonBtn:SetScript("OnClick", function()
+        dungeonList = dungeonList or buildDungeonList()
+        dungeonList:SetShown(not dungeonList:IsShown())
+    end)
+    -- Only for a dungeon, and only where the game has a list (WoW: Forever); the title makes room.
+    refreshDungeon = function()
+        local show = f.kind == "DUNGEON" and #CAL():DungeonChoices() > 0
+        dungeonBtn:SetShown(show)
+        titleBox:SetWidth(show and 222 or 332)
+        if not show then hideDungeonList() end
+    end
     local descBox  = fieldBox(14, -178, 332, L["Description (optional)"], true, 500)
 
     -- Repeating (#267). A new event cycles through the repeats its date allows; an event of a series
     -- offers to change every later date instead.
-    local repLbl = UI:CreateText(f, L["Repeat"], 10, C.silver.r, C.silver.g, C.silver.b)
+    local repLbl = UI:CreateText(f, L["Repeat"], 11)
     repLbl:SetPoint("TOPLEFT", 14, -284)
     local repBtn = UI:CreateButton(f, "", 260, 22)
     repBtn:SetPoint("TOPLEFT", 70, -280)
@@ -198,6 +253,7 @@ local function buildEditor()
         if rep == "everyother" then return L["Every other day"] end
         if rep == "monthnth" then return string.format(L["Every month, %s"], WEEKDAYS[r.wday] .. " #" .. r.nth) end
         if rep == "monthday" then return string.format(L["Every month on day %d"], r.day) end
+        if rep == "yearly" then return string.format(L["Every year on %s"], ts and (AmazingHub:LocalDate("%d %b", ts):gsub("^0", "")) or "") end
         return L["Does not repeat"]
     end
     local function refreshRep() repBtn.label:SetText(repLabel(f.rep)) end
@@ -227,6 +283,15 @@ local function buildEditor()
     saveBtn:SetPoint("BOTTOMLEFT", 14, 14)
     local cancelBtn = UI:CreateButton(f, L["Cancel"], 80, 24)
     cancelBtn:SetPoint("LEFT", saveBtn, "RIGHT", 8, 0)
+
+    -- An event made here never becomes a raid on the site or a Discord post (spec 075 in amazinghub-web):
+    -- said where it is made, since "the bot didn't post my dungeon" is the question it answers.
+    local HINT_ROW = 28
+    local gameOnly = UI:CreateText(f, L["Events made here stay in the game. For signups on Discord, create the raid on the guild website or with /raid create."], 9, C.textDim.r, C.textDim.g, C.textDim.b)
+    gameOnly:SetPoint("BOTTOMLEFT", saveBtn, "TOPLEFT", 0, 6)
+    gameOnly:SetWidth(332)
+    gameOnly:SetJustifyH("LEFT")
+    gameOnly:SetWordWrap(true)
     cancelBtn:SetScript("OnClick", function() f:Hide() end)
 
     local function commit()
@@ -262,7 +327,10 @@ local function buildEditor()
         f.editId = event and event.id or nil
         titleFS:SetText(event and L["Edit Event"] or L["New Event"])
         saveBtn.label:SetText(event and L["Save"] or L["Create"])
-        f.kind = (event and event.kind and KIND_COLOR[event.kind]) and event.kind or "RAID"
+        -- A new event starts on a kind this rank creates (#308): a raid, else the first one open.
+        local first = CAL():MayCreateKind("RAID") and "RAID" or CAL():CreatableKinds()[1] or "RAID"
+        f.kind = (event and event.kind and KIND_COLOR[event.kind]) and event.kind or first
+        hideDungeonList()
         refreshKinds()
         local y, m, d, hh, mm, size, title, note
         if event then
@@ -271,12 +339,12 @@ local function buildEditor()
             size, title, note = event.size or DEFAULT_SIZE, event.title or "", event.note or ""
         else
             y = math.floor(dk / 10000); m = math.floor((dk % 10000) / 100); d = dk % 100
-            hh, mm, size, title, note = 20, 0, DEFAULT_SIZE, "", ""
+            hh, mm, size, title, note = 20, 0, CAL().SizesFor(f.kind, { DEFAULT_SIZE })[1], "", ""
         end
         local inAlliance = AmazingHub.Alliance and AmazingHub.Alliance:Get() ~= nil
         shareCb:SetShown(inAlliance)
         shareHint:SetShown(inAlliance)
-        f:SetHeight((inAlliance and 392 or 336) + REP_ROW)
+        f:SetHeight((inAlliance and 392 or 336) + REP_ROW + HINT_ROW)
         -- New: pick a repeat. An event of a series: change only it, or every later date too.
         f.inSeries = event and type(event.series) == "table" or false
         f.rep = "none"
@@ -305,7 +373,7 @@ local function openEditor(dk, event)
 end
 
 -- Delete confirmation (standard Blizzard popup; avoids accidental loss).
-StaticPopupDialogs["AMAZINGHUB_CALENDAR_DELETE"] = {
+AmazingHub.Dialogs["AMAZINGHUB_CALENDAR_DELETE"] = {
     text = L["Remove \"%s\" from the calendar? This cannot be undone."],
     button1 = YES, button2 = NO,
     OnAccept = function(self, data)
@@ -317,12 +385,12 @@ StaticPopupDialogs["AMAZINGHUB_CALENDAR_DELETE"] = {
     preferredIndex = 3,
 }
 local function confirmDelete(e)
-    local dlg = StaticPopup_Show("AMAZINGHUB_CALENDAR_DELETE", e.title or "?", nil, e.id)
+    local dlg = AmazingHub:ShowDialog("AMAZINGHUB_CALENDAR_DELETE", e.title or "?", nil, e.id)
     if dlg then dlg.data = e.id end   -- some clients pass data via dialog.data
 end
 
 -- Ending a series from one date on (#267): the earlier dates stay.
-StaticPopupDialogs["AMAZINGHUB_CALENDAR_END_SERIES"] = {
+AmazingHub.Dialogs["AMAZINGHUB_CALENDAR_END_SERIES"] = {
     text = L["End \"%s\" from this date on? Earlier dates stay."],
     button1 = YES, button2 = NO,
     OnAccept = function(self, data)
@@ -334,7 +402,7 @@ StaticPopupDialogs["AMAZINGHUB_CALENDAR_END_SERIES"] = {
     preferredIndex = 3,
 }
 local function confirmEndSeries(e)
-    local dlg = StaticPopup_Show("AMAZINGHUB_CALENDAR_END_SERIES", e.title or "?", nil, e.id)
+    local dlg = AmazingHub:ShowDialog("AMAZINGHUB_CALENDAR_END_SERIES", e.title or "?", nil, e.id)
     if dlg then dlg.data = e.id end
 end
 
@@ -345,28 +413,46 @@ function AmazingHub:CreateCalendarSub(panel)
     local f = CreateFrame("Frame", nil, panel)
     f:SetAllPoints(panel)
 
-    -- Month navigation
+    -- Month navigation. The month is the screen's first section title; it is as wide as its name, so
+    -- the ">" sits right after it rather than a fixed 170px away (#371).
     local prevBtn = UI:CreateButton(f, "<", 26, 22)
     prevBtn:SetPoint("TOPLEFT", GRID_X, NAV_Y)
-    local monthLabel = UI:CreateText(f, "", 14, C.gold.r, C.gold.g, C.gold.b)
-    monthLabel:SetPoint("LEFT", prevBtn, "RIGHT", 10, 0)
-    monthLabel:SetWidth(170); monthLabel:SetJustifyH("LEFT")
+    local monthLabel = UI:CreateSectionTitle(f, "", true)
+    monthLabel:SetPoint("LEFT", prevBtn, "RIGHT", GAP, 0)
     local nextBtn = UI:CreateButton(f, ">", 26, 22)
-    nextBtn:SetPoint("LEFT", monthLabel, "RIGHT", 4, 0)
+    nextBtn:SetPoint("LEFT", monthLabel, "RIGHT", GAP, 0)
     local todayBtn = UI:CreateButton(f, L["Today"], 60, 22)
     todayBtn:SetPoint("LEFT", nextBtn, "RIGHT", 12, 0)
 
-    -- Weekday headers (repositioned in Render to match the dynamic grid width)
+    -- Birthdays and join anniversaries (#428): dates drawn from the members, never events; each kind
+    -- has its filter. On WoW: Forever an officer puts this month's birthdays in the game's calendar.
+    local BD = AmazingHub.Birthdays
+    local barEnd = todayBtn
+    if BD then
+        for _, kind in ipairs({ "birthday", "join" }) do
+            local cb = UI:CreateCheckbox(f, kind == "birthday" and L["Birthdays"] or L["Join anniversaries"], 18)
+            cb:SetWidth(kind == "birthday" and 100 or 140)
+            cb:SetPoint("LEFT", barEnd, "RIGHT", 16, 0)
+            cb.checkbox:SetChecked(BD:Shows(kind))
+            cb.checkbox.onChanged = function(_, checked) BD:SetShows(kind, checked) end
+            barEnd = cb
+        end
+    end
+    local gameBdayBtn = UI:CreateButton(f, L["Birthdays to the game's calendar"], 200, 22)
+    gameBdayBtn:SetPoint("LEFT", barEnd, "RIGHT", 12, 0)
+    gameBdayBtn:SetScript("OnClick", function() AmazingHub.GameCalendar:PutNextBirthday() end)
+
+    -- Weekday headers: the grid's column labels (repositioned in Render to match the grid width)
     f.wdFS = {}
     for i = 1, COLS do
-        f.wdFS[i] = UI:CreateText(f, WEEKDAYS[i], 10, C.silver.r, C.silver.g, C.silver.b)
+        f.wdFS[i] = UI:CreateHeaderText(f, WEEKDAYS[i])
     end
 
     -- Day cells
     f.cells = {}
     for idx = 1, COLS * ROWS do
         local cell = CreateFrame("Button", nil, f, "BackdropTemplate")
-        cell:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+        cell:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(cell) })
         cell.dayFS = cell:CreateFontString(nil, "OVERLAY")
         AmazingHub:ApplyFont(cell.dayFS, 11)
         cell.dayFS:SetPoint("TOPLEFT", 4, -3)
@@ -381,14 +467,15 @@ function AmazingHub:CreateCalendarSub(panel)
         f.cells[idx] = cell
     end
 
-    -- Detail area (below the grid)
-    local DET_Y = GRID_Y - ROWS * CELL_H - 12
-    local detailLabel = UI:CreateText(f, "", 12, C.gold.r, C.gold.g, C.gold.b)
+    -- Detail area (below the grid): the selected day is a section of its own, its rule 12px over it,
+    -- with room for that rule under the grid (#371).
+    local DET_Y = GRID_Y - ROWS * CELL_H - 20
+    local detailLabel = UI:CreateSectionTitle(f, "")
     detailLabel:SetPoint("TOPLEFT", GRID_X, DET_Y)
 
-    -- Officer "New Event" button — opens the editor popup for the selected day.
+    -- Officer "New Event" button, beside the day it adds to: opens the editor popup for the selected day.
     local newBtn = UI:CreateButton(f, L["New Event"], 100, 20)
-    newBtn:SetPoint("TOPLEFT", GRID_X, DET_Y - 20)
+    newBtn:SetPoint("LEFT", detailLabel, "RIGHT", 12, 0)
     newBtn:SetScript("OnClick", function()
         if f.selectedKey then openEditor(f.selectedKey, nil) end
     end)
@@ -396,11 +483,13 @@ function AmazingHub:CreateCalendarSub(panel)
 
     -- Event list holder (scrollable), fills the rest of the panel
     local holder = CreateFrame("Frame", nil, f)
-    holder:SetPoint("TOPLEFT", GRID_X + 4, DET_Y - 46)
-    holder:SetPoint("BOTTOMRIGHT", -12, 12)
+    holder:SetPoint("TOPLEFT", detailLabel, "BOTTOMLEFT", 0, -12)
+    holder:SetPoint("BOTTOMRIGHT", 0, 0)
     f.holder = holder
     local scrollFrame, scrollChild = UI:CreateScrollFrame(holder, "AmazingHubCalendarScroll")
     scrollFrame:SetAllPoints()   -- fill the holder; without this the scroll viewport is 0x0 and clips all content
+    -- The child keeps the list's width, less the bar's gutter; the rows hang from both its top corners.
+    UI:BindScrollChildWidth(scrollFrame, scrollChild)
     f.child = scrollChild
 
     ------------------------------------------------------------------
@@ -409,9 +498,9 @@ function AmazingHub:CreateCalendarSub(panel)
     function f.Render()
         local W = f:GetWidth()
         if not W or W < 120 then W = 1000 end
-        local cellW = math.floor((W - GRID_X - 12) / COLS)
+        local cellW = math.floor((W - GRID_X - GAP) / COLS)
 
-        monthLabel:SetText(date("%b %Y", noon(f.viewYear, f.viewMonth, 1)))
+        monthLabel:SetText(AmazingHub:LocalDate(L["%b %Y"], noon(f.viewYear, f.viewMonth, 1)))
 
         for i = 1, COLS do
             f.wdFS[i]:ClearAllPoints()
@@ -429,6 +518,15 @@ function AmazingHub:CreateCalendarSub(panel)
         end
 
         local dim = daysInMonth(f.viewYear, f.viewMonth)
+        -- The month's birthdays and join anniversaries, worked out now (#428).
+        if BD then
+            for _, e in ipairs(BD:VirtualEvents(noon(f.viewYear, f.viewMonth, 1) - 43200, noon(f.viewYear, f.viewMonth, dim) + 43199)) do
+                local k = keyOfTs(e.when)
+                byDay[k] = byDay[k] or {}
+                byDay[k][#byDay[k] + 1] = e
+            end
+        end
+        gameBdayBtn:SetShown(AmazingHub.GameCalendar ~= nil and BD ~= nil and AmazingHub.GameCalendar:CanAct())
         local lead = firstWeekday(f.viewYear, f.viewMonth) - 1
         local todayKey = keyOfTs(GetServerTime())
 
@@ -441,18 +539,20 @@ function AmazingHub:CreateCalendarSub(panel)
             cell:SetSize(cellW - 2, CELL_H - 2)
 
             local dayNum = idx - lead
+            -- Flat cells with a 1px line; the selected day and today take a 1px gold border and no
+            -- gold fill, the selected one on the selected-row surface (#371).
             if dayNum < 1 or dayNum > dim then
                 cell.dayFS:SetText(""); cell.evtFS:SetText(""); cell.dkey = nil
-                cell:SetBackdropColor(0.04, 0.04, 0.05, 0.6)
-                cell:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.15)
+                cell:SetBackdropColor(C.well.r, C.well.g, C.well.b, 0)
+                cell:SetBackdropBorderColor(C.line.r, C.line.g, C.line.b, 0.4)
             else
                 local k = dayKey(f.viewYear, f.viewMonth, dayNum)
                 cell.dkey = k
-                cell.dayFS:SetText(dayNum); cell.dayFS:SetTextColor(1, 1, 1)
+                cell.dayFS:SetText(dayNum); cell.dayFS:SetTextColor(C.text.r, C.text.g, C.text.b)
                 local evs = byDay[k]
                 if evs then
                     table.sort(evs, function(a, b) return a.when < b.when end)
-                    local line = date("%H:%M ", evs[1].when) .. (evs[1].title or "")
+                    local line = (evs[1].virtual and "" or date("%H:%M ", evs[1].when)) .. (evs[1].title or "")
                     if #evs > 1 then line = "+" .. #evs .. " " .. line end
                     cell.evtFS:SetText(line)
                     local kc = kindColor(evs[1].kind)
@@ -460,16 +560,10 @@ function AmazingHub:CreateCalendarSub(panel)
                 else
                     cell.evtFS:SetText("")
                 end
-                if k == f.selectedKey then
-                    cell:SetBackdropColor(C.accent.r * 0.30, C.accent.g * 0.30, C.accent.b * 0.30, 0.95)
-                    cell:SetBackdropBorderColor(C.accent.r, C.accent.g, C.accent.b, 0.9)
-                elseif k == todayKey then
-                    cell:SetBackdropColor(0.14, 0.13, 0.08, 0.95)
-                    cell:SetBackdropBorderColor(C.gold.r, C.gold.g, C.gold.b, 0.8)
-                else
-                    cell:SetBackdropColor(0.09, 0.09, 0.12, 0.9)
-                    cell:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.35)
-                end
+                local fill = (k == f.selectedKey) and C.popup or C.well
+                local edge = (k == f.selectedKey or k == todayKey) and C.gold or C.line
+                cell:SetBackdropColor(fill.r, fill.g, fill.b, 1)
+                cell:SetBackdropBorderColor(edge.r, edge.g, edge.b, 1)
             end
         end
 
@@ -481,11 +575,12 @@ function AmazingHub:CreateCalendarSub(panel)
     ------------------------------------------------------------------
     function f.RenderDetail(byDay)
         local isOfficer = AmazingHub:IsOfficer()
-        local canCreate = AmazingHub:MayCreateEvents()   -- the guild's ranks (issue #283)
+        -- The guild's ranks (issue #283), and a kind left open to this one (#308).
+        local canCreate = AmazingHub:MayCreateEvents() and #CAL():CreatableKinds() > 0
         local sel = f.selectedKey
         if sel then
             local y = math.floor(sel / 10000); local m = math.floor((sel % 10000) / 100); local d = sel % 100
-            detailLabel:SetText(date("%A, %d %b %Y", noon(y, m, d)))
+            detailLabel:SetText(AmazingHub:LocalDate(L["%A, %d %b %Y"], noon(y, m, d)))
         else
             detailLabel:SetText(L["Select a day"])
         end
@@ -494,10 +589,29 @@ function AmazingHub:CreateCalendarSub(panel)
         local child = f.child
         for _, c in pairs({ child:GetChildren() }) do c:Hide() end
         for _, r in pairs({ child:GetRegions() }) do r:Hide() end
-        child:SetWidth(f.holder:GetWidth() - 12)
 
-        local evs = (sel and byDay and byDay[sel]) or {}
+        -- A line that wraps hangs from both of the list's top corners, never from a width read while
+        -- the tab may be hidden (#371).
+        local function across(fs, y)
+            fs:SetPoint("TOPLEFT", 0, -y)
+            fs:SetPoint("TOPRIGHT", 0, -y)
+            fs:SetJustifyH("LEFT")
+        end
+        local soft = C.textSoft
+
+        local evs, virtual = {}, {}
+        for _, e in ipairs((sel and byDay and byDay[sel]) or {}) do
+            if e.virtual then virtual[#virtual + 1] = e else evs[#evs + 1] = e end
+        end
         local yy = 0
+        -- Birthdays and join anniversaries first, a line each: nothing to sign up to (#428).
+        for _, e in ipairs(virtual) do
+            local fs = UI:CreateText(child, tint("[" .. kindLabel(e.kind) .. "]", kindColor(e.kind)) .. " " .. (e.title or ""),
+                12, C.text.r, C.text.g, C.text.b)
+            across(fs, yy)
+            yy = yy + 20
+        end
+        if #virtual > 0 then yy = yy + 8 end
         -- The game's own calendar (amazinghub-web specs/075, #263), read once for the day's raids from the
         -- site: its guild events over the inbox's window, and the inbox. WoW: Forever only.
         local GC = AmazingHub.GameCalendar
@@ -516,23 +630,28 @@ function AmazingHub:CreateCalendarSub(panel)
             local comp = CAL():GetComposition(e)
             local mine = CAL():MyRsvp(e)
 
-            local kc = kindColor(e.kind)
-            local tag = string.format("|cff%02x%02x%02x[%s]|r ", kc.r * 255, kc.g * 255, kc.b * 255, kindLabel(e.kind))
+            -- The kind keeps its colour: it is the same one the grid marks the day with.
+            local tag = tint("[" .. kindLabel(e.kind) .. "]", kindColor(e.kind)) .. " "
             -- Shared events carry a mark so an officer can see what is exposed
             -- without opening each one. Marking the SHARED ones (not the
             -- private ones) because exposure is the state that wants attention.
-            -- A gold [A] rather than a globe glyph: the skin fonts have no symbol
-            -- coverage and unicode marks render as a box in these fonts.
-            local shareMark = e.shareAlliance and "  |cffEDCC7B[A]|r" or ""
+            -- An [A] rather than a globe glyph: the skin fonts have no symbol
+            -- coverage and unicode marks render as a box in these fonts. In the
+            -- text colour, not gold: gold is the selection's (#371).
+            local shareMark = e.shareAlliance and "  [A]" or ""
             local inSeries = type(e.series) == "table"
-            local repMark = inSeries and ("  |cff888888" .. L["(repeats)"] .. "|r") or ""
-            local head = UI:CreateText(child, date("%H:%M ", e.when) .. tag .. "|cffFFFFFF" .. (e.title or "") .. "|r  |cff888888(" .. (e.size or DEFAULT_SIZE) .. ")|r" .. shareMark .. repMark,
-                12, C.gold.r, C.gold.g, C.gold.b)
-            head:SetPoint("TOPLEFT", 4, -yy)
+            local repMark = inSeries and ("  " .. tint(L["(repeats)"], soft)) or ""
+            -- One of the site's events that is not a raid (#652) has no size: nobody is counted against one.
+            local siteEvent = CAL().IsSiteEvent and CAL():IsSiteEvent(e)
+            local sizeMark = siteEvent and "" or ("  " .. tint("(" .. (e.size or DEFAULT_SIZE) .. ")", soft))
+            local head = UI:CreateText(child, date("%H:%M ", e.when) .. tag .. (e.title or "")
+                .. sizeMark .. shareMark .. repMark,
+                12, C.text.r, C.text.g, C.text.b)
+            head:SetPoint("TOPLEFT", 0, -yy)
             if CAL():MayManage(e) then
                 local ev = e
                 local delBtn = UI:CreateButton(child, L["Delete"], 58, 18)
-                delBtn:SetPoint("TOPRIGHT", -4, -yy)
+                delBtn:SetPoint("TOPRIGHT", 0, -yy)
                 delBtn:SetScript("OnClick", function() confirmDelete(ev) end)
                 local editBtn = UI:CreateButton(child, L["Edit"], 48, 18)
                 editBtn:SetPoint("RIGHT", delBtn, "LEFT", -6, 0)
@@ -546,16 +665,16 @@ function AmazingHub:CreateCalendarSub(panel)
             end
             yy = yy + 20
 
-            local compFS = UI:CreateText(child, string.format(L["Tanks %d, Heals %d, DPS %d  (%d going, %d tentative)"],
-                comp.roles.TANK, comp.roles.HEALER, comp.roles.DPS, comp.yes, comp.tentative),
-                10, C.silver.r, C.silver.g, C.silver.b)
-            compFS:SetPoint("TOPLEFT", 6, -yy)
+            local compText = siteEvent and string.format(L["%d going · %d maybe"], comp.yes, comp.tentative)
+                or string.format(L["Tanks %d, Heals %d, DPS %d  (%d going, %d tentative)"],
+                    comp.roles.TANK, comp.roles.HEALER, comp.roles.DPS, comp.yes, comp.tentative)
+            local compFS = UI:CreateText(child, compText, 11, soft.r, soft.g, soft.b)
+            compFS:SetPoint("TOPLEFT", 0, -yy)
             yy = yy + 18
 
             if e.note and e.note ~= "" then
-                local noteFS = UI:CreateText(child, e.note, 10, C.textDim.r, C.textDim.g, C.textDim.b)
-                noteFS:SetPoint("TOPLEFT", 6, -yy)
-                noteFS:SetWidth(child:GetWidth() - 12); noteFS:SetJustifyH("LEFT")
+                local noteFS = UI:CreateText(child, e.note, 11, soft.r, soft.g, soft.b)
+                across(noteFS, yy)
                 yy = yy + math.max(14, (noteFS:GetStringHeight() or 12) + 6)
             end
 
@@ -567,21 +686,22 @@ function AmazingHub:CreateCalendarSub(panel)
                 -- last one they got.
                 local where = L["Sign up in Discord or on the website."]
                 if (tonumber(e.signupsAt) or 0) > 0 then
-                    where = where .. " " .. string.format(L["(as of %s)"], date("%a %H:%M", e.signupsAt))
+                    where = where .. " " .. string.format(L["(as of %s)"], AmazingHub:LocalDate("%a %H:%M", e.signupsAt))
                 end
-                local whereFS = UI:CreateText(child, where, 10, C.silver.r, C.silver.g, C.silver.b)
-                whereFS:SetPoint("TOPLEFT", 6, -yy)
+                local whereFS = UI:CreateText(child, where, 11, soft.r, soft.g, soft.b)
+                whereFS:SetPoint("TOPLEFT", 0, -yy)
                 yy = yy + 16
-                -- Whether it is in the game's own calendar, and for an officer the click that changes it.
-                if gameOn then
+                -- Whether it is in the game's own calendar, and for an officer the click that changes it. Not for
+                -- the site's events that are not raids (#652): the game's guild event is one to sign up and invite to.
+                if gameOn and not siteEvent then
                     local view = GC:ViewFor(e, gameEvents, inbox)
                     if view.text then
-                        local stateFS = UI:CreateText(child, view.text, 10, C.gold.r, C.gold.g, C.gold.b)
-                        stateFS:SetPoint("TOPLEFT", 6, -yy)
+                        local stateFS = UI:CreateText(child, view.text, 11, soft.r, soft.g, soft.b)
+                        stateFS:SetPoint("TOPLEFT", 0, -yy)
                         if view.action then
                             local evId, action = e.id, view.action
                             local gameBtn = UI:CreateButton(child, view.label, 200, 18)
-                            gameBtn:SetPoint("TOPRIGHT", -4, -yy)
+                            gameBtn:SetPoint("TOPRIGHT", 0, -yy)
                             gameBtn:SetScript("OnClick", function() GC:Act(evId, action) end)
                         end
                         yy = yy + 20
@@ -606,15 +726,15 @@ function AmazingHub:CreateCalendarSub(panel)
                         end
                     end
                     if #names > 0 then
-                        local fs = UI:CreateText(child, line[2] .. table.concat(names, ", "), 9, C.textDim.r, C.textDim.g, C.textDim.b)
-                        fs:SetPoint("TOPLEFT", 6, -yy); fs:SetWidth(child:GetWidth() - 12); fs:SetJustifyH("LEFT")
+                        local fs = UI:CreateText(child, line[2] .. table.concat(names, ", "), 11, soft.r, soft.g, soft.b)
+                        across(fs, yy)
                         yy = yy + math.max(14, (fs:GetStringHeight() or 12) + 4)
                     end
                 end
             else
                 local id = e.id
                 local roleBtn = UI:CreateButton(child, roleLabel((mine and mine.role) or "DPS"), 66, 18)
-                roleBtn:SetPoint("TOPLEFT", 6, -yy)
+                roleBtn:SetPoint("TOPLEFT", 0, -yy)
                 roleBtn.role = (mine and mine.role) or "DPS"
                 roleBtn:SetScript("OnClick", function()
                     local i = 1
@@ -622,17 +742,18 @@ function AmazingHub:CreateCalendarSub(panel)
                     roleBtn.role = ROLES[(i % #ROLES) + 1]
                     roleBtn.label:SetText(roleLabel(roleBtn.role))
                 end)
-                -- Chained, so a label that grew its button pushes the next one (issue #28).
-                local function rsvpBtn(text, status, anchor, xoff, col)
+                -- Chained, so a label that grew its button pushes the next one (issue #28). My answer
+                -- is the selected one of the three, marked as every selection is (#371).
+                local function rsvpBtn(text, status, anchor, xoff)
                     local b = UI:CreateButton(child, text, 64, 18)
                     b:SetPoint("LEFT", anchor, "RIGHT", xoff, 0)
-                    if mine and mine.status == status then b:SetBaseColor(col.r * 0.34, col.g * 0.34, col.b * 0.34, 0.95) end
+                    UI:SetSelected(b, mine and mine.status == status)
                     b:SetScript("OnClick", function() CAL():Rsvp(id, status, roleBtn.role) end)
                     return b
                 end
-                local goingBtn = rsvpBtn(L["Going"],     "yes",       roleBtn,  8, C.online)
-                local tentBtn  = rsvpBtn(L["Tentative"], "tentative", goingBtn, 4, C.gold)
-                rsvpBtn(L["Absent"],    "no",        tentBtn,  4, C.red)
+                local goingBtn = rsvpBtn(L["Going"],     "yes",       roleBtn,  8)
+                local tentBtn  = rsvpBtn(L["Tentative"], "tentative", goingBtn, 4)
+                rsvpBtn(L["Absent"],    "no",        tentBtn,  4)
                 yy = yy + 24
 
                 local going = {}
@@ -643,8 +764,8 @@ function AmazingHub:CreateCalendarSub(panel)
                     end
                 end
                 if #going > 0 then
-                    local goFS = UI:CreateText(child, L["Going: "] .. table.concat(going, ", "), 9, C.textDim.r, C.textDim.g, C.textDim.b)
-                    goFS:SetPoint("TOPLEFT", 6, -yy); goFS:SetWidth(child:GetWidth() - 12); goFS:SetJustifyH("LEFT")
+                    local goFS = UI:CreateText(child, L["Going: "] .. table.concat(going, ", "), 11, soft.r, soft.g, soft.b)
+                    across(goFS, yy)
                     yy = yy + math.max(14, (goFS:GetStringHeight() or 12) + 4)
                 end
             end
@@ -653,50 +774,75 @@ function AmazingHub:CreateCalendarSub(panel)
             -- reached only ambassadors, and seating is an officer action.
             local pending = isOfficer and CAL().AlliancePending and CAL():AlliancePending(e) or {}
             if #pending > 0 then
-                local hdr = UI:CreateText(child, string.format(L["ALLIANCE PENDING (%d)"], #pending),
-                    10, C.gold.r, C.gold.g, C.gold.b)
-                hdr:SetPoint("TOPLEFT", 6, -yy)
+                -- The queue's own column label, not gold (#371).
+                local hdr = UI:CreateHeaderText(child, string.format(L["ALLIANCE PENDING (%d)"], #pending))
+                hdr:SetPoint("TOPLEFT", 0, -yy)
                 yy = yy + 16
                 for _, p in ipairs(pending) do
                     local cr, cg, cb = AmazingHub:GetClassColor(p.class)
-                    local line = string.format("|cff%02x%02x%02x%s|r  %s  %s  |cff888888%s|r",
+                    local line = string.format("|cff%02x%02x%02x%s|r  %s  %s  %s",
                         cr * 255, cg * 255, cb * 255, p.name or "?",
-                        p.level and tostring(p.level) or "", roleLabel(p.role), p.guild or "?")
+                        p.level and tostring(p.level) or "", roleLabel(p.role), tint(p.guild or "?", soft))
                     if p.note and p.note ~= "" then
-                        line = line .. "  |cff777777\"" .. p.note .. "\"|r"
+                        line = line .. "  " .. tint("\"" .. p.note .. "\"", C.label)
                     end
-                    local fs = UI:CreateText(child, line, 10, C.text.r, C.text.g, C.text.b)
-                    fs:SetPoint("TOPLEFT", 10, -yy)
-                    fs:SetWidth(child:GetWidth() - 150)
-                    fs:SetJustifyH("LEFT")
-                    fs:SetWordWrap(false)
-
                     local evId, pKey = e.id, p.key
                     local noBtn = UI:CreateButton(child, L["Decline"], 62, 18)
-                    noBtn:SetPoint("TOPRIGHT", -4, -yy + 2)
+                    noBtn:SetPoint("TOPRIGHT", 0, -yy + 2)
                     noBtn:SetScript("OnClick", function() CAL():DeclineAlliance(evId, pKey) end)
                     local yesBtn = UI:CreateButton(child, L["Approve"], 62, 18)
                     yesBtn:SetPoint("RIGHT", noBtn, "LEFT", -6, 0)
                     yesBtn:SetScript("OnClick", function() CAL():ApproveAlliance(evId, pKey) end)
 
+                    -- One line, stopping short of its two buttons.
+                    local fs = UI:CreateText(child, line, 11, C.text.r, C.text.g, C.text.b)
+                    fs:SetPoint("TOPLEFT", 0, -yy)
+                    fs:SetPoint("TOPRIGHT", yesBtn, "TOPLEFT", -GAP, -2)
+                    fs:SetJustifyH("LEFT")
+                    fs:SetWordWrap(false)
+
                     yy = yy + 20
                 end
             end
 
-            yy = yy + 10
+            yy = yy + 12
         end
         end)
         if not okAll then
-            local errFS = UI:CreateText(child, "|cffFF6666" .. tostring(errAll) .. "|r", 10, 1, 0.4, 0.4)
-            errFS:SetPoint("TOPLEFT", 6, -yy)
-            errFS:SetWidth(math.max(50, child:GetWidth() - 12)); errFS:SetJustifyH("LEFT")
+            local errFS = UI:CreateText(child, tostring(errAll), 11, C.danger.r, C.danger.g, C.danger.b)
+            across(errFS, yy)
             yy = yy + math.max(40, (errFS:GetStringHeight() or 20) + 10)
         end
 
-        if sel and #evs == 0 then
+        if sel and #evs == 0 and #virtual == 0 then
             local none = UI:CreateText(child, canCreate and L["No events. Use New Event to add one."] or L["No events this day."],
-                10, C.silver.r, C.silver.g, C.silver.b)
-            none:SetPoint("TOPLEFT", 4, -4)
+                12, soft.r, soft.g, soft.b)
+            none:SetPoint("TOPLEFT", 0, 0)
+            yy = 20
+        end
+
+        -- A raid the site has but the game was not sent yet (#416): the inbox carries ten raids, four weeks
+        -- ahead, so a night planned two months out is on Discord and not here. Said only where the guild
+        -- uses the site (the companion is on here, or a raid from it is on the calendar).
+        if sel then
+            local Imp = AmazingHub.CompanionImport
+            local usesSite = AmazingHub.Companion ~= nil and AmazingHub.Companion:IsEnabled()
+            if not usesSite then
+                for _, e in pairs(CAL():GetEvents()) do
+                    if CAL():IsWebEvent(e) and not e.canceled then usesSite = true break end
+                end
+            end
+            local why = usesSite and AmazingHub.GameCalendar and AmazingHub.GameCalendar.NotSentYet(
+                noon(math.floor(sel / 10000), math.floor((sel % 10000) / 100), sel % 100) + 12 * 3600,
+                GetServerTime(), inbox or (Imp and Imp:InboxInfo()))
+            if why then
+                local text = why == "window"
+                    and string.format(L["Raids planned on the website more than %d days ahead have not reached the game yet; they arrive as the date gets closer."], AmazingHub.GameCalendar.WINDOW_DAYS)
+                    or string.format(L["The website sends the game its next %d raids; later ones arrive as those pass."], AmazingHub.GameCalendar.INBOX_CAP)
+                local fs = UI:CreateText(child, text, 11, soft.r, soft.g, soft.b)
+                across(fs, yy)
+                yy = yy + math.max(14, (fs:GetStringHeight() or 12) + 6)
+            end
         end
         child:SetHeight(math.max(1, yy))
     end

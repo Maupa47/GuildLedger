@@ -31,11 +31,12 @@ then); the bot then holds chat 60 s before posting.
 3. **Monitoring:** `#gl-ops` webhook (ADMIN.md section 5): the bot check and role menus report there.
 4. **Addon 0.7.0** (login greeting after 30 s, faster map dots, link requests waiting, join dates): CurseForge
    upload after the in-game checks C15–C18.
-5. **Re-pin the hub to GuildOS 1.40** (plan phase U): audit done (docs/addon/HUB_AUDIT.md section 10). Waiting for
-   the admin: decision 7 (what acts for the player). Answered: alt tag for every link, copy the saved data over
-   to the new key; then U2 on a branch.
+5. **Re-pin the hub to GuildOS 1.40** (plan phase U): audit done (docs/addon/HUB_AUDIT.md section 10). U2 built on
+   branch `repin-140` (HUB_AUDIT 10.11): the tools that act for the player are hidden in the CurseForge pack and
+   shown with the developer addon `addon/AmazingHubDev` (admin's own install); saved data copied to the new key.
+   Next: the in-game hub round U3 (docs/dev/INGAME_TESTS.md), then merge into main.
    Item catalogue (phase C): `tools/build-catalog.py` → `shared/catalog/` (bot `/wish add` suggestions) and
-   `addon/hub-extra/Data/ItemCatalog.lua` (hub search, wired in after the re-pin). Forever has no boss loot data.
+   `addon/hub-extra/Data/ItemCatalog.lua` (hub wishlist and search, wired in on the branch). Forever has no boss loot data.
 6. GLMeterProbe: run `/glmeter` (M1–M6) so the result can be recorded and the probe removed.
 
 Defaults in use until the admin decides otherwise (docs/dev/PLAN_COMMUNITY.md section 4): nickname = the main's

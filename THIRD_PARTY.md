@@ -43,5 +43,5 @@ SOFTWARE.
 | ChatThrottleLib | `Libs/ChatThrottleLib.lua` | public domain (header) |
 | LibSerialize, © 2020 Ross Nichols | `Libs/LibSerialize.lua` | MIT (header) |
 | LibDeflate, © 2018-2021 Haoqian He | `Libs/LibDeflate.lua` | zlib (header) |
-| IBM Plex Mono, Spectral | `Media/Fonts/` | SIL Open Font License (`OFL-*.txt` beside them) |
+| IBM Plex Sans, IBM Plex Mono | `Media/Fonts/` | SIL Open Font License (`OFL-*.txt` beside them) |
 | LibAmzHubMesh (GuildOS's LibChehulMesh, renamed) | `Libs/LibAmzHubMesh.lua` | MIT, as GuildOS |

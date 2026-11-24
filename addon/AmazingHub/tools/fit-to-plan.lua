@@ -30,9 +30,7 @@ function UnitFullName() return "Lead", "" end
 C_PlayerInfo = { ShouldDisplaySurname = function() return false end }
 C_Timer = { After = function() end, NewTicker = function() return { Cancel = function() end } end }
 Enum = { SendAddonMessageResult = {} }
-StaticPopupDialogs = {}
 local shown
-function StaticPopup_Show(which, text) shown = { which = which, text = text } end
 
 -- The group: the leader, two planned, one benched, one pug, one who said no on the site.
 local GROUP = { "Lead", "Ana", "Bo", "Benched", "Pug", "SaidNo" }
@@ -46,11 +44,14 @@ function UnitName(unit)
   return GROUP[i], ""
 end
 function UnitClass() return "Warrior", "WARRIOR" end
+-- In a raid, raid1 is me (the leader): trim tells me apart by unit, not by name (issue #400).
+function UnitIsUnit(a, b) return a == b or (b == "player" and a == "raid1") end
 local removed = {}
 C_PartyInfo = { UninviteUnit = function(name) removed[#removed + 1] = name end, InviteUnit = function() end }
 
 AmazingHub = { L = setmetatable({}, { __index = function(_, k) return k end }), VERSION = "test" }
 dofile(ADDON .. "/Core/Core.lua")
+function AmazingHub:ShowDialog(which, text) shown = { which = which, text = text } end
 dofile(ADDON .. "/Core/Compat.lua")
 dofile(ADDON .. "/Modules/CompanionImport.lua")
 AmazingHub.Print = function() end
@@ -78,7 +79,7 @@ check(shown and shown.which == "AMAZINGHUB_TRIM_PLAN" and shown.text:find("Pug",
   "asked first, naming who goes")
 check(#removed == 0, "and nobody removed before the answer")
 
-StaticPopupDialogs.AMAZINGHUB_TRIM_PLAN.OnAccept()
+AmazingHub.Dialogs.AMAZINGHUB_TRIM_PLAN.OnAccept()
 check(#removed == 2 and removed[1] == "raid5" and removed[2] == "raid6", "on yes, removed through Compat by unit: never the leader, the planned or the bench")
 
 leader = false

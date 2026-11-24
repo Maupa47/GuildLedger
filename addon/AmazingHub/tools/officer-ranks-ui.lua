@@ -4,7 +4,8 @@
 -- The checkboxes set the guild's threshold, not this account's. A choice made before the
 -- threshold was the guild's was never stamped, so nobody sends it: a button shares it, and is
 -- offered only for a real choice, never the default, which an officer who has not heard the
--- guild's yet would otherwise send over it.
+-- guild's yet would otherwise send over it. Below them, the kinds of event the ranks under the
+-- officers create (issue #308).
 --
 --   luajit -e 'ADDON="."' tools/officer-ranks-ui.lua
 --
@@ -66,12 +67,16 @@ AmazingHub.UI = setmetatable({
   GetFeature = function() return nil end,
   CreateButton = function(_, _, t) local b = widget({ text = tostring(t) }); buttons[#buttons + 1] = b; return b end,
   CreateCheckbox = function(_, _, label)
-    local cb = widget({ checkbox = widget({}) })
+    local box = widget({})
+    function box:SetChecked(v) rawset(self, "checked", v and true or false) end
+    function box:GetChecked() return rawget(self, "checked") or nil end
+    local cb = widget({ checkbox = box })
     boxes[tostring(label)] = cb
     return cb
   end,
 }, { __index = function() return function() return stub end end })
 dofile(ADDON .. "/UI/FeaturePanels.lua")
+dofile(ADDON .. "/UI/SettingsPanel.lua")
 
 local published = {}
 AmazingHub.SyncService = { Publish = function(_, dom, act, data, opts)
@@ -83,7 +88,8 @@ local function open(settings, rank)
   AmazingHub.db = { settings = settings }
   settings.modules = settings.modules or {}
   buttons, boxes, printed, published = {}, {}, {}, {}
-  local ok, err = pcall(AmazingHub.RefreshSettingsPanel, AmazingHub, stub, "officer")
+  -- A fresh frame each time: Settings builds a page once per frame and only re-reads it after (#367).
+  local ok, err = pcall(AmazingHub.RefreshSettingsPanel, AmazingHub, setmetatable({}, getmetatable(stub)), "rules")
   check(ok, "the officer settings draw (" .. tostring(err) .. ")")
 end
 local function shareButton()
@@ -127,5 +133,35 @@ printed, published = {}, {}
 rank2.checkbox.onChanged(nil, true)
 check(AmazingHub.db.settings.officerMaxRank == 1 and #published == 0 and #printed == 0,
   "a client that is no longer an officer changes nothing and claims nothing")
+
+-- ── 3. The kinds the ranks below the officers create (issue #308) ─────────
+-- Calendar's own rules are tools/event-kinds.lua's; here, that the boxes say the guild's choice and send it.
+local chose, memberKinds
+AmazingHub.Calendar = {
+  KINDS = { "RAID", "DUNGEON", "PVP", "FARM", "SOCIAL", "OTHER" },
+  KindLabel = function(_, k) return "kind:" .. k end,
+  MemberKinds = function() return memberKinds end,
+  SetMemberKinds = function(_, list) if myRank > 1 then return false end chose = list; return true end,
+}
+memberKinds = { DUNGEON = true, SOCIAL = true }
+open({ officerMaxRank = 1, officerMaxRankAt = 900 })
+local raidBox = boxes["kind:RAID"]
+check(raidBox and boxes["kind:OTHER"], "each kind of event has a checkbox")
+check(not raidBox.checkbox:GetChecked() and boxes["kind:DUNGEON"].checkbox:GetChecked()
+  and boxes["kind:SOCIAL"].checkbox:GetChecked(), "ticked as the guild chose")
+raidBox.checkbox:SetChecked(true)
+raidBox.checkbox.onChanged(raidBox.checkbox, true)
+check(chose and table.concat(chose, ",") == "RAID,DUNGEON,SOCIAL", "ticking Raid sends every kind ticked, in order")
+memberKinds = nil
+open({ officerMaxRank = 1, officerMaxRankAt = 900 })
+local all = true
+for _, k in ipairs(AmazingHub.Calendar.KINDS) do all = all and boxes["kind:" .. k].checkbox:GetChecked() == true end
+check(all, "a guild that never chose shows every kind ticked")
+myRank, chose = 5, nil
+local pvp = boxes["kind:PVP"]
+pvp.checkbox:SetChecked(false)
+pvp.checkbox.onChanged(pvp.checkbox, false)
+check(chose == nil and pvp.checkbox:GetChecked(), "a client that is no longer an officer puts the tick back")
+AmazingHub.Calendar = nil
 
 print(("officer-ranks-ui: %d checks passed"):format(checks))

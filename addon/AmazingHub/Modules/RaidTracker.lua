@@ -70,13 +70,26 @@ RaidTracker.FOREVER_RAID_KEYS = {
     [249] = "forever-onyxia",
 }
 
+-- This game's own table of the two above.
+local function raidKeys(self)
+    local client = AmazingHub.Client
+    if client and not client.isAnniversary and not client.isRetail then return self.FOREVER_RAID_KEYS end
+    return self.RAID_KEYS
+end
+
 -- The site's key for the instance the game put this character in, in this game's own table.
 function RaidTracker:RaidKeyOf(instanceID)
-    local client = AmazingHub.Client
-    if client and not client.isAnniversary and not client.isRetail then
-        return self.FOREVER_RAID_KEYS[instanceID]
+    return raidKeys(self)[instanceID]
+end
+
+-- Whether this client can ever stamp a session with the site's `key`: some map id of its table gives it.
+-- A raid whose map id nobody has yet (Forever's Barrow Deeps and Hyjal) cannot, and its nights never match.
+function RaidTracker:MakesKey(key)
+    if type(key) ~= "string" then return false end
+    for _, k in pairs(raidKeys(self)) do
+        if k == key then return true end
     end
-    return self.RAID_KEYS[instanceID]
+    return false
 end
 
 -- Raids that count for attendance (25-man progression)
@@ -560,12 +573,18 @@ function RaidTracker:EndSession(away, at)
         self.currentRaid.isGuildRaid = true
         -- Rebuild from scratch so lockout-dedup logic always applies
         self:RebuildAttendanceFromSessions()
+        -- The points a raid night gives beyond its bosses: on time, to the end, the raid (issue #309).
+        if AmazingHub.Points and AmazingHub.Points.OnRaidEnd then AmazingHub.Points:OnRaidEnd(self.currentRaid) end
     else
         self.currentRaid.isGuildRaid = false
         AmazingHub:Print(L["|cffFF9900Raid ended — less than 50% guild members, attendance not counted.|r"])
     end
 
     AmazingHub:Print(L["Raid tracking ended: |cffFFD700"] .. self.currentRaid.name .. "|r")
+    -- The night's guests leave with it, but those marked to stay (issue #340).
+    if AmazingHub.CoreManager and AmazingHub.CoreManager.EndNight then
+        AmazingHub:SafeCall(AmazingHub.CoreManager.EndNight, AmazingHub.CoreManager, self.currentRaid.groupTag, self.currentRaid)
+    end
     self.currentRaid = nil
 
     -- Broadcast updated raid data to all officer clients
@@ -616,6 +635,24 @@ function RaidTracker:TakeSnapshot(reason)
     -- Include self
     local myName = AmazingHub.Compat.PlayerName()
     local myKey = AmazingHub:GetPlayerKey(myName)
+    -- Who leads the raid now: whose client pays what the raid's end gives (Points:RaidEndPayer). Kept
+    -- from the last snapshot that saw one, since the raid is often disbanded before the session closes.
+    if isRaid and UnitIsGroupLeader then
+        local mine = UnitIsGroupLeader("player")
+        if not AmazingHub.Compat.IsSecret(mine) and mine then
+            self.currentRaid.leader = myKey
+        else
+            for i = 1, numMembers do
+                local unit = "raid" .. i
+                local leads = UnitExists(unit) and UnitIsGroupLeader(unit)
+                if not AmazingHub.Compat.IsSecret(leads) and leads and not AmazingHub.Compat.IsPlayer(unit) then
+                    local name, realm = AmazingHub.Compat.UnitIdentity(unit)
+                    if name then self.currentRaid.leader = AmazingHub:GetPlayerKey(name, realm) end
+                    break
+                end
+            end
+        end
+    end
     members[myKey] = {
         name = myName,
         class = select(2, UnitClass("player")),
@@ -717,12 +754,17 @@ end
 
 function RaidTracker:SetGroupTag(name)
     name = name or ""
+    local systemBefore = AmazingHub.GetLootSystem and AmazingHub:GetLootSystem()
     self.currentGroupTag = name
     if AmazingHub.db and AmazingHub.db.raidTracker then
         AmazingHub.db.raidTracker.currentGroupTag = name
     end
     -- Loot rules cached from the old core's config follow the new one (issue #99).
     if AmazingHub.LootMaster and AmazingHub.LootMaster.LoadCfg then AmazingHub.LootMaster:LoadCfg() end
+    -- And what the loot system shows, when the new core runs another one (issue #338).
+    if systemBefore and AmazingHub:GetLootSystem() ~= systemBefore and AmazingHub.OnLootSystemChanged then
+        AmazingHub:OnLootSystemChanged()
+    end
 end
 
 -- An officer picking the active core (Raid Core's "Set Active"), issue #99.

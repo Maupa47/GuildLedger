@@ -355,12 +355,12 @@ AmazingHub.JoinRequests = { ForExport = function() error("boom") end }
 AmazingHub.RecordError = function() end
 local survived = AmazingHub.Companion:BuildPayload()
 AmazingHub.RecordError = nil
-assert(survived.joinRequests == nil and survived.members and survived.v == 16, "a failing joinRequests is left out and the rest goes")
+assert(survived.joinRequests == nil and survived.members and survived.v == 17, "a failing joinRequests is left out and the rest goes")
 AmazingHub.JoinRequests = nil
 
 -- v14 (issue #251, the site's #392): a linked alt carries `main`, its main's key exactly as altLinks holds it, the
 -- same form as its own `key`. A main and anybody nobody linked carry no `main` key at all: not false, not "".
-assert(anniversary.v == 16, "the payload is v16")
+assert(anniversary.v == 17, "the payload is v17")
 
 -- v16 (issue #313, the site's #495): the guild's officer threshold rides the export with the officers' stamp,
 -- and only once somebody in the guild chose it. Without the stamp the client holds its own default, and
@@ -377,6 +377,54 @@ do
   s.officerMaxRank = 12
   assert(AmazingHub.Companion:BuildPayload().officerRanks == nil, "a rank the game has not (0..9) is never sent")
   s.officerMaxRank, s.officerMaxRankAt = max, at
+end
+
+-- v17 (issue #399): each slot's random suffix id and the member's talents, so the site can show the
+-- whole character. Both absent when unknown, never null or zero; what a reader from before gets is
+-- otherwise the same payload.
+do
+  local m = AmazingHub.db.members["Chaupa-Firemaw"]
+  local savedGear, savedTalents = m.gear, m.talents
+  m.gear = {
+    [1]  = { id = 28275, name = "Beast Lord Helm", quality = 4, ilvl = 115, enchantId = 2999 },
+    [15] = { id = 10148, name = "Mighty Cloak of the Monkey", quality = 2, ilvl = 52, suffix = 590 },
+    [16] = { id = 15216, name = "Rune Sword of Agility", quality = 2, ilvl = 50, suffix = -22 },
+  }
+  local function chaupa()
+    for _, line in ipairs(AmazingHub.Companion:BuildPayload().members) do
+      if line.key == "Chaupa-Firemaw" then return line end
+    end
+  end
+  local before = chaupa()
+  assert(before.talents == nil, "no talents read: no talents key")
+  local bySlot = {}
+  for _, g in ipairs(before.gear) do bySlot[g.slot] = g end
+  assert(bySlot[1].suffix == nil, "an item without a random suffix carries no suffix key")
+  assert(bySlot[15].suffix == 590 and bySlot[16].suffix == -22, "each slot's suffix, sign kept")
+  local json = AmazingHub.Companion.EncodeJson(before.gear)
+  assert(json:find('"slot":15,"suffix":590}', 1, true) and not json:find('"suffix":0', 1, true)
+    and not json:find("null", 1, true), "the suffix on the wire: " .. json)
+  m.gear[15].suffix, m.gear[16].suffix = 0, 1.5
+  bySlot = {}
+  for _, g in ipairs(chaupa().gear) do bySlot[g.slot] = g end
+  assert(bySlot[15].suffix == nil and bySlot[16].suffix == nil, "a zero or a fraction is no suffix")
+
+  m.talents = { { 135489, 3 }, { 135469, 5 } }
+  local t = chaupa().talents
+  assert(AmazingHub.Companion.EncodeJson(t) == "[[135469,5],[135489,3]]", "talents as [[definitionID, rank]], sorted by id")
+  m.talents = { { 135489, 3 }, { 135469, 0 } }
+  assert(chaupa().talents == nil, "a tree with a pair that is not whole and positive goes as nothing, never half")
+  m.talents = { { 135489, "x" } }
+  assert(chaupa().talents == nil, "a rank that is not a number: nothing")
+  m.talents = "30303213002"
+  assert(chaupa().talents == nil, "talents that are not a list: nothing")
+  m.talents = {}
+  assert(chaupa().talents == nil, "an empty list: absent, not []")
+  local many = {}
+  for i = 1, 201 do many[i] = { i, 1 } end
+  m.talents = many
+  assert(chaupa().talents == nil, "more pairs than any tree has: nothing")
+  m.gear, m.talents = savedGear, savedTalents
 end
 do
   local function lines()
@@ -470,7 +518,7 @@ do
   assert(#files == 1 and files[1] == AmazingHubDB.__companion, "switch off: one string, in __companion: " .. #files)
   assert(files[1] == files[1]:match("^GOSCOMP1:[a-zA-Z0-9()]+$"), "the app's regex lifts the whole string")
   local pack, json = opened(files[1])
-  assert(pack.self == true and pack.fmt == "GOSCOMP1" and pack.v == 16 and pack.count == 1, "it says it is the pack")
+  assert(pack.self == true and pack.fmt == "GOSCOMP1" and pack.v == 17 and pack.count == 1, "it says it is the pack")
   assert(pack.guildKey == "Raid Guild-Firemaw" and pack.guildName == "Raid Guild" and pack.realm == "Firemaw"
     and pack.game == "ANNIVERSARY", "it names the guild and the game, as the site's upload picks by them")
   assert(pack.exportedBy == PLAYER and pack.exportedAt == NOW and pack.addonVersion == AmazingHub.VERSION, "and who, when, which addon")
@@ -716,6 +764,138 @@ do
   AmazingHub.db.wishlists = { ["Chaupa-Firemaw"] = { { itemId = 28830, order = 1 } } }
   AmazingHub.RecordError = nil
   -- Kept on for the string below, so the site's fixture decodes a real book.
+end
+
+-- `why` on a loot entry (issue #336, the site's #517): additive within v16. An entry the history keeps
+-- a record for carries it, in the documented shape and nothing else; an entry without one, and every
+-- other field of the one with it, is exactly what a reader from before was sent.
+do
+  local history = AmazingHub.LootTracker.GetHistory()
+  local plain = AmazingHub.Companion:BuildPayload()
+  local plainJson = AmazingHub.Companion.EncodeJson(plain.loot)
+  assert(not plainJson:find('"why"', 1, true), "no record kept: no `why` on any entry")
+  local kept = history[1]
+  local saved = AmazingHub.LootTracker.GetHistory
+  AmazingHub.LootTracker.GetHistory = function()
+    local out = {}
+    for i, e in ipairs(history) do out[i] = e end
+    local with = {}
+    for k, v in pairs(kept) do with[k] = v end
+    with.why = {
+      v = 1, rule = "softres", ruleAt = 1791000000, decidedBy = "council", exception = "Thunderfury",
+      candidates = {
+        { name = "Chaupa", answer = "MS", roll = 41, bid = 0, values = { softres = 1, ["account:plus1"] = 0, attendance = 96 } },
+        { name = "Rias", answer = "MS", roll = 12, bid = 0, asked = "MS" },
+        { name = "Kawa", answer = "OS", asked = "MS", roll = 7, bid = 0 },
+      },
+      votes = { anon = false, quorum = 2, cast = { { by = "Kawa", ["for"] = "Chaupa" } }, tally = { Chaupa = 2, Rias = 1 } },
+      debug = { "never sent" },
+    }
+    out[1] = with
+    return out
+  end
+  local payload = AmazingHub.Companion:BuildPayload()
+  local why = payload.loot[1].why
+  assert(payload.v == 17, "additive: the payload's version does not move")
+  assert(AmazingHub.Companion.EncodeJson(why) == '{"candidates":[{"answer":"MS","bid":0,"name":"Chaupa","roll":41,'
+    .. '"values":{"account:plus1":0,"attendance":96,"softres":1}},{"answer":"MS","bid":0,"name":"Rias","roll":12},'
+    .. '{"answer":"OS","asked":"MS","bid":0,"name":"Kawa","roll":7}],'
+    .. '"decidedBy":"council","exception":"Thunderfury","rule":"softres","ruleAt":1791000000,"v":1,'
+    .. '"votes":{"anon":false,"cast":[{"by":"Kawa","for":"Chaupa"}],"quorum":2,"tally":{"Chaupa":2,"Rias":1}}}',
+    "the entry carries `why` in the documented shape: " .. AmazingHub.Companion.EncodeJson(why))
+  assert(why.debug == nil, "and nothing the shape does not name")
+  assert(why.candidates[2].asked == nil and why.candidates[3].asked == "MS",
+    "`asked` goes out only where it differs from `answer`")
+  local long = AmazingHub.Companion.LootWhy({ v = 1, rule = "custom", decidedBy = "ml", candidates = {
+    { name = "Kawa", answer = "OS", asked = string.rep("a", 300) }, { name = "Rias", answer = "OS", asked = 7 } } })
+  assert(#long.candidates[1].asked == 48 and long.candidates[2].asked == nil, "cut to the 48 bytes of a key, and only when it is text")
+  for i = 2, #payload.loot do assert(payload.loot[i].why == nil, "an entry with no record carries none") end
+  -- A reader from before never looks at `why`: without it the list is the one it always got.
+  payload.loot[1].why = nil
+  assert(AmazingHub.Companion.EncodeJson(payload.loot) == plainJson, "every other field of every entry is as before")
+  -- An anonymous council: who voted for whom never leaves.
+  local anon = AmazingHub.Companion.LootWhy({ v = 1, rule = "council", decidedBy = "council", candidates = {},
+    votes = { anon = true, quorum = 2, cast = { { by = "Kawa", ["for"] = "Chaupa" } }, tally = { Chaupa = 2 } } })
+  assert(anon.votes.cast == nil and anon.votes.tally.Chaupa == 2 and AmazingHub.Companion.EncodeJson(anon.candidates) == "[]",
+    "anonymous: the tally alone")
+  -- What a saved file may hold is not trusted: a record that is no record is left out, a figure that is no number is 0.
+  assert(AmazingHub.Companion.LootWhy("x") == nil, "a record that is no table is none")
+  local odd = AmazingHub.Companion.LootWhy({ v = "1", rule = string.rep("r", 300), ruleAt = 0 / 0, candidates = { "x",
+    { name = 7, roll = "a", values = { softres = 1 / 0, [3] = 1 } } }, votes = { tally = {} } })
+  assert(odd.ruleAt == 0 and #odd.rule == 48 and #odd.candidates == 1 and odd.candidates[1].roll == 0
+    and odd.candidates[1].values == nil and odd.votes.tally == nil, "odd figures and texts are held to the shape")
+  local many = { v = 1, candidates = {} }
+  for i = 1, 30 do many.candidates[i] = { name = "P" .. i } end
+  assert(#AmazingHub.Companion.LootWhy(many).candidates == 10, "ten candidates at most")
+  AmazingHub.LootTracker.GetHistory = saved
+end
+
+-- `coreReceipt` (issue #347, the site's #519): additive within v16, behind the Raids module and its own
+-- pcall, in exactly the shape the site reads, every figure a plain integer.
+do
+  local on, recorded = { raids = true }, {}
+  local enabled = AmazingHub.IsFeatureEnabled
+  AmazingHub.IsFeatureEnabled = function(_, id) return on[id] == true end
+  AmazingHub.RecordError = function(_, msg) recorded[#recorded + 1] = msg end
+  local savedCores, savedLink = AmazingHub.db.cores, AmazingHub.db.coreLink
+  AmazingHub.db.cores = {
+    ["Núcleo Alfa"] = { name = "Núcleo Alfa", discordTag = "nucleo-alfa", raidSize = 20, importedAt = 1754390000.7,
+      members = { ["Ana-Firemaw"] = { name = "Ana", src = "discord" }, ["Bia-Firemaw"] = { name = "Bia", src = "discord" },
+                  ["Pug-Firemaw"] = { name = "Pug" } },
+      guests = { ["Zed-Firemaw"] = { name = "Pugzão", stay = false }, ["Yan-Firemaw"] = { name = "Yan", stay = true } } },
+    ["So no jogo"] = { name = "So no jogo", raidSize = 10, importedAt = 1754000000, members = { ["Ana-Firemaw"] = { name = "Ana" } } },
+  }
+  AmazingHub.db.coreLink = { importedAt = 1754390000 }
+  local payload = AmazingHub.Companion:BuildPayload()
+  local json = AmazingHub.Companion.EncodeJson(payload.coreReceipt)
+  assert(json == '{"at":1754400000,"cores":[{"fromDiscord":2,"guests":["Pugzão","Yan"],"importedAt":1754390000,"members":3,'
+    .. '"name":"Núcleo Alfa","size":20,"tag":"nucleo-alfa"},{"fromDiscord":0,"guests":[],"importedAt":0,"members":1,'
+    .. '"name":"So no jogo","size":10,"tag":""}],"linkedAt":1754390000}', "the receipt's documented shape: " .. json)
+  assert(payload.v == 17, "additive: the payload's version does not move")
+  -- A reader from before never looks at it: without it the payload is the one it always got.
+  local withJson = AmazingHub.Companion.EncodeJson(payload)
+  payload.coreReceipt = nil
+  on.raids = false
+  local before = AmazingHub.Companion:BuildPayload()
+  assert(before.coreReceipt == nil, "the Raids module off: no receipt at all")
+  assert(AmazingHub.Companion.EncodeJson(before) == AmazingHub.Companion.EncodeJson(payload), "every other field is as before")
+  assert(#withJson > #AmazingHub.Companion.EncodeJson(before), "and the receipt is one more field beside them")
+  on.raids = true
+  -- Never linked: 0. Caps: 50 cores, 40 guests, names of 48 bytes cut on a character.
+  AmazingHub.db.coreLink = nil
+  AmazingHub.db.cores = {}
+  local long = string.rep("a", 47) .. "ã" .. "bbb"
+  for i = 1, 60 do
+    local guests = {}
+    for j = 1, 45 do guests["G" .. j .. "-Firemaw"] = { name = string.format("G%02d", j) } end
+    AmazingHub.db.cores[string.format("Core %02d", i)] = { raidSize = 1 / 0, importedAt = 0 / 0, discordTag = "c" .. i,
+      members = {}, guests = guests }
+  end
+  AmazingHub.db.cores[long] = { raidSize = 25, members = {}, guests = { ["X-Firemaw"] = { name = string.rep("é", 30) } } }
+  local r = AmazingHub.Companion:BuildPayload().coreReceipt
+  assert(r.linkedAt == 0, "a client that never imported says 0")
+  assert(#r.cores == 50, "at most 50 cores")
+  assert(#r.cores[1].guests == 40 and r.cores[1].guests[40] == "G40", "at most 40 guests, in order")
+  -- Rewritten (review of #347): a size of 0 is one the site's door refuses whole (size is 1..40).
+  assert(r.cores[1].size == 1 and r.cores[1].importedAt == 0, "a figure that is no finite number is the least the site reads")
+  AmazingHub.db.cores = { [long] = AmazingHub.db.cores[long] }
+  r = AmazingHub.Companion:BuildPayload().coreReceipt
+  assert(#r.cores[1].name == 47 and r.cores[1].name == string.rep("a", 47), "a name cut to 48 bytes, never inside a character")
+  assert(#r.cores[1].guests[1] == 48 and r.cores[1].guests[1] == string.rep("é", 24), "and a guest's")
+  AmazingHub.db.cores = { Big = { raidSize = 25, importedAt = 1e300, discordTag = "big", members = {} } }
+  json = AmazingHub.Companion.EncodeJson(AmazingHub.Companion:BuildPayload().coreReceipt)
+  -- The cap is 2^32 - 1, the site's CLOCK_MAX (amazinghub-web lib/core-receipt.ts, site #519: past 2038).
+  assert(json:find('"importedAt":4294967295', 1, true) and not json:find("[eE][%+%-]?%d"), "plain integers, never an exponent: " .. json)
+  -- One that fails costs only itself, and goes to /amazing errors.
+  local receipt = AmazingHub.Companion.CoreReceipt
+  AmazingHub.Companion.CoreReceipt = function() error("boom") end
+  local p = AmazingHub.Companion:BuildPayload()
+  assert(p.coreReceipt == nil and #p.members > 0 and p.loot, "a receipt that fails is left out; the roster still goes up")
+  assert(recorded[#recorded]:find("coreReceipt", 1, true), "and goes to /amazing errors")
+  AmazingHub.Companion.CoreReceipt = receipt
+  AmazingHub.db.cores, AmazingHub.db.coreLink = savedCores, savedLink
+  AmazingHub.RecordError = nil
+  AmazingHub.IsFeatureEnabled = enabled   -- the loot book stays on for the string below
 end
 
 -- The string printed below carries one alt (v14), so the site's fixture decodes a real `main`.

@@ -217,6 +217,29 @@ function Compat.NewTicker(interval, fn, iterations)
     return nil
 end
 
+--- The game's own meter of an addon's CPU (C_AddOnProfiler, retail 11.0.2 on), in ms a frame:
+--- { recent, session, peak, all } (`all` is every addon together), or nil where the client has none
+--- or answers with nothing (issue #324). Each value may be nil on its own.
+function Compat.AddOnCPU(addon)
+    local P = C_AddOnProfiler
+    local M = Enum and Enum.AddOnProfilerMetric
+    if type(P) ~= "table" or type(M) ~= "table" or type(P.GetAddOnMetric) ~= "function" then return nil end
+    -- A metric this client lacks reaches the API as nil, which raises: pcall makes that a nil too.
+    local function read(fn, ...)
+        if type(fn) ~= "function" then return nil end
+        local ok, v = pcall(fn, ...)
+        return ok and tonumber(v) or nil
+    end
+    local out = {
+        recent  = read(P.GetAddOnMetric, addon, M.RecentAverageTime),
+        session = read(P.GetAddOnMetric, addon, M.SessionAverageTime),
+        peak    = read(P.GetAddOnMetric, addon, M.PeakTime),
+        all     = read(P.GetOverallMetric, M.RecentAverageTime),
+    }
+    if not (out.recent or out.session) then return nil end
+    return out
+end
+
 -- Send a /who query (C_FriendList on BCC/modern; legacy global fallback)
 function Compat.SendWho(filter)
     if C_FriendList and C_FriendList.SendWho then
@@ -365,6 +388,107 @@ function Compat.CanViewOfficerNote()
     return false
 end
 
+----------------------------------------------------------------------
+-- Rank changes and removals (issue #420). The rank's own rights are the game's Can* calls, nil-guarded:
+-- a client without one answers "no". GuildPromote, GuildDemote and GuildUninvite are protected: an
+-- addon's call is ADDON_ACTION_FORBIDDEN, from a click too (ADR-0010). What the game lets through is
+-- its own /gpromote, /gdemote and /gremove run by a secure action button the player clicks or a
+-- /click macro presses: the game runs the line, the addon only wrote it (ADR-0038).
+----------------------------------------------------------------------
+function Compat.CanGuildPromote()
+    return (CanGuildPromote and CanGuildPromote()) and true or false
+end
+
+function Compat.CanGuildDemote()
+    return (CanGuildDemote and CanGuildDemote()) and true or false
+end
+
+function Compat.CanGuildRemove()
+    return (CanGuildRemove and CanGuildRemove()) and true or false
+end
+
+-- This character's 0-based guild rank (0 = Guild Master), or nil outside a guild.
+function Compat.MyGuildRankIndex()
+    if not (IsInGuild and IsInGuild()) or not GetGuildInfo then return nil end
+    local _, _, rankIndex = GetGuildInfo("player")
+    return tonumber(rankIndex)
+end
+
+-- The game's own slash command for a rank change or a removal, in this client's spelling (the
+-- SLASH_* strings the chat frame registers), with the English one where a client lacks it.
+local RANK_SLASH = {
+    promote = { "SLASH_GUILD_PROMOTE1", "/gpromote" },
+    demote  = { "SLASH_GUILD_DEMOTE1", "/gdemote" },
+    remove  = { "SLASH_GUILD_UNINVITE1", "/gremove" },
+}
+
+-- The line that does `action` ("promote", "demote", "remove") to `name`, or nil: an unknown action, or a name
+-- with a character that could start or carry a second command (; / \ |) or a line break.
+-- Retail names the member with the realm, as a guild there spans connected realms (#184); the other
+-- clients' guilds are one realm, and the short name is the one their commands take. Where the game spells
+-- a surname with a space (WoW: Forever, "Maupa Druida"), the name goes as /w takes it, the hyphen for the
+-- space (AmazingHub:WhisperTarget): a space would end the name there. Unverified for /gpromote (specs/bulk-actions).
+function Compat.GuildRankCommand(action, name)
+    local slash = RANK_SLASH[action]
+    if not slash or type(name) ~= "string" or name == "" or name:find("[;/\\|\r\n]") then return nil end
+    if not AmazingHub.Client.isRetail then name = name:match("^([^-]+)") or name end
+    name = AmazingHub:WhisperTarget(strtrim and strtrim(name) or name)
+    if name == "" or name:find("%s") then return nil end
+    local cmd = _G[slash[1]]
+    if type(cmd) ~= "string" or not cmd:match("^/%S+$") then cmd = slash[2] end
+    return cmd .. " " .. name
+end
+
+-- Whether a secure button may run that line. WoW: Forever refused a /ginvite written by the addon on a
+-- secure button (MACRO_ACTION_BLOCKED, 1.60.1.70790, #256): there the officer types the line instead.
+function Compat.SecureGuildMacro()
+    return AmazingHub.Client.game ~= "FOREVER"
+end
+
+-- The game's "cast on key down" option (ActionButtonUseKeyDown): true or false, or nil on a client without it.
+local function keyDownOption()
+    local get = (C_CVar and C_CVar.GetCVar) or GetCVar
+    if not get then return nil end
+    local ok, v = pcall(get, "ActionButtonUseKeyDown")
+    if not ok or v == nil then return nil end
+    return tostring(v) == "1"
+end
+
+-- Register a secure action button for its clicks. A client with the key-down option (retail, and the newer
+-- Classic templates) may act on the press or on the release by it, a /click included: the button listens to
+-- both, and SecureClickActs lets exactly one of them arm the line, so a click acts once whichever the template
+-- runs. A client without the option acts on the release.
+function Compat.SecureClicks(button)
+    if keyDownOption() ~= nil then
+        button:RegisterForClicks("AnyUp", "AnyDown")
+    else
+        button:RegisterForClicks("AnyUp")
+    end
+end
+
+-- Whether the click event with this `down` is the one that arms the line (see SecureClicks).
+function Compat.SecureClickActs(down)
+    local opt = keyDownOption()
+    if opt == nil then return not down end
+    return (down and true or false) == opt
+end
+
+-- The macro line that presses button `name` the way SecureClickActs acts on: with the key-down option on,
+-- /click must say it is a press ("LeftButton 1"), or it arrives as a release and does nothing.
+function Compat.ClickMacro(name)
+    if keyDownOption() then return "/click " .. name .. " LeftButton 1" end
+    return "/click " .. name
+end
+
+-- Set the line a secure action button runs. Out of combat only: the game refuses SetAttribute on a
+-- protected frame in combat. Returns whether it was set.
+function Compat.SetSecureMacro(button, text)
+    if Compat.InCombat() then return false end
+    button:SetAttribute("type", "macro")
+    button:SetAttribute("macrotext", text or "")
+    return true
+end
+
 -- Resolve a guild roster index for `name`, which may be "Name" or "Name-Realm";
 -- `realm` (from a chat event, say) overrides any suffix on `name`.
 --
@@ -425,6 +549,58 @@ function Compat.SetGuildPublicNote(name, text, realm)
     end
     if GuildRosterSetPublicNote then
         GuildRosterSetPublicNote(idx, note)
+        return true
+    end
+    return false, (C_GuildInfo and C_GuildInfo.SetNote) and "no-guid" or "no-api"
+end
+
+-- Whether Amazing Hub may write a member's officer note (issue #429): as for the public note, only TBC
+-- Anniversary lets an addon; WoW: Forever and retail forbid C_GuildInfo.SetNote to addons.
+function Compat.CanEditOfficerNote()
+    if not AmazingHub.Client.isAnniversary then return false end
+    if CanEditOfficerNote then return CanEditOfficerNote() and true or false end
+    return false
+end
+
+-- Whether this character's rank may edit that note in the game's own roster ("public" or "officer"),
+-- whether or not an addon may write it: where the addon may not, the player types it there (#429).
+function Compat.RankEditsNote(which)
+    if which == "officer" then
+        if C_GuildInfo and C_GuildInfo.CanEditOfficerNote then return C_GuildInfo.CanEditOfficerNote() and true or false end
+        return (CanEditOfficerNote and CanEditOfficerNote()) and true or false
+    end
+    if C_GuildInfo and C_GuildInfo.CanEditPublicNote then return C_GuildInfo.CanEditPublicNote() and true or false end
+    return (CanEditPublicNote and CanEditPublicNote()) and true or false
+end
+
+-- Whether Amazing Hub may write that note ("public" or "officer") on this client.
+function Compat.CanWriteNote(which)
+    if which == "officer" then return Compat.CanEditOfficerNote() end
+    return Compat.CanEditPublicNote()
+end
+
+-- A guild member's officer note, or nil and why ("absent", "ambiguous", "hidden": this rank cannot read them).
+function Compat.GetGuildOfficerNote(name, realm)
+    if not Compat.CanViewOfficerNote() then return nil, "hidden" end
+    local idx, why = Compat.FindGuildRosterIndex(name, realm)
+    if not idx then return nil, why end
+    local _, _, _, _, _, _, _, onote = GetGuildRosterInfo(idx)
+    return onote or ""
+end
+
+-- Set a guild member's officer note by name, as SetGuildPublicNote does the public one (issue #429).
+function Compat.SetGuildOfficerNote(name, text, realm)
+    if not Compat.CanEditOfficerNote() then return false, "no-permission" end
+    local idx, why = Compat.FindGuildRosterIndex(name, realm)
+    if not idx then return false, why end
+    local note = AmazingHub:SanitizeUserText(text, 31)
+    local guid = select(17, GetGuildRosterInfo(idx))
+    if C_GuildInfo and C_GuildInfo.SetNote and guid then
+        C_GuildInfo.SetNote(guid, note, false)
+        return true
+    end
+    if GuildRosterSetOfficerNote then
+        GuildRosterSetOfficerNote(idx, note)
         return true
     end
     return false, (C_GuildInfo and C_GuildInfo.SetNote) and "no-guid" or "no-api"
@@ -531,6 +707,211 @@ function Compat.TooltipUnit(tooltip)
         if unit then return name, unit end
     end
     if TooltipUtil and TooltipUtil.GetDisplayedUnit then return TooltipUtil.GetDisplayedUnit(tooltip) end
+end
+
+----------------------------------------------------------------------
+-- The guild bank (issue #380)
+-- The item and log calls are the same legacy globals on TBC Anniversary, WoW: Forever and retail
+-- (Blizzard's own guild bank UI calls them alike on all three); only C_GuildBank, its switch, is
+-- namespaced. Each answers nothing on a client without the function, so the feature hides instead
+-- of raising. The 98 slots and the 14 per column are file-local in Blizzard's UI, not globals.
+----------------------------------------------------------------------
+Compat.GUILD_BANK_SLOTS = 98      -- MAX_GUILDBANK_SLOTS_PER_TAB on every client
+Compat.GUILD_BANK_PER_COLUMN = 14 -- NUM_SLOTS_PER_GUILDBANK_GROUP: 7 columns of 14 (two sub-columns of 7)
+Compat.GUILD_BANKER_INTERACTION = 10  -- Enum.PlayerInteractionType.GuildBanker, where the enum is missing
+
+-- Whether this client has a guild bank at all. WoW: Forever ships the bank's UI with the retail files,
+-- but whether its servers open one is the server's call: C_GuildBank.IsGuildBankEnabled answers it on
+-- all three clients. A client without the function and with the old globals (an older Classic) has one.
+function Compat.HasGuildBank()
+    if not (GetNumGuildBankTabs and GetGuildBankItemInfo and QueryGuildBankTab) then return false end
+    if C_GuildBank and C_GuildBank.IsGuildBankEnabled then
+        local ok, on = pcall(C_GuildBank.IsGuildBankEnabled)
+        if ok and on ~= nil then return on and true or false end
+    end
+    return true
+end
+
+-- The most tabs a guild may buy: 6 on TBC Anniversary, 8 on retail and Forever.
+function Compat.GuildBankMaxTabs()
+    return tonumber(MAX_GUILDBANK_TABS) or (AmazingHub.Client.isAnniversary and 6 or 8)
+end
+
+function Compat.GuildBankTabCount()
+    return GetNumGuildBankTabs and tonumber(GetNumGuildBankTabs()) or 0
+end
+
+-- name, icon, isViewable, canDeposit, numWithdrawals, remainingWithdrawals. -1 withdrawals: no limit.
+function Compat.GuildBankTabInfo(tab)
+    if not GetGuildBankTabInfo then return nil end
+    return GetGuildBankTabInfo(tab)
+end
+
+-- texture, count, locked, link for one slot; nil texture when the slot is empty.
+function Compat.GuildBankSlot(tab, slot)
+    if not GetGuildBankItemInfo then return nil end
+    local texture, count, locked = GetGuildBankItemInfo(tab, slot)
+    if not texture then return nil end
+    return texture, tonumber(count) or 1, locked and true or false, GetGuildBankItemLink and GetGuildBankItemLink(tab, slot)
+end
+
+function Compat.QueryGuildBankTab(tab)
+    if QueryGuildBankTab then QueryGuildBankTab(tab) end
+end
+
+-- The log of `tab`, or the money log for tab MAX_GUILDBANK_TABS + 1.
+function Compat.QueryGuildBankLog(tab)
+    if QueryGuildBankLog then QueryGuildBankLog(tab) end
+end
+
+function Compat.GuildBankMoney()
+    return GetGuildBankMoney and tonumber(GetGuildBankMoney()) or nil
+end
+
+-- The item log of a tab, oldest first (the game's index 1 is the oldest):
+-- { type, name, link, count, tab1, tab2, ago } with `ago` in hours.
+function Compat.GuildBankItemLog(tab)
+    local out = {}
+    if not (GetNumGuildBankTransactions and GetGuildBankTransaction) then return out end
+    for i = 1, tonumber(GetNumGuildBankTransactions(tab)) or 0 do
+        local kind, name, link, count, tab1, tab2, y, mo, d, h = GetGuildBankTransaction(tab, i)
+        if kind then
+            out[#out + 1] = { type = kind, name = name, link = link, count = tonumber(count) or 1,
+                tab1 = tonumber(tab1), tab2 = tonumber(tab2),
+                ago = (((tonumber(y) or 0) * 365 + (tonumber(mo) or 0) * 30 + (tonumber(d) or 0)) * 24) + (tonumber(h) or 0) }
+        end
+    end
+    return out
+end
+
+-- The money log, oldest first: { type, name, amount, ago } with `amount` in copper and `ago` in hours.
+function Compat.GuildBankMoneyLog()
+    local out = {}
+    if not (GetNumGuildBankMoneyTransactions and GetGuildBankMoneyTransaction) then return out end
+    for i = 1, tonumber(GetNumGuildBankMoneyTransactions()) or 0 do
+        local kind, name, amount, y, mo, d, h = GetGuildBankMoneyTransaction(i)
+        if kind then
+            out[#out + 1] = { type = kind, name = name, amount = tonumber(amount) or 0,
+                ago = (((tonumber(y) or 0) * 365 + (tonumber(mo) or 0) * 30 + (tonumber(d) or 0)) * 24) + (tonumber(h) or 0) }
+        end
+    end
+    return out
+end
+
+-- Picking up and splitting need no hardware event (sorters drive them from timers on every client);
+-- they act on the tab the bank is showing, so the caller selects it first.
+function Compat.GuildBankPickup(tab, slot)
+    if PickupGuildBankItem then PickupGuildBankItem(tab, slot) end
+end
+
+function Compat.GuildBankSplit(tab, slot, count)
+    if SplitGuildBankItem then SplitGuildBankItem(tab, slot, count) end
+end
+
+function Compat.GuildBankCurrentTab()
+    return GetCurrentGuildBankTab and tonumber(GetCurrentGuildBankTab()) or nil
+end
+
+function Compat.SetGuildBankCurrentTab(tab)
+    if SetCurrentGuildBankTab then SetCurrentGuildBankTab(tab) end
+end
+
+function Compat.IsGuildLeader()
+    return IsGuildLeader and IsGuildLeader() and true or false
+end
+
+-- Whether the cursor holds anything, and empties it: a move left on the cursor is dropped back.
+-- CursorHasItem misses a guild bank item on some clients; GetCursorInfo names it ("guildbankitem").
+function Compat.CursorHasItem()
+    if CursorHasItem and CursorHasItem() then return true end
+    return (GetCursorInfo and GetCursorInfo() ~= nil) and true or false
+end
+
+-- What the cursor holds, as GetCursorInfo says it: its type ("item", "guildbankitem", ...) and id.
+function Compat.CursorInfo()
+    if not GetCursorInfo then return nil end
+    local ok, kind, id = pcall(GetCursorInfo)
+    if ok then return kind, id end
+end
+
+function Compat.ClearCursor()
+    if ClearCursor then ClearCursor() end
+end
+
+function Compat.InCombat()
+    return (InCombatLockdown and InCombatLockdown()) and true or false
+end
+
+-- Whether a PLAYER_INTERACTION_MANAGER_FRAME_SHOW/HIDE is the guild banker's.
+function Compat.IsGuildBankerInteraction(kind)
+    local want = Enum and Enum.PlayerInteractionType and Enum.PlayerInteractionType.GuildBanker
+    return tonumber(kind) == (want or Compat.GUILD_BANKER_INTERACTION)
+end
+
+-- The events that say the bank opened and closed. Retail and Forever say it through the interaction
+-- manager; TBC Anniversary still sends GUILDBANKFRAME_OPENED/CLOSED as well. Both are registered and
+-- the module drops the second of a pair.
+function Compat.RegisterGuildBankEvents(frame)
+    for _, ev in ipairs({ "GUILDBANKFRAME_OPENED", "GUILDBANKFRAME_CLOSED", "PLAYER_INTERACTION_MANAGER_FRAME_SHOW",
+            "PLAYER_INTERACTION_MANAGER_FRAME_HIDE", "GUILDBANKBAGSLOTS_CHANGED", "GUILDBANKLOG_UPDATE",
+            "GUILDBANK_UPDATE_MONEY", "GUILDBANK_UPDATE_TABS", "GUILDBANK_ITEM_LOCK_CHANGED",
+            "GET_ITEM_INFO_RECEIVED", "PLAYER_REGEN_DISABLED" }) do
+        Compat.RegisterEvent(frame, ev, true)
+    end
+end
+
+-- Taking an item out of the guild bank into the bags (it counts as a withdrawal).
+function Compat.GuildBankAutoStore(tab, slot)
+    if AutoStoreGuildBankItem then AutoStoreGuildBankItem(tab, slot) end
+end
+
+-- Putting gold into the guild bank, and the player's own gold.
+function Compat.DepositGuildBankMoney(copper)
+    if DepositGuildBankMoney and tonumber(copper) and copper > 0 then DepositGuildBankMoney(copper) end
+end
+
+function Compat.PlayerMoney()
+    return GetMoney and tonumber(GetMoney()) or 0
+end
+
+-- What a vendor pays for one, the level it asks for and its own item level, when the client has the
+-- item cached.
+function Compat.ItemValue(item)
+    local name, _, _, itemLevel, reqLevel, _, _, _, _, _, sellPrice = Compat.GetItemInfo(item)
+    if not name then return nil end
+    return tonumber(sellPrice) or 0, tonumber(reqLevel) or 0, tonumber(itemLevel) or 0
+end
+
+-- What one sells for at the auction house, from an addon that knows (Auctionator, TSM), or nil.
+-- Both are optional and called under pcall: their APIs are theirs to change.
+function Compat.AuctionPrice(itemID)
+    itemID = tonumber(itemID)
+    if not itemID then return nil end
+    if Auctionator and Auctionator.API and Auctionator.API.v1 and Auctionator.API.v1.GetAuctionPriceByItemID then
+        local ok, price = pcall(Auctionator.API.v1.GetAuctionPriceByItemID, "AmazingHub", itemID)
+        if ok and tonumber(price) and price > 0 then return price end
+    end
+    if TSM_API and TSM_API.GetCustomPriceValue then
+        local ok, price = pcall(TSM_API.GetCustomPriceValue, "DBMarket", "i:" .. itemID)
+        if ok and tonumber(price) and price > 0 then return price end
+    end
+    return nil
+end
+
+-- What an item is, from its id or link alone, with no item cache: id, icon, classID, subClassID.
+function Compat.ItemInstant(item)
+    local instant = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
+    if not (instant and item) then return nil end
+    local id, _, _, _, icon, classID, subClassID = instant(item)
+    return tonumber(id), icon, tonumber(classID), tonumber(subClassID)
+end
+
+-- The item's name, quality, item level and stack size, when the client has it cached; nil otherwise
+-- (asking starts the load, and GET_ITEM_INFO_RECEIVED follows).
+function Compat.ItemDetails(item)
+    local name, _, quality, level, _, _, _, stack = Compat.GetItemInfo(item)
+    if not name then return nil end
+    return name, tonumber(quality), tonumber(level), tonumber(stack)
 end
 
 ----------------------------------------------------------------------
@@ -933,6 +1314,23 @@ function Compat.TradeTimeLeft(bag, slot)
     return "bound"
 end
 
+-- Open a trade with a nearby player by name; false when the client has no way to (craft orders, #389).
+-- InitiateTrade takes a unit: the player targeted, or one in the group (by name). For anyone else
+-- it does nothing, so the caller falls back to a whisper.
+function Compat.InitiateTrade(name)
+    if not (InitiateTrade and type(name) == "string") then return false end
+    local short = name:match("^([^-]+)") or name
+    local unit
+    local target = UnitName and UnitName("target")
+    if target and not Compat.IsSecret(target) and (target == name or target == short) then
+        unit = "target"
+    elseif UnitExists and UnitExists(name) then
+        unit = name
+    end
+    if not unit then return false end
+    return pcall(InitiateTrade, unit) and true or false
+end
+
 -- Who the open trade window is with: name and realm (nil realm: this one), or nothing when the client
 -- does not say or keeps it secret.
 function Compat.TradePartner()
@@ -950,6 +1348,107 @@ function Compat.TradeItemLinks()
         if type(link) == "string" and not Compat.IsSecret(link) then out[#out + 1] = link end
     end
     return out
+end
+
+-- The links of what the other player has put in the trade window, slot by slot (craft orders, #389).
+function Compat.TradeTargetItemLinks()
+    local out = {}
+    if not GetTradeTargetItemLink then return out end
+    for i = 1, TRADE_SLOTS do
+        local link = GetTradeTargetItemLink(i)
+        if type(link) == "string" and not Compat.IsSecret(link) then out[#out + 1] = link end
+    end
+    return out
+end
+
+-- The trade slots I have not filled yet, in order.
+function Compat.TradeFreeSlots()
+    local out = {}
+    if not GetTradePlayerItemLink then return out end
+    for i = 1, TRADE_SLOTS do
+        if not GetTradePlayerItemLink(i) then out[#out + 1] = i end
+    end
+    return out
+end
+
+-- Drop what the cursor holds into my trade slot `i`.
+function Compat.ClickTradeButton(i)
+    if ClickTradeButton then ClickTradeButton(i) end
+end
+
+-- The money I put in the trade window, in copper (no more than I have).
+function Compat.SetTradeMoney(copper)
+    copper = math.min(tonumber(copper) or 0, Compat.PlayerMoney())
+    if SetTradeMoney and copper > 0 then SetTradeMoney(copper) end
+end
+
+----------------------------------------------------------------------
+-- Bags and mail (craft orders, issue #389)
+----------------------------------------------------------------------
+-- The bags a player carries: the backpack, the four bags and, on retail, the reagent bag.
+function Compat.BagIDs()
+    local last = (NUM_TOTAL_EQUIPPED_BAG_SLOTS or NUM_BAG_SLOTS or 4)
+    local out = {}
+    for b = 0, last do out[#out + 1] = b end
+    return out
+end
+
+function Compat.PickupContainerItem(bag, slot)
+    if C_Container and C_Container.PickupContainerItem then return C_Container.PickupContainerItem(bag, slot) end
+    if PickupContainerItem then return PickupContainerItem(bag, slot) end
+end
+
+function Compat.SplitContainerItem(bag, slot, count)
+    if C_Container and C_Container.SplitContainerItem then return C_Container.SplitContainerItem(bag, slot, count) end
+    if SplitContainerItem then return SplitContainerItem(bag, slot, count) end
+end
+
+-- How many attachments a sent mail takes (12 on every client today).
+function Compat.MailAttachMax()
+    return tonumber(ATTACHMENTS_MAX_SEND) or 12
+end
+
+-- The attachment slots of the mail being written that are still empty, in order.
+function Compat.MailFreeSlots()
+    local out = {}
+    for i = 1, Compat.MailAttachMax() do
+        local name = GetSendMailItem and GetSendMailItem(i)
+        if not name then out[#out + 1] = i end
+    end
+    return out
+end
+
+-- Drop what the cursor holds into attachment slot `i` of the mail being written.
+function Compat.ClickSendMailItemButton(i)
+    if ClickSendMailItemButton then ClickSendMailItemButton(i) end
+end
+
+-- Whether the mailbox shows the "Send Mail" page.
+function Compat.SendMailShown()
+    return SendMailFrame and SendMailFrame:IsShown() and true or false
+end
+
+-- Turn the mailbox to its "Send Mail" page.
+function Compat.ShowSendMail()
+    if MailFrameTab_OnClick and MailFrameTab2 then MailFrameTab_OnClick(MailFrameTab2, 2) end
+end
+
+-- The recipient and subject of the mail being written, and the money it sends (no more than I have).
+function Compat.FillSendMail(to, subject, copper)
+    if SendMailNameEditBox and to then SendMailNameEditBox:SetText(to) end
+    if SendMailSubjectEditBox and subject then SendMailSubjectEditBox:SetText(subject) end
+    copper = math.min(tonumber(copper) or 0, Compat.PlayerMoney())
+    if copper > 0 then
+        -- "Send Money", never C.O.D.: the send reads the money field and charges it on delivery
+        -- when the C.O.D. button is the one checked.
+        if SendMailRadioButton_OnClick then pcall(SendMailRadioButton_OnClick, 1) end
+        if SendMailMoney and MoneyInputFrame_SetCopper then MoneyInputFrame_SetCopper(SendMailMoney, copper) end
+    end
+end
+
+-- Call fn(recipient, subject) each time the game sends a mail.
+function Compat.HookSendMail(fn)
+    if SendMail and hooksecurefunc then hooksecurefunc("SendMail", function(to, subject) fn(to, subject) end) end
 end
 
 -- Whether a UI_INFO_MESSAGE says a trade has just gone through ("Trade complete.").
@@ -986,6 +1485,17 @@ function Compat.SendChatMessage(text, chatType)
     return (pcall(send, text, chatType))
 end
 
+-- Whisper one line to `target`, as a click of the player sends it (issue #403). Nothing in a chat lockdown;
+-- returns whether it went. The target's "No player named" line is the caller's to note (NoteWhisper).
+function Compat.SendWhisper(text, target)
+    if not Compat.AllowedOutbound("WHISPER", target) then return false end -- Amazing Hub: guild members only
+    if not target or target == "" or Compat.IsSecret(text) then return false end
+    if Compat.InChatLockdown and Compat.InChatLockdown() then return false end
+    local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
+    if not send then return false end
+    return (pcall(send, text, "WHISPER", nil, target))
+end
+
 -- Lets `fn` hide lines of a chat event from every chat frame: retail moved the filter to ChatFrameUtil, and
 -- the global is a deprecation fallback there. False on a client with neither.
 function Compat.AddChatFilter(event, fn)
@@ -993,6 +1503,117 @@ function Compat.AddChatFilter(event, fn)
     if not add then return false end
     add(event, fn)
     return true
+end
+
+-- Does a chat frame show a message group ("GUILD")? Retail moved the check to ChatFrameUtil; a client with
+-- neither is read from the frame's own list (issue #344).
+function Compat.ChatFrameShows(frame, group)
+    if not frame then return false end
+    local has = (ChatFrameUtil and ChatFrameUtil.ContainsMessageGroup) or ChatFrame_ContainsMessageGroup
+    if has then
+        local ok, yes = pcall(has, frame, group)
+        return ok and yes and true or false
+    end
+    for _, g in ipairs(frame.messageTypeList or {}) do
+        if g == group then return true end
+    end
+    return false
+end
+
+-- A line in a custom channel by its number. The game takes it only from a key press, so this is only ever
+-- called from one (issue #348). Nothing in a chat lockdown.
+function Compat.SendChannelMessage(text, index)
+    do return false end -- Amazing Hub: never into a channel
+    if not index or index == 0 or Compat.IsSecret(text) then return false end
+    if Compat.InChatLockdown and Compat.InChatLockdown() then return false end
+    local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
+    if not send then return false end
+    return (pcall(send, text, "CHANNEL", nil, index))
+end
+
+-- Join a channel with a password without the client saving it for the next login (issue #348).
+function Compat.JoinPrivateChannel(name, password)
+    do return false end -- Amazing Hub: never joins a channel
+    local join = JoinTemporaryChannel or JoinChannelByName
+    if not join or not name then return false end
+    return (pcall(join, name, password))
+end
+
+-- Take a channel out of every chat frame that lists it, so its lines never print there (issue #348).
+function Compat.RemoveChannelFromFrames(name)
+    local remove = (ChatFrameUtil and ChatFrameUtil.RemoveChannel) or ChatFrame_RemoveChannel
+    if not remove or not GetChatWindowChannels or not name then return 0 end
+    local n = 0
+    for i = 1, (NUM_CHAT_WINDOWS or 10) do
+        local frame = _G["ChatFrame" .. i]
+        local list = { GetChatWindowChannels(i) }
+        for j = 1, #list, 2 do
+            if type(list[j]) == "string" and list[j]:lower() == name:lower() and frame then
+                if pcall(remove, frame, list[j]) then n = n + 1 end
+            end
+        end
+    end
+    return n
+end
+
+-- `fn(chatType, text)` for every line the player sends from a chat box, called inside the key press that
+-- sends it (a post-hook of the box's ParseText), which is what lets `fn` post to a channel. Patch 1.15.9 and
+-- retail 11 moved ParseText onto each box; older clients have the global (issue #348).
+function Compat.HookChatSend(fn)
+    local function onParse(box, send)
+        -- 1 from the game's own SendText; a client that passes true sends too (issue #431).
+        if (send ~= 1 and send ~= true) or not box or not box.GetAttribute then return end
+        local chatType, text = box:GetAttribute("chatType"), box:GetText()
+        if Compat.IsSecret(chatType, text) then return end
+        if type(text) == "string" and text:match("%S") then fn(chatType, text) end
+    end
+    if ChatFrame1EditBox and ChatFrame1EditBox.ParseText then
+        local hooked = {}
+        local function hookBox(box)
+            if box and box.ParseText and not hooked[box] then
+                hooked[box] = true
+                hooksecurefunc(box, "ParseText", onParse)
+            end
+        end
+        local function hookAll()
+            for i = 1, (NUM_CHAT_WINDOWS or 10) do
+                hookBox(_G["ChatFrame" .. i .. "EditBox"])
+            end
+            -- The temporary windows (a whisper popped out) have boxes of their own, made later.
+            for _, name in ipairs(type(CHAT_FRAMES) == "table" and CHAT_FRAMES or {}) do
+                hookBox(_G[tostring(name) .. "EditBox"])
+            end
+        end
+        hookAll()
+        if type(FCF_OpenTemporaryWindow) == "function" then
+            hooksecurefunc("FCF_OpenTemporaryWindow", hookAll)
+        end
+        return next(hooked) ~= nil
+    end
+    if ChatEdit_ParseText then
+        hooksecurefunc("ChatEdit_ParseText", onParse)
+        return true
+    end
+    return false
+end
+
+-- Hand `frame` a chat event as if the game had sent it, through the frame's own handler, so the line is
+-- drawn exactly as the game draws that event (issue #348). False when the frame has no handler or it errored.
+function Compat.ReplayChatEvent(frame, event, ...)
+    if not frame then return false end
+    local handler = ChatFrame_MessageEventHandler
+    if type(handler) ~= "function" and frame.GetScript then handler = frame:GetScript("OnEvent") end
+    if type(handler) ~= "function" then return false end
+    return (pcall(handler, frame, event, ...))
+end
+
+-- Is `name` on the player's ignore list? C_FriendList where it exists, the old global elsewhere (issue #344).
+function Compat.IsIgnored(name)
+    if type(name) ~= "string" or name == "" or Compat.IsSecret(name) then return false end
+    local is = (C_FriendList and C_FriendList.IsIgnored) or IsIgnored
+    if not is then return false end
+    local ok, yes = pcall(is, name)
+    return ok and yes and true or false
 end
 
 ----------------------------------------------------------------------
@@ -1025,6 +1646,127 @@ function Compat.InviteUnit(name)
     if InviteByName then return InviteByName(name) end
 end
 
+-- An instance's name in the player's own language, by its map id, or nil where the client does not
+-- know the instance (issue #341). Never a secret value: it is shown and compared.
+function Compat.InstanceName(mapID)
+    if not GetRealZoneText or type(mapID) ~= "number" then return nil end
+    local ok, name = pcall(GetRealZoneText, mapID)
+    if ok and type(name) == "string" and name ~= "" and not Compat.IsSecret(name) then return name end
+    return nil
+end
+
+-- Whether the client has this texture file. A path it does not have draws a green square, so art
+-- that is only a guess at the client's files is drawn when this answers true and never otherwise:
+-- with no way to ask, the answer is no (issue #341).
+function Compat.TextureExists(path)
+    if not GetFileIDFromPath or type(path) ~= "string" then return false end
+    local ok, id = pcall(GetFileIDFromPath, path)
+    return ok and type(id) == "number" and id > 0
+end
+
+-- Who is in my party or raid besides me, as a set of player keys, and how many of us there are (1
+-- alone). A member whose name the client will not tell yet is counted and not named. On WoW: Forever
+-- nobody has seen whether a unit's name carries the surname, joined or in the realm's slot (issue
+-- #48), so each member is also there under "~" and their first name, for Compat.InGroup (issue #341).
+function Compat.GroupRoster()
+    local members, count = {}, 1
+    local n = (GetNumGroupMembers and GetNumGroupMembers()) or 0
+    if n <= 1 then return members, count end
+    local raid = IsInRaid and IsInRaid()
+    local surnames = AmazingHub.Client.has.surnames
+    local me = Compat.PlayerName()
+    count = n
+    for i = 1, raid and n or (n - 1) do
+        local name, second = Compat.UnitIdentity((raid and "raid" or "party") .. i)
+        if type(name) == "string" and name ~= "" then
+            if type(second) ~= "string" or second == "" then second = nil end
+            local whole, realm = name, second
+            if surnames then
+                whole, realm = (second and not name:find(" ", 1, true)) and (name .. " " .. second) or name, nil
+            end
+            if whole ~= me then
+                local key = AmazingHub:GetPlayerKey(whole, realm or GetRealmName())
+                if key then members[key] = true end
+                if surnames then members["~" .. (whole:match("^%S+") or whole)] = true end
+            end
+        end
+    end
+    return members, count
+end
+
+-- Turn my party into a raid (issue #378): C_PartyInfo's where the client has it, the old global
+-- otherwise. False where neither exists or the game refuses.
+function Compat.ConvertToRaid()
+    local convert = (C_PartyInfo and C_PartyInfo.ConvertToRaid) or ConvertToRaid
+    if not convert then return false end
+    return (pcall(convert))
+end
+
+-- Move raid member `index` into raid group `group` (1 to 8), or swap two members' groups (issue #400). Both are
+-- still globals: retail 12.1.5's probe found SetRaidSubgroup, WoW: Forever's API documentation is retail's, and
+-- neither moved into C_PartyInfo the way InviteUnit and ConvertToRaid did. False where the call is missing or raises.
+function Compat.SetRaidSubgroup(index, group)
+    if not SetRaidSubgroup then return false end
+    return (pcall(SetRaidSubgroup, index, group))
+end
+function Compat.SwapRaidSubgroup(index1, index2)
+    if not SwapRaidSubgroup then return false end
+    return (pcall(SwapRaidSubgroup, index1, index2))
+end
+-- Whether this client can swap two raid members at all: without it a full group takes nobody, and the raid's
+-- arranging plans no swap it could not make (issue #400).
+function Compat.CanSwapRaidSubgroup()
+    return SwapRaidSubgroup ~= nil
+end
+
+-- One of the player's group flags (UnitIsGroupLeader, UnitIsGroupAssistant), read past the Secret Values: WoW:
+-- Forever and retail answer them secret when the unit's identity is restricted (docs/forever), and a secret is
+-- never tested, so it counts as no. False where the call is missing or raises.
+local function playerFlag(fn)
+    if not fn then return false end
+    local ok, v = pcall(fn, "player")
+    if not ok or Compat.IsSecret(v) then return false end
+    return v and true or false
+end
+
+-- Whether I lead my group (issue #400). False outside a group, and when the client keeps the answer secret.
+function Compat.IsGroupLeader()
+    if ((GetNumGroupMembers and GetNumGroupMembers()) or 0) == 0 then return false end
+    return playerFlag(UnitIsGroupLeader)
+end
+
+-- Whether I may invite and arrange (issue #400): alone, with no group yet, the one to start it; my group's
+-- leader; or a raid's assistant. A secret answer counts as no and never raises.
+function Compat.IsLeaderOrAssist()
+    local n = (GetNumGroupMembers and GetNumGroupMembers()) or 0
+    if n <= 1 then return true end
+    return playerFlag(UnitIsGroupLeader) or playerFlag(UnitIsGroupAssistant)
+end
+
+-- A ready check (issue #378): the leader's or an assistant's, where the client has it.
+function Compat.CanReadyCheck()
+    return DoReadyCheck ~= nil
+end
+function Compat.DoReadyCheck()
+    if not DoReadyCheck then return false end
+    return (pcall(DoReadyCheck))
+end
+
+-- Whether I may invite somebody: alone, the group's leader, or a raid's assistant (issue #341), read past the
+-- Secret Values since issue #400.
+function Compat.CanInvite()
+    return Compat.IsLeaderOrAssist()
+end
+
+-- Whether the player of this key is in a roster Compat.GroupRoster gave. On WoW: Forever the first
+-- name decides when the whole name does not match: a guildmate who shares it would read as there,
+-- and a spot left open by mistake is worse than one closed a moment early.
+function Compat.InGroup(members, key)
+    if members[key] then return true end
+    if not AmazingHub.Client.has.surnames then return false end
+    return members["~" .. (key:match("^([^%s%-]+)") or key)] == true
+end
+
 -- Remove somebody from the group: C_PartyInfo's where the client has it, the old global otherwise
 -- (issue #292, as InviteUnit above).
 function Compat.UninviteUnit(name)
@@ -1046,7 +1788,8 @@ function Compat.GetItemCount(item, includeBank)
     return 0
 end
 
--- A StaticPopup's edit box. Anniversary keeps it at `editBox`; WoW: Forever's popup (the
+-- A dialog's edit box. AmazingHub's own dialog (AmazingHub:ShowDialog, #315) keeps it at `editBox`, as
+-- Anniversary's StaticPopup did; WoW: Forever's popup (the
 -- retail one) at `EditBox`, behind `GetEditBox()`, with `editBox` nil (issue #49).
 function Compat.PopupEditBox(dialog)
     if not dialog then return nil end
@@ -1075,6 +1818,53 @@ function Compat.TraitTreeNodes()
         end
     end
     return nodes
+end
+
+-- The talents bought on a trait tree, as { {definitionID, rank}, ... } sorted by definitionID, only
+-- the nodes with a rank (issue #399). The definitionID is the talent's own id in the game's tables,
+-- which does not move when the tree is redrawn; on a choice node it is the chosen entry's. configID
+-- nil reads the player's active tree; an inspect config reads the inspected unit's. Nil and why:
+-- "no-api" without the trait API (or without that config), "no-config" before the tree has loaded,
+-- "no-points" when nothing is bought, so a caller never publishes an empty tree it did not read.
+local function traitTalents(configID)
+    if not (C_Traits and C_Traits.GetConfigInfo and C_Traits.GetTreeNodes and C_Traits.GetNodeInfo
+            and C_Traits.GetEntryInfo) then
+        return nil, "no-api"
+    end
+    if configID == nil then
+        if not (C_ClassTalents and C_ClassTalents.GetActiveConfigID) then return nil, "no-api" end
+        configID = C_ClassTalents.GetActiveConfigID()
+    end
+    local config = configID and C_Traits.GetConfigInfo(configID)
+    local treeID = config and config.treeIDs and config.treeIDs[1]
+    if not treeID then return nil, "no-config" end
+    local out = {}
+    for _, nodeID in ipairs(C_Traits.GetTreeNodes(treeID) or {}) do
+        local info = C_Traits.GetNodeInfo(configID, nodeID)
+        local rank = info and tonumber(info.currentRank or info.ranksPurchased) or 0
+        local entryID = info and type(info.activeEntry) == "table" and info.activeEntry.entryID
+        if rank > 0 and entryID then
+            local entry = C_Traits.GetEntryInfo(configID, entryID)
+            local def = entry and tonumber(entry.definitionID)
+            if def and def > 0 then out[#out + 1] = { math.floor(def), math.floor(rank) } end
+        end
+    end
+    if #out == 0 then return nil, "no-points" end
+    table.sort(out, function(a, b) return a[1] < b[1] end)
+    return out
+end
+
+function Compat.TraitTalents(configID)
+    local ok, talents, why = pcall(traitTalents, configID)
+    if not ok then return nil, "error" end
+    return talents, why
+end
+
+-- The config id the trait API reads an inspected unit's tree from, after INSPECT_READY. Nil on a
+-- client that does not expose one: the inspect then brings no talents.
+function Compat.InspectTraitConfigID()
+    local consts = Constants and Constants.TraitConsts
+    return consts and tonumber(consts.INSPECT_TRAIT_CONFIG_ID) or nil
 end
 
 -- A unit's spec on retail (ADR-0026), where a character has one and the client names it: the spec
@@ -1476,6 +2266,37 @@ function Compat.ChannelHidesRaidIcons(name, number)
     return info ~= nil and NO_RAID_ICONS[info.zoneChannelID] == true
 end
 
+-- Whether this character's rank may speak in officer chat, from the rank's flags (the fourth: officer chat,
+-- speak): C_GuildInfo.GuildControlGetRankFlags(rankOrder) gives a table, the older GuildControlGetRankFlags
+-- (rankOrder) the flags one by one. Nil when the client answers neither: then nobody knows, and the caller
+-- goes on as before (#427).
+function Compat.CanSpeakOfficerChat()
+    if not (IsInGuild and IsInGuild()) then return nil end
+    local rankIndex = select(3, GetGuildInfo("player"))
+    if type(rankIndex) ~= "number" then return nil end
+    local order = rankIndex + 1
+    if C_GuildInfo and C_GuildInfo.GuildControlGetRankFlags then
+        local ok, flags = pcall(C_GuildInfo.GuildControlGetRankFlags, order)
+        if ok and type(flags) == "table" and flags[4] ~= nil then return flags[4] and true or false end
+    end
+    if GuildControlGetRankFlags then
+        local ok, _, _, _, speak = pcall(GuildControlGetRankFlags, order)
+        if ok and speak ~= nil then return speak and true or false end
+    end
+    return nil
+end
+
+-- The addon channel only the ranks that may hear officer chat receive (issue #427): what a member's client must
+-- never even get the bytes of. The game's SendAddonMessage takes "OFFICER" on retail and on TBC Anniversary.
+-- WoW: Forever is not checked in game yet: nil there, and what would go to officers only stays on this client.
+-- A rank that may not speak in officer chat would send into nothing, silently: nil and "no-permission" then.
+function Compat.OfficerAddonChannel()
+    local c = AmazingHub.Client
+    if not (c and (c.isRetail or c.isAnniversary)) then return nil, "no-channel" end
+    if Compat.CanSpeakOfficerChat() == false then return nil, "no-permission" end
+    return "OFFICER"
+end
+
 -- Amazing Hub: addon messages and chat lines only to our own guild, officers, party and raid, or a whisper to a
 -- guild member. Public channels, SAY, YELL and whispers to strangers are dropped here, at the choke point.
 local GUILD_ONLY = { GUILD = true, OFFICER = true, PARTY = true, RAID = true, RAID_WARNING = true,
@@ -1700,6 +2521,23 @@ function Compat.CalendarCreateGuildEvent(spec)
     return true
 end
 
+--- A guild announcement (no sign-up): { title, description, startsAt }, as a birthday is (#428). Only from
+--- a click; true, or false and why.
+function Compat.CalendarCreateGuildAnnouncement(spec)
+    if not Compat.CalendarAvailable() or type(C_Calendar.CreateGuildAnnouncementEvent) ~= "function" then
+        return false, "unavailable"
+    end
+    local ok, err = pcall(function()
+        C_Calendar.CreateGuildAnnouncementEvent()
+        C_Calendar.EventSetTitle(spec.title)
+        C_Calendar.EventSetDescription(spec.description or "")
+        setEventWhen(spec)
+        C_Calendar.AddEvent()
+    end)
+    if not ok then return false, tostring(err) end
+    return true
+end
+
 --- Opens the event at `where` ({ offset, day, index }) for editing; the game answers CALENDAR_OPEN_EVENT.
 function Compat.CalendarOpenEvent(where)
     if not Compat.CalendarAvailable() then return false, "unavailable" end
@@ -1749,3 +2587,62 @@ local flusher = CreateFrame("Frame")
 Compat.RegisterEvent(flusher, "PLAYER_REGEN_ENABLED")
 Compat.RegisterEvent(flusher, "ZONE_CHANGED_NEW_AREA")
 flusher:SetScript("OnEvent", function() Compat.FlushHeldMessages() end)
+
+----------------------------------------------------------------------
+-- Names the site keeps (review of #347), and the cut that keeps them whole: here, beside the client's
+-- own text rules, so CoreManager and CompanionExport (and every stubbed check that loads them) have
+-- them without Utils.
+----------------------------------------------------------------------
+-- `s` cut to `maxBytes` bytes, never through the middle of a character.
+function AmazingHub:Utf8Cut(s, maxBytes)
+    s = tostring(s or "")
+    if #s <= maxBytes then return s end
+    local cut = maxBytes
+    while cut > 0 and (s:byte(cut + 1) or 0) >= 0x80 and s:byte(cut + 1) < 0xC0 do cut = cut - 1 end
+    return s:sub(1, cut)
+end
+
+-- Whether `s` is well-formed UTF-8: no stray continuation byte, no character cut short, no overlong
+-- form, no surrogate (what the site's decoder would turn into U+FFFD, three bytes longer).
+function AmazingHub:IsUtf8(s)
+    local i, n = 1, #s
+    while i <= n do
+        local c = s:byte(i)
+        local need
+        local lo, hi = 0x80, 0xBF
+        if c < 0x80 then need = 0
+        elseif c >= 0xC2 and c <= 0xDF then need = 1
+        elseif c == 0xE0 then need, lo = 2, 0xA0
+        elseif c == 0xED then need, hi = 2, 0x9F
+        elseif c >= 0xE1 and c <= 0xEF then need = 2
+        elseif c == 0xF0 then need, lo = 3, 0x90
+        elseif c >= 0xF1 and c <= 0xF3 then need = 3
+        elseif c == 0xF4 then need, hi = 3, 0x8F
+        else return false end
+        for j = 1, need do
+            local b = s:byte(i + j)
+            if not b or b < (j == 1 and lo or 0x80) or b > (j == 1 and hi or 0xBF) then return false end
+        end
+        i = i + need + 1
+    end
+    return true
+end
+
+-- The words every object already has as a key on the site (amazinghub-web lib/core-receipt.ts PROTO_KEYS):
+-- a core or a guest named so is refused there.
+local PROTO_WORDS = { __proto__ = true, constructor = true, prototype = true }
+
+-- Why `s` cannot be a name the site keeps for a core or a guest (amazinghub-web lib/core-receipt.ts
+-- `isName`): "empty", "long" (over `maxBytes`, 48 by default), "char" (a `|`, a control character or
+-- broken UTF-8) or "word" (constructor, prototype, __proto__). nil when it can.
+function AmazingHub:NameProblem(s, maxBytes)
+    if type(s) ~= "string" then return "empty" end
+    -- Blank as JavaScript's trim() sees it: ASCII spaces, no-break and the other Unicode spaces.
+    local bare = s:gsub("[%s]", ""):gsub("\194\160", ""):gsub("\225\154\128", ""):gsub("\226\128[\128-\138\168\169\175]", "")
+        :gsub("\226\129\159", ""):gsub("\227\128\128", ""):gsub("\239\187\191", "")
+    if bare == "" then return "empty" end
+    if #s > (maxBytes or 48) then return "long" end
+    if s:find("[%c|]") or not self:IsUtf8(s) then return "char" end
+    if PROTO_WORDS[s] then return "word" end
+    return nil
+end

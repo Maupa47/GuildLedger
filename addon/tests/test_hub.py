@@ -39,15 +39,33 @@ EXPECTED_FAIL = {
     "no-brutus.lua": "needs `git ls-files` of the folder (fails until committed)",
     "compat-core.lua": "fails upstream too (needs a luajit CLI)",
     "retail-stats.lua": "fails upstream too",
+    # 1.40.0 (HUB_AUDIT section 10)
+    "alliance-link.lua": "the alliance link never starts (A1)",
+    "alt-sync.lua": "our own versions decide who is a legacy alt client (LEGACY_ALT_MAX 0.6.99)",
+    "dashboard-layout.lua": "recruitment card hidden (module off)",
+    "recruiting-layout.lua": "recruitment module off by default",
+    "roster-table.lua": "Trials is off (it belongs to recruitment)",
+    "lfg-board.lua": "group lines in guild chat start off (decision 7)",
+    "addon-reminder.lua": "whisper to a non-member is blocked",
+    "site-night.lua": "whisper to a non-member is blocked",
+    "whisper-not-found.lua": "whisper to a non-member is blocked",
+    "whisper-queue.lua": "whisper to a non-member is blocked",
 }
+
+# Checks of the tools that act for the player (decision 7): hidden in the CurseForge pack, shown with the
+# AmazingHubDev addon. Each must fail without it (the gate holds) and pass with it (the tool still works).
+DEV_ONLY = {"discipline.lua", "groups-panel.lua", "groups.lua", "guild-bank-panel.lua", "guild-bank.lua",
+            "mod-alerts-ui.lua", "mod-alerts.lua", "mod-away.lua", "mod-flood.lua", "newcomer.lua"}
 
 
 def _luajit():
     return pytest.importorskip("lupa.luajit21")
 
 
-def _run_lua(lj, path: Path, addon: Path) -> str:
+def _run_lua(lj, path: Path, addon: Path, dev: bool = False) -> str:
     L = lj.LuaRuntime(unpack_returned_tuples=True)
+    if dev:
+        L.execute("AmazingHubDevFeatures = true")  # what addon/AmazingHubDev sets
     L.execute('os.exit = function(c) error("__EXIT__" .. tostring(c), 0) end; io.write = function() end;'
               ' print = function() end; io.stderr = { write = function() end }')
     L.globals().ADDON = str(addon).replace("\\", "/")
@@ -77,8 +95,9 @@ def test_settings_sections_and_world_map():
 def test_ledger_tab_is_built_in():
     toc = (HUB / "AmazingHub.toc").read_text("utf-8")
     assert toc.rstrip().endswith(
-        "UI\\PackTweaks.lua\nUI\\TableSort.lua\nUI\\ChatTag.lua\nUI\\WishImport.lua\nUI\\LedgerPanel.lua\nUI\\SettingsPlus.lua")
-    for name in ("PackTweaks.lua", "TableSort.lua", "ChatTag.lua", "WishImport.lua", "LedgerPanel.lua", "SettingsPlus.lua"):
+        "UI\\PackMigrate.lua\nUI\\PackTweaks.lua\nUI\\TableSort.lua\nUI\\ChatTag.lua\nUI\\WishImport.lua\nUI\\LedgerPanel.lua\nUI\\SettingsPlus.lua\nData\\ItemCatalog.lua\nUI\\ItemCatalog.lua")
+    for name in ("PackMigrate.lua", "PackTweaks.lua", "TableSort.lua", "ChatTag.lua", "WishImport.lua", "LedgerPanel.lua", "SettingsPlus.lua",
+                 "ItemCatalog.lua"):
         assert (HUB / "UI" / name).read_bytes() == (ROOT / "addon" / "hub-extra" / name).read_bytes()
 
 
@@ -104,11 +123,15 @@ def test_upstream_checks(monkeypatch):
         src = open(f, "rb").read()
         if b"checks" not in src and b"check(" not in src:
             continue
+        name = os.path.basename(f)
         res = _run_lua(lj, Path(f), Path("."))
+        if name in DEV_ONLY:
+            assert res != "ok", f"{name} passes without the developer addon: its gate is gone"
+            res = _run_lua(lj, Path(f), Path("."), dev=True)
         if res == "ok":
             passed += 1
         else:
-            failed[os.path.basename(f)] = res
+            failed[name] = res
     unexpected = {k: v for k, v in failed.items() if k not in EXPECTED_FAIL}
     assert not unexpected, f"new failures in GuildOS's checks: {unexpected}"
     assert passed >= 100, f"only {passed} upstream checks passed"
@@ -151,7 +174,7 @@ def test_defaults_and_names():
     assert 'M.PREFIX_ROOT = "AmzHub"' in (HUB / "Libs" / "LibAmzHubMesh.lua").read_text("utf-8")
     toc = (HUB / "AmazingHub.toc").read_text("utf-8")
     assert "## Interface: 16001\n" in toc and "## SavedVariables: AmazingHubDB\n" in toc
-    assert "## OptionalDeps: GuildLedger\n" in toc
+    assert "## OptionalDeps: GuildLedger, AmazingHubDev\n" in toc
     cmds = (HUB / "Core" / "Commands.lua").read_text("utf-8")
     assert 'SLASH_AMAZINGHUB1 = "/amazing"' in cmds and 'SLASH_AMAZINGHUB2 = "/amazinghub"' in cmds
     # every file the TOC loads exists
@@ -321,3 +344,76 @@ def test_rank_arrows_only_below_your_own_rank():
     end)()""")
     # rank 2 (you) may move 3 down, 4 and 5 up; 3 cannot go up to your rank; 5 is the lowest: no demote
     assert out == "0 1 2 3D 4PD 5P falsefalse"
+
+
+def test_saved_data_without_realm_is_copied_to_the_realm_key_once():
+    """0.6 saved under "<guild>-" since Forever's 21/11 patch; 0.7 opens "<guild>-<realm>" (HUB_AUDIT 10.5)."""
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        AmazingHub = {}
+        function time() return 1790000000 end
+        AmazingHubDB = {
+          ["Amazing-"] = { settings = { uiScale = 1.1, newOnly = true },
+            members = { ["Testa Wanderer"] = { level = 25, note = "new" }, ["Neu Ling"] = { level = 3 } },
+            lootHistory = { { item = 1, who = "Testa Wanderer", t = 5 }, { item = 2, who = "Neu Ling", t = 9 } } },
+          ["Amazing-Realm"] = { settings = { uiScale = 1.0, oldOnly = true },
+            members = { ["Testa Wanderer-Realm"] = { level = 20, class = "MAGE" } },
+            lootHistory = { { t = 5, who = "Testa Wanderer", item = 1 } } },
+          ["Other-"] = { settings = { uiScale = 0.9 } },
+        }
+    """)
+    lua.execute((HUB / "UI" / "PackMigrate.lua").read_text("utf-8"))
+    out = lua.eval("""(function()
+        local M, db = AmazingHub.PackMigrate, AmazingHubDB
+        local r = { M:MergeRealmless("Amazing-Realm", "Realm") }
+        local g = db["Amazing-Realm"]
+        local w = g.members["Testa Wanderer-Realm"]
+        r[#r + 1] = table.concat({ g.settings.uiScale, tostring(g.settings.oldOnly), tostring(g.settings.newOnly) }, ",")
+        r[#r + 1] = table.concat({ w.level, w.class, w.note, tostring(g.members["Neu Ling-Realm"] ~= nil),
+            tostring(g.members["Testa Wanderer"] == nil) }, ",")
+        r[#r + 1] = tostring(#g.lootHistory) .. "," .. g.lootHistory[2].item
+        r[#r + 1] = tostring(db["Amazing-"] ~= nil) .. "," .. tostring(db._packRealmMerged["Amazing-"])
+        g.settings.uiScale = 1.2
+        r[#r + 1] = M:MergeRealmless("Amazing-Realm", "Realm") .. "," .. g.settings.uiScale
+        r[#r + 1] = M:MergeRealmless("Other-Realm", "Realm") .. "," .. db["Other-Realm"].settings.uiScale
+        r[#r + 1] = M:MergeRealmless("Amazing-", "") .. "," .. M:MergeRealmless("Nobody-Realm", "Realm")
+        return table.concat(r, " ; ")
+    end)()""")
+    assert out.split(" ; ") == [
+        "merged",
+        "1.1,true,true",            # both have it: the realmless (newer) value wins; nothing is lost
+        "25,MAGE,new,true,true",    # member keys get the realm; fields merge
+        "2,2",                      # the list gets only the entry it lacked (same entry, other key order)
+        "true,1790000000",          # nothing deleted; done once
+        "done before,1.2",          # a second login changes nothing
+        "copied,0.9",               # no realm key yet: a copy
+        "none,none",                # no realm known; nothing saved without the realm
+    ]
+
+
+def test_developer_addon_is_linked_locally_but_never_packed():
+    dev = ROOT / "addon" / "AmazingHubDev"
+    assert (dev / "AmazingHubDev.toc").is_file() and "AmazingHubDevFeatures = true" in (dev / "Dev.lua").read_text("utf-8")
+    pack = (ROOT / "tools" / "package-collector.ps1").read_text("utf-8")
+    assert "AmazingHubDev" not in pack and 'Join-Path $root "addon\\AmazingHub")' in pack
+    assert "Get-ChildItem -Path $repoAddons -Directory" in (ROOT / "tools" / "install.ps1").read_text("utf-8")
+    gated = [f for f in HUB.rglob("*.lua") if not f.relative_to(HUB).as_posix().startswith("tools/")
+             and "AmazingHubDevFeatures" in f.read_text("utf-8")]
+    assert len(gated) >= 12, [g.name for g in gated]
+
+
+def test_item_catalogue_reaches_the_wishlist_on_forever_only():
+    data = (ROOT / "addon" / "hub-extra" / "Data" / "ItemCatalog.lua").read_text("utf-8")
+    assert (HUB / "Data" / "ItemCatalog.lua").read_text("utf-8") == data
+    for game, want in (("FOREVER", True), ("RETAIL", False)):
+        lua = _luajit().LuaRuntime()
+        lua.execute(f'AmazingHub = {{ Wishlist = {{ catalog = {{ [19019] = {{ name = "from the journal" }} }} }},'
+                    f' Client = {{ game = "{game}" }} }}')
+        lua.execute(data)
+        lua.execute((HUB / "UI" / "ItemCatalog.lua").read_text("utf-8"))
+        g = lua.globals()
+        assert g.AmazingHubItemCatalog is None
+        n = g.AmazingHub.Wishlist.catalogCount
+        assert (n is not None and n > 4000) is want, (game, n)
+        assert g.AmazingHub.Wishlist.catalog[19019].name == "from the journal"  # never overwritten
+

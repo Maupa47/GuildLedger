@@ -15,9 +15,13 @@ local C  = AmazingHub.Colors
 local L  = AmazingHub.L
 
 local SITE    = "the guild website"
-local PAD     = 14   -- panel edge to content
-local GAP     = 8    -- between stacked lines
-local SECTION = 14   -- extra space above a section caption
+-- Where every tab's content starts (#371): 10px in, as the other tabs' sub-tab bars, the first line
+-- UI.GAP from the top, and the content ends UI.GAP short of that 10px on the right.
+local INSET   = 10
+local GAP     = UI.GAP   -- between stacked lines
+local RIGHT_INSET = INSET + GAP
+local SECTION = 20   -- over a later section title, for the rule UI:CreateSectionTitle draws 12px above it
+local TITLE_H = 24   -- a section title and the gap under it
 local BTN_H   = 22
 local ROW_H   = 16
 
@@ -130,14 +134,237 @@ local function canPublishNow()
     return true
 end
 
+----------------------------------------------------------------------
+-- The Iniciar raide button (issue #400; specs/115 in amazinghub-web)
+--
+-- One stepper wherever it sits: the owner's prompt, the Now tab's next
+-- raid and this tab. Its label is RaidStart:Next's and its click is
+-- RaidStart:Click, so the three can never say different things. Next
+-- reads the guild roster, so it is never asked from OnUpdate: on the
+-- group, combat and roster events, after a click, and every STEP_TICK
+-- seconds while one of them is on screen. A step that cannot run now
+-- (invites awaiting their answer, combat, somebody else's group) leaves
+-- the button greyed with the reason under it, never hidden.
+----------------------------------------------------------------------
+local STEP_TICK = 5   -- seconds between repaints while a button shows: an invite's minute runs out, people log in
+local STEP_GAP  = 1   -- seconds: a burst of group events repaints once
+local WEB_GROUP_GAP = 0.5   -- seconds: a burst of group events refreshes the Web tab once
+local STEP_EVENTS = { "GROUP_ROSTER_UPDATE", "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "GUILD_ROSTER_UPDATE" }
+
+local steppers, stepTicker, stepEvents = {}, nil, nil
+
+local function anyStepperShown()
+    for _, s in ipairs(steppers) do
+        if s.btn:IsVisible() then return true end
+    end
+    return false
+end
+
+-- Paints one button from its step: the label, on or off, and the line under it (why it is off, or who was passed
+-- over for being offline). `cache` holds the steps read in this pass, by roster: two buttons on one raid read once.
+local function paintStepper(s, cache)
+    local RS, I = AmazingHub.RaidStart, AmazingHub.CompanionImport
+    local roster = s.roster()
+    local step = roster and cache[roster]
+    if not step then
+        step = RS and RS:Next(roster) or { kind = "blocked", label = L["Start raid"] }
+        if roster then cache[roster] = step end
+    end
+    s.btn.label:SetText(step.label or L["Start raid"])
+    -- Ready is a click only where the host gives it one (the prompt closes); elsewhere it is a state.
+    if step.kind ~= "blocked" and (step.kind ~= "done" or s.done) then s.btn:Enable() else s.btn:Disable() end
+    -- The host may know better what to say (the Web tab with nothing loaded: what to do about it).
+    local note = s.note and s.note(roster)
+    s.why:SetText(note or (step.kind == "blocked" and step.reason) or (I and I.OfflineLine(step.offline)) or "")
+    if s.paint then s.paint(step) end
+end
+
+--- Repaints every Iniciar raide button on screen and, while one is, asks the server for a fresh guild roster
+--- (RaidStart:AskGuildRoster, at most every 30 seconds). With none on screen the ticker stops.
+function AmazingHub:RefreshRaidSteppers()
+    local cache, shown = {}, false
+    for _, s in ipairs(steppers) do
+        if s.btn:IsVisible() then
+            shown = true
+            paintStepper(s, cache)
+        end
+    end
+    if shown and AmazingHub.RaidStart then AmazingHub.RaidStart:AskGuildRoster() end
+    if not shown and stepTicker then
+        stepTicker:Cancel()
+        stepTicker = nil
+    end
+end
+
+local function startStepTicker()
+    if stepTicker then return end
+    stepTicker = AmazingHub.Compat.NewTicker(STEP_TICK, function() AmazingHub:RefreshRaidSteppers() end)
+end
+
+-- The click: the step and its lines in chat (RaidStart:Click, which repaints every button); "Raid ready" does what
+-- its host gave it to.
+local function stepperClick(s)
+    if not AmazingHub.RaidStart then return end
+    local result = AmazingHub.RaidStart:Click(s.roster())
+    if result.kind == "done" and s.done then s.done() end
+end
+
+--- An Iniciar raide button on `parent`. opts: roster (a function: the roster it acts on), done (a function: what a
+--- click on "Raid ready" does; without it the button is off once the raid is ready), note (a function(roster): a line
+--- to say under the button in place of the step's, or nil), paint (a function(step): the host's own lines, repainted
+--- with it), width, height. Returns the button; the line under it is btn.why, for the host to place.
+function UI:CreateRaidStepper(parent, opts)
+    local btn = UI:CreateButton(parent, L["Start raid"], opts.width or 150, opts.height or BTN_H)
+    local why = UI:CreateText(parent, "", 10, C.textSoft.r, C.textSoft.g, C.textSoft.b)
+    why:SetJustifyH("LEFT")
+    why:SetWordWrap(true)
+    btn.why = why
+    local s = { btn = btn, why = why, roster = opts.roster, done = opts.done, note = opts.note, paint = opts.paint }
+    steppers[#steppers + 1] = s
+    btn:SetScript("OnClick", function() stepperClick(s) end)
+    btn:HookScript("OnShow", function()
+        paintStepper(s, {})
+        if AmazingHub.RaidStart then AmazingHub.RaidStart:AskGuildRoster() end
+        startStepTicker()
+    end)
+    if not stepEvents then
+        stepEvents = CreateFrame("Frame")
+        for _, ev in ipairs(STEP_EVENTS) do AmazingHub.Compat.RegisterEvent(stepEvents, ev) end
+        stepEvents:SetScript("OnEvent", function()
+            if anyStepperShown() then
+                AmazingHub:Coalesce("raidstepper", STEP_GAP, function() AmazingHub:RefreshRaidSteppers() end)
+            end
+        end)
+    end
+    return btn
+end
+
+----------------------------------------------------------------------
+-- The owner's prompt (issue #400): what RaidStart decided to ask, shown.
+-- The raid's name, when it starts, how many are coming, the button, and
+-- Later. Built the first time, as the login digest is (Modules/Digest.lua),
+-- and at the digest's place: it takes the digest's turn at login, and in
+-- the game it closes one still open (Digest:ShowOnLogin gives way to it).
+----------------------------------------------------------------------
+local PROMPT_W, PROMPT_H = 340, 168
+local PROMPT_BTN_H = 26
+local PROMPT_WHY_LINES = 2   -- the reason line's room between the button and Later
+local MINUTE = 60
+
+-- "Starts in 20 min", "Starts now", "Started 45 min ago", and how many are coming.
+local function promptWhen(roster)
+    local dt = (tonumber(roster.startsAt) or 0) - GetServerTime()
+    local when
+    if dt >= MINUTE then
+        when = string.format(L["Starts in %d min"], math.ceil(dt / MINUTE))
+    elseif dt > -MINUTE then
+        when = L["Starts now"]
+    else
+        when = string.format(L["Started %d min ago"], math.floor(-dt / MINUTE))
+    end
+    return when .. " · " .. string.format(L["%d going"], #(roster.members or {}))
+end
+
+local prompt
+
+local function buildPrompt()
+    local f = CreateFrame("Frame", "AmazingHubRaidPromptFrame", UIParent, "BackdropTemplate")
+    f:SetSize(PROMPT_W, PROMPT_H)
+    f:SetPoint("TOP", UIParent, "TOP", 0, -140)
+    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = UI:Edge(f) })
+    f:SetBackdropColor(C.popup.r, C.popup.g, C.popup.b, 0.98)
+    UI:StylePopup(f, { shadowSize = 16 })
+    f:SetFrameStrata("HIGH")
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    f:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+
+    f.title = UI:CreateTitle(f, "", 15)
+    f.title:SetPoint("TOPLEFT", 16, -14)
+    f.title:SetPoint("RIGHT", f, "RIGHT", -36, 0)
+    f.title:SetJustifyH("LEFT")
+    f.title:SetWordWrap(false)
+
+    -- Put off (Later, or the close button), not done: the digest that gave way to it at login has its turn.
+    local function putOff()
+        f:Hide()
+        if AmazingHub.RaidStart then AmazingHub.RaidStart:PromptDismissed(f.roster) end
+    end
+    f.close = UI:CreateCloseButton(f)
+    f.close:SetPoint("TOPRIGHT", -8, -8)
+    f.close:SetScript("OnClick", putOff)
+
+    f.when = UI:CreateText(f, "", 11, C.label.r, C.label.g, C.label.b)
+    f.when:SetPoint("TOPLEFT", 16, -42)
+    f.when:SetJustifyH("LEFT")
+
+    -- The button on the raid this prompt is about, in its newest copy (a roster pasted since the inbox was read, with
+    -- new groups or a moved start: CompanionImport:Freshest); "Raid ready" closes the prompt.
+    local function raid()
+        local I = AmazingHub.CompanionImport
+        return I and I:Freshest(f.roster) or f.roster
+    end
+    f.go = UI:SetButtonVariant(UI:CreateRaidStepper(f, {
+        roster = raid,
+        done = function() f:Hide() end,
+        paint = function() if f.roster then f.when:SetText(promptWhen(raid())) end end,
+        width = 200, height = PROMPT_BTN_H,
+    }), "primary")
+    f.go:SetPoint("TOPLEFT", 16, -70)
+    f.go.why:SetPoint("TOPLEFT", f.go, "BOTTOMLEFT", 0, -6)
+    f.go.why:SetWidth(PROMPT_W - 32)
+    -- Two lines fit above Later: a long list of who is offline is cut there, not drawn under the button.
+    f.go.why:SetMaxLines(PROMPT_WHY_LINES)
+
+    f.later = UI:CreateButton(f, L["Later"], 90, PROMPT_BTN_H)
+    f.later:SetPoint("BOTTOMRIGHT", -16, 14)
+    f.later:SetScript("OnClick", putOff)
+
+    f:Hide()
+    return f
+end
+
+--- The roster the prompt is up for, or nil when it is not on screen (RaidStart:Due holds a second raid's prompt back
+--- while this one's step is not done).
+function AmazingHub:RaidPromptShowing()
+    return prompt and prompt:IsShown() and prompt.roster or nil
+end
+
+--- The owner's prompt for `roster` (RaidStart:Prompt decides when): its name, when it starts, how many are coming,
+--- the Iniciar raide button and Later. A second raid's prompt takes the place of the first once that one is done.
+function AmazingHub:ShowRaidPrompt(roster)
+    if type(roster) ~= "table" then return end
+    prompt = prompt or buildPrompt()
+    local digest = AmazingHub.Digest and AmazingHub.Digest.frame
+    if digest and digest:IsShown() then digest:Hide() end
+    local title = roster.title
+    if not title or title == "" then title = roster.instance or L["Raid"] end
+    prompt.title:SetText(AmazingHub.SanitizeUserText and AmazingHub:SanitizeUserText(title) or title)
+    prompt.roster = roster
+    prompt.when:SetText(promptWhen(roster))
+    if prompt:IsShown() then AmazingHub:RefreshRaidSteppers() end
+    prompt:Show()
+    prompt:Raise()
+end
+
 function AmazingHub:CreateWebPanel(parent, _win)
     local panel = CreateFrame("Frame", nil, parent)
     panel:SetAllPoints()
 
+    -- A section title as every screen draws it (#371). A later one's rule stops where the content
+    -- does, not at the panel's edge.
+    local function sectionTitle(text, first)
+        local fs = UI:CreateSectionTitle(panel, text, first)
+        if fs.rule then fs.rule:SetPoint("RIGHT", panel, "RIGHT", -RIGHT_INSET, 0) end
+        return fs
+    end
+
     ----------------------------------------------------------------
     -- PUBLISHING
     ----------------------------------------------------------------
-    local pubHead = UI:CreateHeaderText(panel, L["PUBLISHING"], 10)
+    local pubHead = sectionTitle(L["PUBLISHING"], true)
 
     local stateDot = panel:CreateTexture(nil, "OVERLAY")
     stateDot:SetTexture("Interface\\Buttons\\WHITE8x8")
@@ -150,7 +377,9 @@ function AmazingHub:CreateWebPanel(parent, _win)
     pasteBtn:SetScript("OnClick", function() AmazingHub:ShowWebString() end)
 
     local countText   = UI:CreateText(panel, "", 10, C.textDim.r, C.textDim.g, C.textDim.b)
+    -- On the state's line, after "On": it says when that state last reached the disk (#371).
     local writtenText = UI:CreateText(panel, "", 10, C.textDim.r, C.textDim.g, C.textDim.b)
+    writtenText:SetJustifyH("LEFT")
     -- The other half of the round trip, and the only line on this panel that is not
     -- about what the game did. The companion leaves it in the inbox after the site
     -- accepts an export.
@@ -158,11 +387,12 @@ function AmazingHub:CreateWebPanel(parent, _win)
     countText:SetJustifyH("LEFT")
     countText:SetWordWrap(true)
     ackText:SetJustifyH("LEFT")
-    ackText:SetWordWrap(false)
+    ackText:SetWordWrap(true)   -- the no-ack lines say what to do, and run past one row
 
+    -- Why a button is off: a hint in `textSoft`, not gold (#371).
     local publishBtn  = UI:CreateButton(panel, L["Publish now"], 120, BTN_H)
-    local publishWhy  = UI:CreateText(panel, "", 9, C.gold.r, C.gold.g, C.gold.b)
-    local publishNote = UI:CreateText(panel, "", 9, C.textDim.r, C.textDim.g, C.textDim.b)
+    local publishWhy  = UI:CreateText(panel, "", 10, C.textSoft.r, C.textSoft.g, C.textSoft.b)
+    local publishNote = UI:CreateText(panel, "", 10, C.textDim.r, C.textDim.g, C.textDim.b)
     publishNote:SetWordWrap(true)
     publishNote:SetJustifyH("LEFT")
     publishWhy:SetJustifyH("LEFT")
@@ -170,8 +400,9 @@ function AmazingHub:CreateWebPanel(parent, _win)
     ----------------------------------------------------------------
     -- PLANNED RAID
     ----------------------------------------------------------------
-    local raidHead  = UI:CreateHeaderText(panel, L["PLANNED RAID"], 10)
-    local raidCount = UI:CreateText(panel, "", 10, C.gold.r, C.gold.g, C.gold.b)
+    local raidHead  = sectionTitle(L["PLANNED RAID"])
+    -- How many are coming follows the title as secondary text, not gold in the far corner (#371).
+    local raidCount = UI:CreateText(panel, "", 11, C.label.r, C.label.g, C.label.b)
     local raidTitle = UI:CreateText(panel, "", 12, C.text.r, C.text.g, C.text.b)
     local raidWhen  = UI:CreateText(panel, "", 10, C.textDim.r, C.textDim.g, C.textDim.b)
     raidTitle:SetJustifyH("LEFT")
@@ -187,15 +418,33 @@ function AmazingHub:CreateWebPanel(parent, _win)
     raidOut:SetJustifyH("LEFT")
 
     local bringBtn  = UI:CreateButton(panel, L["Bring roster"], 110, BTN_H)
-    local inviteBtn = UI:CreateButton(panel, L["Invite"], 90, BTN_H)
-    local groupsBtn = UI:CreateButton(panel, L["Groups"], 90, BTN_H)
+    -- Iniciar raide (issue #400): invite, convert, invite the rest and arrange, one click a step, on the raid of the
+    -- window, in place of the Invite and Groups buttons it walks through. The screen's one primary. Under it, why it
+    -- is off, or who was passed over for being offline, in `textSoft` (#371).
+    local startBtn  = UI:SetButtonVariant(UI:CreateRaidStepper(panel, {
+        roster = function()
+            local I = AmazingHub.CompanionImport
+            return I and I:ActiveRoster()
+        end,
+        -- The site's raids all another guild's: say whose (ForeignLine). With nothing loaded, what to do about it.
+        note = function(roster)
+            local I = AmazingHub.CompanionImport
+            -- Only with nothing to act on: a roster in hand (one pasted, another guild's included) has its own reason.
+            local foreign = I and I:ForeignLine()
+            if foreign and not roster then return foreign end
+            if not roster then return L["Import a roster first."] end
+        end,
+        -- A repaint between two Refreshes moves the rows under the line; Refresh lays out once on its own.
+        paint = function()
+            if panel:IsShown() and panel.Relayout and not panel.refreshing then panel:Relayout() end
+        end,
+        width = 160,
+    }), "primary")
+    local raidWhy   = startBtn.why
     -- Out of the group whoever is not in the plan, after a confirmation naming them (issue #292).
     local trimBtn   = UI:CreateButton(panel, L["Fit to plan"], 100, BTN_H)
-    -- The night's plan from the site: notes, tasks and loot rules (issue #296).
+    -- The night's plan from the site, of the raid the button acts on: notes, tasks and loot rules (issue #296).
     local planBtn   = UI:CreateButton(panel, L["Raid plan"], 90, BTN_H)
-    local raidWhy   = UI:CreateText(panel, "", 9, C.gold.r, C.gold.g, C.gold.b)
-    raidWhy:SetJustifyH("LEFT")
-    raidWhy:SetWordWrap(true)
 
     ----------------------------------------------------------------
     -- STANDBY / NEEDS A LOOK
@@ -207,7 +456,7 @@ function AmazingHub:CreateWebPanel(parent, _win)
     local function makeList(headText)
         -- Zeroed, not nil: a resize can reach Relayout before the first Refresh has
         -- ever run, and the layout reads these to decide it can skip the section.
-        local list = { head = UI:CreateHeaderText(panel, headText, 10), rows = {}, shown = 0, rest = 0 }
+        local list = { head = sectionTitle(headText), rows = {}, shown = 0, rest = 0 }
         for i = 1, LIST_ROWS do
             local left  = UI:CreateText(panel, "", 10, C.text.r, C.text.g, C.text.b)
             local right = UI:CreateText(panel, "", 10, C.textDim.r, C.textDim.g, C.textDim.b)
@@ -224,6 +473,7 @@ function AmazingHub:CreateWebPanel(parent, _win)
     local look    = makeList(L["NEEDS A LOOK"])
     for _, list in ipairs({ standby, look }) do
         list.head:Hide()
+        list.head.rule:Hide()
         list.more:Hide()
         for _, row in ipairs(list.rows) do row.left:Hide(); row.right:Hide() end
     end
@@ -231,7 +481,7 @@ function AmazingHub:CreateWebPanel(parent, _win)
     ----------------------------------------------------------------
     -- FIRST TIME?
     ----------------------------------------------------------------
-    local firstHead = UI:CreateHeaderText(panel, L["FIRST TIME?"], 10)
+    local firstHead = sectionTitle(L["FIRST TIME?"])
     local step1 = UI:CreateText(panel, string.format(L["1. Open %s"], SITE),
         10, C.text.r, C.text.g, C.text.b)
     local step2 = UI:CreateText(panel, L["2. Download the companion and paste the token"],
@@ -246,24 +496,13 @@ function AmazingHub:CreateWebPanel(parent, _win)
 
     -- WoW cannot open a browser, so the address goes into a pre-selected
     -- read-only box for Ctrl+C. Same idiom as AmazingHub:ShowExportPopup.
-    local copyBox = CreateFrame("EditBox", nil, panel, "BackdropTemplate")
-    copyBox:SetHeight(20)
-    copyBox:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
-    })
-    copyBox:SetBackdropColor(0.050, 0.050, 0.066, 1.0)
-    copyBox:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
-    AmazingHub:ApplyFont(copyBox, 11)
-    copyBox:SetTextColor(C.accent.r, C.accent.g, C.accent.b)
-    copyBox:SetTextInsets(6, 6, 0, 0)
-    copyBox:SetAutoFocus(false)
+    -- The shared field (#371): its Escape and focus handlers are its own.
+    local copyBox = UI:CreateInput(panel, 200, 20)
     copyBox:SetText(SITE)
-    copyBox:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
     copyBox:SetScript("OnEnterPressed", function(s) s:ClearFocus() end)
-    -- Read-only: any edit snaps back to the full address, still selected.
-    copyBox:SetScript("OnTextChanged", function(s)
+    -- Read-only: any edit snaps back to the full address, still selected. Hooked, as the field's own
+    -- text handlers must stay.
+    copyBox:HookScript("OnTextChanged", function(s)
         if s:GetText() ~= SITE then
             s:SetText(SITE)
             s:HighlightText()
@@ -301,35 +540,11 @@ function AmazingHub:CreateWebPanel(parent, _win)
         AmazingHub:ShowImportPopup()
     end)
 
-    inviteBtn:SetScript("OnClick", function()
-        local I = AmazingHub.CompanionImport
-        if not I then return end
-        local n, skipped, err = I:InviteAll()
-        if err then
-            AmazingHub:Print(err)
-        else
-            AmazingHub:Print(string.format(L["Invited %d, already here %d."], n, skipped))
-        end
-        panel:Refresh()
-    end)
-
     planBtn:SetScript("OnClick", function() AmazingHub.RaidPlan:Show() end)
 
     trimBtn:SetScript("OnClick", function()
         local I = AmazingHub.CompanionImport
         if I then I:AskTrim() end
-        panel:Refresh()
-    end)
-
-    groupsBtn:SetScript("OnClick", function()
-        local I = AmazingHub.CompanionImport
-        if not I then return end
-        local moved, err = I:OrganizeGroups()
-        if err then
-            AmazingHub:Print(err)
-        else
-            AmazingHub:Print(string.format(L["Moved %d into their groups."], moved))
-        end
         panel:Refresh()
     end)
 
@@ -365,6 +580,7 @@ function AmazingHub:CreateWebPanel(parent, _win)
         list.more:SetText(rest > 0 and string.format(L["+%d on the site"], rest) or "")
         list.more:SetShown(rest > 0)
         list.head:SetShown(#lines > 0)
+        list.head.rule:SetShown(#lines > 0)
 
         -- Read by Relayout, so an empty list costs no height at all.
         list.shown = shown
@@ -400,21 +616,33 @@ function AmazingHub:CreateWebPanel(parent, _win)
             local ackAt, ackCount = nil, 0
             if I then ackAt, ackCount = I:Ack() end
 
-            local dim, gold = C.textDim, C.gold
+            -- A companion that is silent or stale is a warning: `warn`, not gold (#371).
+            local dim, warn = C.textDim, C.warn
             if not ackAt then
-                -- A companion from before this existed never writes the value at
-                -- all, so its absence is the signature of an old one.
-                ackText:SetText(string.format(L["Companion out of date. Download it again at %s"], SITE))
-                ackText:SetTextColor(gold.r, gold.g, gold.b)
+                -- No ack: a companion that wrote blocks without one has no guild link for this
+                -- folder; an empty inbox is the one the addon package ships, not written over yet.
+                local msg
+                if I and I:InboxHasBlocks() then
+                    msg = L["The companion is working, but none of its guild links sends this guild's raids here. Link the guild at %s"]
+                else
+                    msg = L["No word from the companion yet. If it is running, wait a few minutes; if not, download it at %s"]
+                end
+                ackText:SetText(string.format(msg, SITE))
+                ackText:SetTextColor(warn.r, warn.g, warn.b)
             elseif (GetServerTime() or time()) - ackAt > ACK_STALE then
                 ackText:SetText(string.format(L["The companion has sent nothing since %s"], stamp(ackAt)))
-                ackText:SetTextColor(gold.r, gold.g, gold.b)
+                ackText:SetTextColor(warn.r, warn.g, warn.b)
             else
                 ackText:SetText(string.format(L["Site updated %s, %d members"], stamp(ackAt), ackCount))
                 ackText:SetTextColor(dim.r, dim.g, dim.b)
             end
 
-            publishNote:SetText(L["Writes and reloads the interface. The companion sends it on from your PC."])
+            -- Only an officer's client puts the site's raids on the guild calendar (UpsertWebRaid).
+            local note = L["Writes and reloads the interface. The companion sends it on from your PC."]
+            if not AmazingHub:IsOfficer() then
+                note = note .. "\n" .. L["Raids from the site go on the calendar from an officer's client. Your rank is above the guild's officer ranks, so here they only show in this tab."]
+            end
+            publishNote:SetText(note)
         else
             -- The guild's: a member's own pack goes out with the switch off, through their own companion.
             countText:SetText(L["The guild's data stays in the game while this is off."])
@@ -428,7 +656,8 @@ function AmazingHub:CreateWebPanel(parent, _win)
         setEnabled(publishBtn, pubOk)
         publishWhy:SetText(pubOk and "" or (pubWhy or ""))
 
-        local roster = I and I:Current()
+        -- The raid the buttons below act on: the one of the window when there is one (issue #400).
+        local roster = I and I:ActiveRoster()
         local sum
         if roster then
             local title = roster.title
@@ -436,7 +665,7 @@ function AmazingHub:CreateWebPanel(parent, _win)
             raidTitle:SetText(title)
             local when = tonumber(roster.startsAt) or 0
             if when > 0 then
-                raidWhen:SetText(string.format("%s · %s", date("%a %H:%M", when),
+                raidWhen:SetText(string.format("%s · %s", AmazingHub:LocalDate("%a %H:%M", when),
                     fmtCountdown(when - (GetServerTime() or time()))))
             else
                 raidWhen:SetText("")
@@ -482,53 +711,36 @@ function AmazingHub:CreateWebPanel(parent, _win)
         fillList(standby, standbyLines)
         fillList(look, lookLines)
 
-        -- Default to refused, with a reason. If the import module is missing
-        -- the actions cannot run, and an enabled button that does nothing
-        -- when clicked is the exact failure this panel exists to remove.
-        local invOk, invWhy = false, L["Import a roster first."]
-        local grpOk, grpWhy = false, L["Import a roster first."]
-        local trimOk = false
-        if I then
-            invOk, invWhy = I:CanInvite()
-            grpOk, grpWhy = I:CanOrganize()
-            trimOk = I:CanTrim()
-        end
+        -- Default to refused. If the import module is missing the actions
+        -- cannot run, and an enabled button that does nothing when clicked is
+        -- the exact failure this panel exists to remove.
+        local trimOk = I and I:CanTrim() or false
         setEnabled(bringBtn, on)
-        setEnabled(inviteBtn, invOk and true or false)
-        setEnabled(groupsBtn, grpOk and true or false)
         setEnabled(trimBtn, trimOk and true or false)
-
-        -- One reason line, not three: show the first thing standing in the
-        -- way, so the officer gets one instruction instead of a wall.
-        local why = ""
-        if not on then
-            why = L["Turn publishing on first."]
-        elseif not invOk then
-            why = invWhy or ""
-        elseif not grpOk then
-            why = grpWhy or ""
-        end
-        raidWhy:SetText(why)
+        -- Iniciar raide paints its own label, gate and reason line, the prompt's and the Now tab's with it: one reason
+        -- line, the first thing standing in the way (RaidStart:Next), not a wall of them. Laid out below, once.
+        self.refreshing = true
+        AmazingHub:RefreshRaidSteppers()
+        self.refreshing = nil
 
         -- Exposed so the layout tests can assert the contract this panel
         -- exists for: a button that is off has to say why, and one that is
         -- on must not be nagging about nothing.
         self.state = {
             publishing = on,
-            reason     = why,
+            reason     = raidWhy:GetText() or "",
             publishWhy = pubOk and "" or (pubWhy or ""),
             enabled    = {
                 publish = pubOk and true or false,
                 bring   = on,
-                invite  = invOk and true or false,
-                groups  = grpOk and true or false,
+                start   = startBtn:IsEnabled() and true or false,
             },
         }
 
         -- The toggle already answers "has this person set it up", so the
         -- first-run block needs no state of its own.
         self.showFirstRun = not on
-        for _, r in ipairs({ firstHead, step1, step2, step3, copyBtn }) do
+        for _, r in ipairs({ firstHead, firstHead.rule, step1, step2, step3, copyBtn }) do
             r:SetShown(self.showFirstRun)
         end
         if not self.showFirstRun then copyBox:Hide() end
@@ -542,33 +754,35 @@ function AmazingHub:CreateWebPanel(parent, _win)
     function panel:Relayout(w, _h)
         w = w or parent:GetWidth()
         if not w or w < 1 then return end
-        local inner = math.max(120, w - PAD * 2)
-        local y = PAD
+        local inner = math.max(120, w - INSET - RIGHT_INSET)
+        local y = GAP
 
         local function place(region, dx, dy)
             region:ClearAllPoints()
-            region:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD + (dx or 0), -(y + (dy or 0)))
+            region:SetPoint("TOPLEFT", panel, "TOPLEFT", INSET + (dx or 0), -(y + (dy or 0)))
         end
 
         place(pubHead)
-        y = y + ROW_H + 2
+        y = y + TITLE_H
 
-        place(stateDot, 2, 5)
-        place(stateText, 14)
+        -- One line says the state and when it was last written, and its two buttons follow it
+        -- there instead of sitting in the far corner (#371). The texts take the width they need.
+        place(stateDot, 2, 8)
+        place(stateText, 14, 4)
+        writtenText:ClearAllPoints()
+        writtenText:SetPoint("LEFT", stateText, "RIGHT", GAP * 2, 0)
         toggleBtn:ClearAllPoints()
-        toggleBtn:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -PAD, -y)
+        toggleBtn:SetPoint("LEFT", writtenText, "RIGHT", GAP * 2, 0)
         pasteBtn:ClearAllPoints()
-        pasteBtn:SetPoint("RIGHT", toggleBtn, "LEFT", -6, 0)
+        pasteBtn:SetPoint("LEFT", toggleBtn, "RIGHT", 6, 0)
         pasteBtn:SetShown(self.publishing and true or false)
-        y = y + BTN_H + 2
+        y = y + BTN_H + 4
 
         place(countText); countText:SetWidth(inner)
         y = y + ROW_H
-        place(writtenText); writtenText:SetWidth(inner)
-        y = y + ROW_H
         if ackText:IsShown() then
             place(ackText); ackText:SetWidth(inner)
-            y = y + ROW_H
+            y = y + math.max(ROW_H, math.ceil(ackText:GetStringHeight() or 0) + 2)
         end
         y = y + GAP
 
@@ -578,19 +792,19 @@ function AmazingHub:CreateWebPanel(parent, _win)
         publishNote:SetShown(on)
         if on then
             publishBtn:ClearAllPoints()
-            publishBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD, -y)
+            publishBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", INSET, -y)
             place(publishWhy, 128, 6)
             publishWhy:SetWidth(math.max(60, inner - 128))
             y = y + BTN_H + 2
             place(publishNote); publishNote:SetWidth(inner)
-            y = y + ROW_H * 2 + GAP
+            y = y + math.max(ROW_H * 2, math.ceil(publishNote:GetStringHeight() or 0) + 2)
         end
 
         y = y + SECTION
         place(raidHead)
         raidCount:ClearAllPoints()
-        raidCount:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -PAD, -y)
-        y = y + ROW_H + 2
+        raidCount:SetPoint("LEFT", raidHead, "RIGHT", GAP, 0)
+        y = y + TITLE_H
         place(raidTitle); raidTitle:SetWidth(inner)
         y = y + ROW_H + 2
         place(raidWhen); raidWhen:SetWidth(inner)
@@ -607,19 +821,20 @@ function AmazingHub:CreateWebPanel(parent, _win)
         end
         y = y + GAP
 
+        -- Iniciar raide on a row of its own: its label grows with the step ("Convert to raid (12 to invite)"), and
+        -- its reason line under it. Then the roster's other three.
+        startBtn:ClearAllPoints()
+        startBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", INSET, -y)
+        y = y + BTN_H + 4
+        place(raidWhy); raidWhy:SetWidth(inner)
+        y = y + math.max(ROW_H, math.ceil(raidWhy:GetStringHeight() or 0) + 2) + 2
         bringBtn:ClearAllPoints()
-        bringBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD, -y)
-        inviteBtn:ClearAllPoints()
-        inviteBtn:SetPoint("LEFT", bringBtn, "RIGHT", 6, 0)
-        groupsBtn:ClearAllPoints()
-        groupsBtn:SetPoint("LEFT", inviteBtn, "RIGHT", 6, 0)
+        bringBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", INSET, -y)
         trimBtn:ClearAllPoints()
-        trimBtn:SetPoint("LEFT", groupsBtn, "RIGHT", 6, 0)
+        trimBtn:SetPoint("LEFT", bringBtn, "RIGHT", 6, 0)
         planBtn:ClearAllPoints()
         planBtn:SetPoint("LEFT", trimBtn, "RIGHT", 6, 0)
-        y = y + BTN_H + 2
-        place(raidWhy); raidWhy:SetWidth(inner)
-        y = y + ROW_H
+        y = y + BTN_H + 4
 
         -- The name column is fixed rather than measured: two columns that reflow per
         -- row read as a ragged mess, and a name long enough to reach the second
@@ -627,18 +842,18 @@ function AmazingHub:CreateWebPanel(parent, _win)
         local NAME_W = math.min(120, math.floor(inner * 0.38))
         local function placeList(list)
             if list.shown == 0 and list.rest == 0 then return end
-            y = y + GAP
+            y = y + SECTION
             place(list.head)
-            y = y + ROW_H + 2
+            y = y + TITLE_H
             for i = 1, list.shown do
                 local row = list.rows[i]
-                place(row.left, 4); row.left:SetWidth(NAME_W)
-                place(row.right, 4 + NAME_W + 8)
-                row.right:SetWidth(math.max(40, inner - NAME_W - 12))
+                place(row.left); row.left:SetWidth(NAME_W)
+                place(row.right, NAME_W + 8)
+                row.right:SetWidth(math.max(40, inner - NAME_W - 8))
                 y = y + ROW_H
             end
             if list.rest > 0 then
-                place(list.more, 4); list.more:SetWidth(inner)
+                place(list.more); list.more:SetWidth(inner)
                 y = y + ROW_H
             end
         end
@@ -648,11 +863,12 @@ function AmazingHub:CreateWebPanel(parent, _win)
         if self.showFirstRun then
             y = y + SECTION
             place(firstHead)
-            y = y + ROW_H + 2
-            place(step1); step1:SetWidth(math.max(60, inner - 80))
+            y = y + TITLE_H
+            -- The address and its Copy button on one line, side by side (#371).
+            place(step1)
             copyBtn:ClearAllPoints()
-            copyBtn:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -PAD, -y)
-            y = y + ROW_H
+            copyBtn:SetPoint("LEFT", step1, "RIGHT", GAP, 0)
+            y = y + ROW_H + 4
             place(step2); step2:SetWidth(inner)
             y = y + ROW_H
             place(step3); step3:SetWidth(inner)
@@ -663,7 +879,7 @@ function AmazingHub:CreateWebPanel(parent, _win)
             end
         end
 
-        self.contentHeight = y + PAD
+        self.contentHeight = y + GAP
     end
 
     ----------------------------------------------------------------
@@ -673,8 +889,16 @@ function AmazingHub:CreateWebPanel(parent, _win)
     AmazingHub.Compat.RegisterEvent(panel, "PLAYER_REGEN_DISABLED")
     AmazingHub.Compat.RegisterEvent(panel, "PLAYER_REGEN_ENABLED")
     AmazingHub.Compat.RegisterEvent(panel, "GROUP_ROSTER_UPDATE")
-    panel:SetScript("OnEvent", function(self)
-        if self:IsShown() then self:Refresh() end
+    -- Combat at once; the group in a burst (forty accepts, issue #400) as one Refresh every WEB_GROUP_GAP seconds.
+    local function visibleRefresh()
+        if panel:IsShown() then panel:Refresh() end
+    end
+    panel:SetScript("OnEvent", function(_, event)
+        if event == "GROUP_ROSTER_UPDATE" then
+            AmazingHub:Coalesce("webpanel", WEB_GROUP_GAP, visibleRefresh)
+        else
+            visibleRefresh()
+        end
     end)
     panel:SetScript("OnShow", function(self)
         self:Refresh()

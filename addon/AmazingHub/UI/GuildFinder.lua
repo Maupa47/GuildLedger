@@ -32,7 +32,7 @@ local LOOT_NAME   = { council = L["Loot council"], councilWishlist = L["Council 
                       softres = L["Soft reserve"], msos = L["MS>OS roll"], personal = L["Personal loot"], other = L["Other"] }
 local TRIAL_NAME  = { none = L["No trial"], week1 = L["1 week trial"], week2 = L["2 week trial"],
                       days30 = L["30 day trial"], other = L["Other"] }
-local RULESET_NAME = { normal = L["Normal"], pvp = L["PvP"], rp = L["Roleplay"], hardcore = L["Hardcore"] }
+local RULESET_NAME = { normal = L["Normal"], pvp = L["PvP"], rp = L["Roleplay"], rppvp = L["RP-PvP"], hardcore = L["Hardcore"] }
 local REGION_NAME  = { us = L["Americas"], eu = L["Europe"], kr = L["Korea"], tw = L["Taiwan"] }
 local ROLE_NAME    = { TANK = L["Tank"], HEALER = L["Healer"], DPS = L["DPS"] }
 
@@ -117,7 +117,7 @@ local function BuildFinder()
     local f = CreateFrame("Frame", "AmazingHubGuildFinder", UIParent, "BackdropTemplate")
     f:SetSize(WIDTH, HEIGHT)
     f:SetPoint("CENTER")
-    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(f) })
     f:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
     UI:StylePopup(f)
@@ -192,7 +192,7 @@ local function BuildFinder()
     local card = CreateFrame("Frame", nil, f, "BackdropTemplate")
     card:SetSize(WIDTH - 100, 300)
     card:SetPoint("TOPLEFT", 50, CARD_TOP)
-    card:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    card:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(card) })
     card:SetBackdropColor(C.well.r, C.well.g, C.well.b, 1)
     card:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.8)
 
@@ -292,7 +292,7 @@ local function BuildFinder()
     local box = CreateFrame("EditBox", nil, empty, "BackdropTemplate")
     box:SetSize(220, 22)
     box:SetPoint("BOTTOM", 0, 20)
-    box:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    box:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(box) })
     box:SetBackdropColor(0.050, 0.050, 0.066, 1.0)
     box:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
     AmazingHub:ApplyFont(box, 11)
@@ -516,7 +516,7 @@ local function BuildJoinForm()
     local f = CreateFrame("Frame", "AmazingHubJoinForm", UIParent, "BackdropTemplate")
     f:SetSize(FORM_W, FORM_H)
     f:SetPoint("CENTER", 0, 40)
-    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(f) })
     f:SetBackdropColor(0.058, 0.058, 0.075, 0.98)
     f:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, C.border.a)
     UI:StylePopup(f)
@@ -553,7 +553,7 @@ local function BuildJoinForm()
     local box = CreateFrame("EditBox", nil, f, "BackdropTemplate")
     box:SetSize(FORM_W - 28, 24)
     box:SetPoint("TOPLEFT", 14, -152)
-    box:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    box:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AmazingHub.UI:Edge(box) })
     box:SetBackdropColor(0.050, 0.050, 0.066, 1.0)
     box:SetBackdropBorderColor(C.border.r, C.border.g, C.border.b, 0.4)
     AmazingHub:ApplyFont(box, 11)

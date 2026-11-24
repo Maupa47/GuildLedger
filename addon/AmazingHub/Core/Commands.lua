@@ -42,6 +42,7 @@ local function printHelp()
     helpLine("/amazing calendar",    L["Guild calendar and events"])
     helpLine("/amazing polls",       L["Guild polls"])
     helpLine("/amazing bulletin",    L["Guild bulletin board"])
+    helpLine("/amazing bank [sort [all] | stop | sync | need]", L["Guild bank: open, organize the tab, ask for it, what it needs"])
     helpLine("/amazing cta [type] [message]", L["Call to Arms: rally the guild (officers)"])
     helpLine("/amazing ally",        L["Alliance status and allied guilds"])
 
@@ -59,21 +60,28 @@ local function printHelp()
         or L["Export roster or attendance"])   -- the loot history is on retail too since issue #183
     if AmazingHub.Companion then helpLine("/amazing web [on|off]", L["Copy your guild into the web companion"]) end
     if AmazingHub.CompanionImport then helpLine("/amazing roster", L["Bring the raid roster in from the website"]) end
+    if AmazingHub.RaidStart then   -- issue #400: the Iniciar raide button's next step
+        helpLine("/amazing raid start", L["Start the website's raid: invite and arrange, one step a click"])
+    end
 
     helpHeader(L["Personal"])
     helpLine("/amazing avail",         L["List yourself as available for a group"])
     helpLine("/amazing signup <core>", L["Sign up for a raid core"])
+    helpLine("/amazing rules",         L["The guild's rules"])
     helpLine("/amazing mentions",      L["Name mention alerts"])
     helpLine("/amazing myalts",        L["Detect and link your own alts"])
+    helpLine("/amazing birthday <DD/MM | off>", L["Share your birthday with the guild (day and month only)"])
     if AmazingHub.AttunementTracker then  -- TBC content (ADR-0014)
         helpLine("/amazing attune",    L["Your attunement progress"])
     end
     helpLine("/amazing craft <item>",  L["Who can craft an item"])
+    helpLine("/amazing order <item>",  L["Ask the guild's crafters to make an item"])
 
     helpHeader(L["Diagnostics"])
     helpLine("/amazing sync",     L["Force a full data sync"])
     helpLine("/amazing selftest", L["Run the built-in self test"])
     helpLine("/amazing errors",   L["Show recent errors"])
+    helpLine("/amazing perf [reset]", L["Where Amazing Hub spends its time since login, or zero the counters"])
     helpLine("/amazing probe",    L["Record this client's facts for support"])
     helpLine("/amazing probe chat", L["Post two test lines in guild chat to see whether an addon may post on its own"])
     helpLine("/amazing probe channel", L["Join a temporary channel to see whether an addon message may go through one"])
@@ -88,6 +96,21 @@ local function printHelp()
         helpLine("/amazing tempban <name> <days>", L["Ban a player for a number of days"])
         helpLine("/amazing unban <name>",          L["Lift a ban"])
         helpLine("/amazing banlist",               L["Open the ban list"])
+        if AmazingHub.BulkActions then
+            helpLine("/amazing bulk [next | skip | stop]", L["Promote, demote or remove by rules, one member per click"])
+            helpLine("/amazing altgroup <promote | demote> <name> [rank]",
+                L["Promote or demote a member's alts to their main's rank, or to a rank, one per click"])
+        end
+        helpLine("/amazing altlimit <number>",     L["List the alt groups with more alts than that"])
+        helpLine("/amazing birthday <name> <DD/MM | off>", L["Correct or remove a member's birthday"])
+        if AmazingHub.NoteDates then
+            helpLine("/amazing joindate [<name> | all | import]", L["Write a member's join date into their note, or read the dates already in the notes"])
+            helpLine("/amazing safe [<name>]",     L["The safe list: never in a bulk removal or demotion"])
+            helpLine("/amazing nick <name> [nickname]", L["The officers' nickname for a member"])
+        end
+        helpLine("/amazing record <name>",         L["A member's disciplinary record"])
+        helpLine("/amazing warn <name> [reason]",  L["Warn a member, with one click"])
+        helpLine("/amazing record term <days>",    L["How long a warning counts"])
         helpLine("/amazing autoinvite",            L["Auto-invite settings"])
         helpLine("/amazing note <name> <text>",    L["Add an officer note"])
         if AmazingHub.Wishlist then helpLine("/amazing wish", L["Open the loot wishlist"]) end
@@ -208,6 +231,11 @@ local function handleCommand(msg)
         if AmazingHub.CommSystem then
             AmazingHub.CommSystem:FullSync()
         end
+    elseif msg == "perf" then
+        AmazingHub.Perf:Print()
+    elseif msg == "perf reset" then
+        AmazingHub.Perf:Reset()
+        AmazingHub:Print(L["Performance counters zeroed."])
     elseif msg == "points" or msg == "dkp" then
         if AmazingHub.ShowPointsFrame then
             AmazingHub:ShowPointsFrame()
@@ -224,6 +252,17 @@ local function handleCommand(msg)
         if AmazingHub.Backup then AmazingHub.Backup:ShowExport() end
     elseif msg == "restore" then
         if AmazingHub.Backup then AmazingHub.Backup:ShowRestore() end
+    elseif msg == "bank" or msg:match("^bank%s") then
+        -- /amazing bank [sort [all] | stop | sync | need]: the guild bank (issue #380)
+        if AmazingHub.GuildBank then
+            local a = {}
+            for w in msg:gmatch("%S+") do a[#a + 1] = w end
+            table.remove(a, 1)
+            AmazingHub.GuildBank:HandleCommand(a)
+        end
+    elseif msg == "rules" then
+        -- /amazing rules: the guild's rules, for any member (#407).
+        if AmazingHub.GuildRules then AmazingHub.GuildRules:Show() end
     elseif msg == "bulletin" or msg == "board" then
         if AmazingHub.Bulletin then AmazingHub.Bulletin:Show() end
     elseif msg == "cta" or msg:match("^cta%s") then
@@ -254,6 +293,15 @@ local function handleCommand(msg)
         if AmazingHub.Search then
             local q = strtrim((msg:gsub("^find%s*", "")))
             AmazingHub.Search:Show(q ~= "search" and q or "")
+        end
+    elseif msg:match("^order") and AmazingHub.ShowCraftOrderDialog then
+        -- /amazing order [item link or id] — a craft order (issue #389); no item opens the Orders tab.
+        local arg = strtrim((msg:gsub("^order%s*", "")))
+        local itemId = tonumber(arg:match("item:(%d+)")) or tonumber(arg:match("^(%d+)$"))
+        if itemId then
+            AmazingHub:ShowCraftFor(itemId)
+        else
+            AmazingHub.UI:OpenWindow("recipes", "mine")
         end
     elseif msg:match("^craft") then
         -- /amazing craft <item link or id> — who can craft this, guild + realm.
@@ -465,15 +513,18 @@ local function handleCommand(msg)
             AmazingHub:ShowWebString()
         end
     elseif msg:match("^roster") then
-        -- /amazing roster [invite|groups|trim] — the roster the website planned.
+        -- /amazing roster [invite|groups|trim] — the roster the website planned: the raid of the window when
+        -- there is one (issue #400), as the Web tab's buttons.
         local I = AmazingHub.CompanionImport
         local sub = I and msg:match("^roster%s+(%S+)")
         if not I then
             AmazingHub:Print(L["|cffFF4444Export failed:|r "] .. "CompanionImport")
         elseif sub == "invite" then
-            local n, skipped, err = I:InviteAll()
+            local n, here, err, offline = I:InviteAll()
             if err then AmazingHub:Print(err)
-            else AmazingHub:Print(string.format(L["Invited %d, already here %d."], n, skipped)) end
+            else AmazingHub:Print(string.format(L["Invited %d, already here %d."], n, here)) end
+            local off = I.OfflineLine(offline)
+            if off then AmazingHub:Print(off) end
         elseif sub == "groups" then
             local moved, err = I:OrganizeGroups()
             if err then AmazingHub:Print(err)
@@ -487,6 +538,13 @@ local function handleCommand(msg)
         else
             AmazingHub:ShowImportPopup()
         end
+    elseif msg == "raid start" then
+        -- /amazing raid start — one step of the Iniciar raide button, as its click (issue #400): typed, it is a key
+        -- press, which WoW: Forever lets an invite out of. On the raid near now (ButtonRaid: the site's, or one pasted
+        -- by hand), never a kept raid days away; with none, it says no raid starts around this time. The line it
+        -- prints starts with the raid's name.
+        local I, RS = AmazingHub.CompanionImport, AmazingHub.RaidStart
+        if I and RS then RS:Click(I:ButtonRaid(), true) end
     elseif msg == "exportatt" or msg == "exportattendance" then
         if AmazingHub.RaidTracker then
             local json, err = AmazingHub.RaidTracker:ExportForTMB()
@@ -510,6 +568,8 @@ local function handleCommand(msg)
             AmazingHub:ShowExportPopup(string.format("%s (%s)", title or L["Export"], fmt), text)
         elseif title == "absent" then
             AmazingHub:Print(L["Not available on this client."])
+        elseif title == "officer" then
+            AmazingHub:Print(L["|cffFF4444Officers only.|r"])
         elseif AmazingHub.Exporter then
             AmazingHub:Print(string.format(L["Usage: /amazing export <%s> [csv|tsv|discord]"], AmazingHub.Exporter:Names()))
         end
@@ -636,7 +696,11 @@ local function handleCommand(msg)
         local word = note:match("^(%S+)")
         local role = word and AmazingHub.CoreManager and AmazingHub.CoreManager.ROLE_WORDS[word:lower()]
         if role then note = note:match("^%S+%s+(.+)$") or "" end
-        if not coreName or coreName == "" then
+        if (not coreName or coreName == "") and AmazingHub.ShowCoreSignupFrame then
+            -- The window, as the Raids tab's button opens it: the way in at any width, and with the
+            -- Raids tab switched off (#377).
+            AmazingHub:ShowCoreSignupFrame()
+        elseif not coreName or coreName == "" then
             AmazingHub:Print(L["Usage: /amazing signup <CoreName> [tank|healer|melee|ranged] [note]"])
         elseif not AmazingHub.CoreManager then
             AmazingHub:Print(L["Core Manager not loaded."])
@@ -687,6 +751,81 @@ local function handleCommand(msg)
         elseif name ~= "" and AmazingHub.BanList and AmazingHub:IsOfficer() then
             AmazingHub:Print(string.format(L["No ban to lift for %s."], name))   -- nothing stood there (#184)
         end
+    elseif msg:match("^warn%s") then
+        -- /amazing warn <name> [reason]  — the Warn window (#403), officers only.
+        local name, rest = AmazingHub:SplitNameAndText(strtrim((msg:gsub("^warn%s+", ""))))
+        name = name or strtrim((msg:gsub("^warn%s+", "")))
+        local key = AmazingHub:RosterKey(name)
+        if not AmazingHub:IsOfficer() then
+            AmazingHub:Print(L["|cffFF4444Officers only.|r"])
+        elseif not key then
+            AmazingHub:Print(string.format(L["%s is not on the guild roster."], name))
+        else
+            local _, shown = AmazingHub:RosterKey(name)
+            AmazingHub:ShowWarnDialog(key, shown, { reason = rest and strtrim(rest):lower() or nil })
+        end
+    elseif msg:match("^record%s+term%s") then
+        -- /amazing record term <days>  — the guild's term for warnings (#402), officers only.
+        local days = strtrim((msg:gsub("^record%s+term%s+", "")))
+        local ok, why = false, "range"
+        if AmazingHub.Discipline then ok, why = AmazingHub.Discipline:SetTerm(days) end
+        if ok then
+            AmazingHub:Print(string.format(L["Warnings now count for %d days."], AmazingHub.Discipline:GetTerm()))
+        elseif why == "officer" then
+            AmazingHub:Print(L["|cffFF4444Officers only.|r"])
+        else
+            AmazingHub:Print(L["Usage: /amazing record term <1-365>"])
+        end
+    elseif msg:match("^record%s") then
+        -- /amazing record <name>  — a member's disciplinary record (#402), officers only.
+        local name = strtrim((msg:gsub("^record%s+", "")))
+        local D = AmazingHub.Discipline
+        if not (D and AmazingHub:IsOfficer()) then
+            AmazingHub:Print(L["|cffFF4444Officers only.|r"])
+        elseif name == "" then
+            AmazingHub:Print(L["Usage: /amazing record <name>"])
+        else
+            local key = AmazingHub:RosterKey(name) or AmazingHub:GetPlayerKey(name)
+            local now, term = GetServerTime(), D:GetTerm()
+            local record = D:Record(key)
+            AmazingHub:Print(string.format(L["%s: step %d, %d warning(s)."], name, D.Step(record, term, now), #record))
+            for i = 1, math.min(5, #record) do
+                local w = record[i]
+                local state = w.revokedAt and L["revoked"] or (D.Active(w, term, now) and L["standing"] or L["lapsed"])
+                AmazingHub:Print(string.format("  %s  %s  %s (%s)", AmazingHub:DateText(w.at or 0), D.ReasonText(w.reason), state, w.by or "?"))
+            end
+        end
+    elseif msg == "bulk" or msg:match("^bulk%s") then
+        -- /amazing bulk [next | skip | stop] — Leadership > Bulk actions (#420). A typed command is addon code, which may
+        -- not run the game's protected rank commands: `next` says who is next; the Next button or a
+        -- /click AmazingHubBulkNext macro acts.
+        if AmazingHub.BulkActions and AmazingHubDevFeatures then -- Amazing Hub: developers only
+            AmazingHub.BulkActions:Command((msg:gsub("^bulk%s*", "")))
+        else
+            AmazingHub:Print(L["Not available on this client."])
+        end
+    elseif msg == "altgroup" or msg:match("^altgroup%s") then
+        -- /amazing altgroup <promote | demote> <name> [rank] (#424): a queue in Leadership > Bulk actions, one alt per click.
+        if AmazingHub.BulkActions and AmazingHubDevFeatures then -- Amazing Hub: developers only
+            AmazingHub.BulkActions:CommandGroup((msg:gsub("^altgroup%s*", "")))
+        else
+            AmazingHub:Print(L["Not available on this client."])
+        end
+    elseif msg == "birthday" or msg:match("^birthday%s") or msg == "aniversario" or msg:match("^aniversario%s") then
+        -- /amazing birthday [DD/MM | off] (#428), Settings > Profile's Birthday; an officer adds a name first.
+        if AmazingHub.Birthdays then AmazingHub.Birthdays:Command((msg:gsub("^%a+%s*", ""))) end
+    elseif msg == "joindate" or msg:match("^joindate%s") then
+        -- /amazing joindate [<name> | all | import] (#429): Leadership > Notes and marks.
+        if AmazingHub.NoteDates then AmazingHub.NoteDates:Command((msg:gsub("^joindate%s*", ""))) end
+    elseif msg == "safe" or msg:match("^safe%s") then
+        -- /amazing safe [<name>] (#429): the safe list the bulk actions never remove or demote.
+        if AmazingHub.MemberMarks then AmazingHub.MemberMarks:CommandSafe((msg:gsub("^safe%s*", ""))) end
+    elseif msg == "nick" or msg:match("^nick%s") then
+        -- /amazing nick <name> [nickname] (#429): the officers' nickname, on the tooltip and in chat.
+        if AmazingHub.MemberMarks then AmazingHub.MemberMarks:CommandNick((msg:gsub("^nick%s*", ""))) end
+    elseif msg == "altlimit" or msg:match("^altlimit%s") then
+        -- /amazing altlimit N (#424): the groups with more than N alts, in chat.
+        if AmazingHub.AltSync then AmazingHub.AltSync:CommandLimit((msg:gsub("^altlimit%s*", ""))) end
     elseif msg == "banlist" then
         AmazingHub.UI:OpenWindow("management", "ban")
     elseif msg == "autoinvite" or msg:match("^autoinvite%s") or msg == "ai" or msg:match("^ai%s") then
@@ -731,7 +870,7 @@ local function handleCommand(msg)
         local id  = msg:match("^open%s+(%S+)")
         local sub = msg:match("^open%s+%S+%s+(%S+)")
         local def = id and AmazingHub.UI and AmazingHub.UI.GetFeature and AmazingHub.UI:GetFeature(id)
-        if def and def.tab then
+        if def and (def.tab or def.opens) then
             AmazingHub.UI:OpenWindow(id, sub)
         else
             AmazingHub:Print(L["Usage: /amazing open <feature>. Try /amazing open roster."])

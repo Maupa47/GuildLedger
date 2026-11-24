@@ -2,14 +2,14 @@
 ## Title: |cffFFD700Amazing Hub|r |cff888888(Amazing Forever Guild Pack)|r
 ## Notes: Guild window for the Amazing guild: roster, professions and recipes, calendar, guild members on the map.
 ## Author: Maupa
-## Version: 0.6.0
+## Version: 0.7.0
 ## SavedVariables: AmazingHubDB
 ## DefaultState: enabled
 ## IconTexture: Interface\AddOns\AmazingHub\Media\minimap-logo
-## OptionalDeps: GuildLedger
+## OptionalDeps: GuildLedger, AmazingHubDev
 ## X-License: MIT
 ## X-Category: Guild
-## X-Upstream: GuildOS 1.20.1 (80883a0) https://github.com/danielcosta42/GuildOS
+## X-Upstream: GuildOS 1.40.0 (1f9fa9d) https://github.com/danielcosta42/GuildOS
 
 
 # Libraries
@@ -46,6 +46,7 @@ Core\Compat.lua
 Core\Data.lua
 Core\Style.lua
 Core\Utils.lua
+Core\WhisperQueue.lua
 Core\Commands.lua
 Core\Probe.lua
 
@@ -65,9 +66,19 @@ Modules\SyncService.lua
 Modules\Alliance.lua
 Modules\AllianceSync.lua
 Modules\AllianceChat.lua
+Modules\AllianceLink.lua
 Modules\GuildChat.lua
 Modules\RosterLog.lua
+Modules\MemberHistory.lua
+Modules\MemberMarks.lua
+Modules\NoteDates.lua
 Modules\BanList.lua
+Modules\AltSync.lua
+Modules\Discipline.lua
+Modules\ModAlerts.lua
+Modules\ModFlood.lua
+Modules\Newcomer.lua
+Modules\GuildRules.lua
 Modules\RecruitmentSystem.lua
 Modules\RecruitEngagement.lua
 Modules\WishlistSystem.lua
@@ -75,9 +86,12 @@ Modules\SoftResSystem.lua
 Modules\CoreManager.lua
 Modules\RaidTracker.lua
 Modules\LootTracker.lua
+Modules\LootRule.lua
 Modules\LootMaster.lua
+Modules\LootCouncil.lua
 Modules\RecipeTracker.lua
 Modules\CraftNet.lua
+Modules\CraftOrders.lua
 Data\ProfCatalogForever.lua
 Data\ProfCatalogRetail.lua
 Modules\Professions.lua
@@ -98,12 +112,16 @@ Modules\TrialTracker.lua
 Modules\GuildManager.lua
 Modules\RosterColumns.lua
 Modules\ModPresets.lua
+Modules\BulkActions.lua
+Modules\AltDeparture.lua
+Modules\AddonReminder.lua
 Modules\GearAudit.lua
 Modules\Readiness.lua
 Modules\Resistances.lua
 Modules\ExportImport.lua
 Modules\CompanionExport.lua
 Modules\CompanionImport.lua
+Modules\SiteLoot.lua
 Modules\RaidPlan.lua
 Modules\Points.lua
 Modules\TradeCouncil.lua
@@ -111,10 +129,15 @@ Modules\LootEquity.lua
 Modules\Digest.lua
 Modules\Backup.lua
 Modules\Bulletin.lua
+# The guild bank (issue #380): the order a tab is kept in, then the bank itself
+Modules\GuildBankPlan.lua
+Modules\GuildBank.lua
+Modules\GuildBankCleanup.lua
 Modules\CallToArms.lua
 Modules\Polls.lua
 Modules\Calendar.lua
 Modules\GameCalendar.lua
+Modules\Birthdays.lua
 Modules\Milestones.lua
 Modules\Journal.lua
 Modules\Founding.lua
@@ -133,6 +156,8 @@ Modules\Mentions.lua
 Modules\NoteCommand.lua
 Modules\LevelQuery.lua
 Modules\LFGBoard.lua
+Data\GroupActivities.lua
+Modules\Groups.lua
 Modules\GuildMap.lua
 Modules\PugInspector.lua
 
@@ -150,18 +175,30 @@ UI\RaiderPanel.lua
 UI\RecipesPanel.lua
 UI\ProfessionsPanel.lua
 UI\CraftFinder.lua
+UI\CraftOrdersPanel.lua
 UI\RecruitBeacon.lua
 UI\GuildFinder.lua
 UI\JoinRequests.lua
 UI\CalendarPanel.lua
 UI\FeaturePanels.lua
+UI\SettingsPanel.lua
+UI\LootWindow.lua
+UI\GuildBankPanel.lua
+UI\OfficerSheet.lua
 UI\RosterFrame.lua
 UI\MemberDetail.lua
+UI\WarnDialog.lua
+UI\AltDepartureDialog.lua
+UI\ModAlerts.lua
+UI\BulkPanel.lua
+UI\RemindPanel.lua
+UI\MarksPanel.lua
 UI\CorePanel.lua
 UI\ManagementPanel.lua
 UI\AuditPanel.lua
 UI\PointsPanel.lua
 UI\TradeCouncil.lua
+UI\LootCouncil.lua
 UI\CommunityPanel.lua
 UI\AlliancePanel.lua
 UI\RaidToolsPanel.lua
@@ -172,13 +209,17 @@ UI\Onboarding.lua
 UI\Founding.lua
 UI\JournalPanel.lua
 UI\AchievementsPanel.lua
+UI\GroupsPanel.lua
 UI\RaidHUD.lua
 UI\Features.lua
 
 # Amazing Forever Guild Pack (addon/hub-extra)
+UI\PackMigrate.lua
 UI\PackTweaks.lua
 UI\TableSort.lua
 UI\ChatTag.lua
 UI\WishImport.lua
 UI\LedgerPanel.lua
 UI\SettingsPlus.lua
+Data\ItemCatalog.lua
+UI\ItemCatalog.lua

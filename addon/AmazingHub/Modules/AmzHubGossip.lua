@@ -37,6 +37,7 @@ Gossip.BEACON_SECONDS = 180
 Gossip.CHANNEL        = false   -- the beacon's route by a created channel: only a new version turns it on
 Gossip.CHANNEL_NAME   = "AmazingHubNet"   -- the channel it joins; /amazing probe channel measures whether it can carry anything
 Gossip.SENDER_MAX     = 30      -- messages heard from one sender per ROUND_SECONDS; a relayer's CR2 stays under it
+Gossip.ROUND_PARTS    = 10      -- addon messages a round may whisper in all, counted as they go on the wire (#392, #393)
 
 local PREFIX        = "AmzHubRecruit"       -- RecruitBeacon registers it
 local BEACON_KEY    = PREFIX .. ":beacon"   -- Mesh:Realm coalesces on it: only ever one beacon waits to be yelled
@@ -45,7 +46,6 @@ local TEST_DELAY    = 10      -- seconds after login before the whisper test
 local TEST_WAIT     = 5       -- seconds an echo gets before the next spelling
 local TEST_AGAIN    = 90      -- seconds between one pass over the spellings and the next
 local TEST_PASSES   = 4       -- passes before it stops asking
-local TRIED_SECONDS = 30      -- seconds the "no such player" line of a name I whispered stays hidden
 local PAYLOAD_MAX   = 2048    -- bytes; a whole CR3 is under it, and a multi-part message can be anything
 local NAME_MAX      = 96      -- bytes of a name: two names of three-byte letters and a realm
 local GUILD_CHARS   = 24      -- the game's own limit
@@ -54,22 +54,30 @@ AmazingHub.State.gossip = {
     peers     = {},   -- [whole name] = { name, at, guild, officer, heardOf, since, count, answered, served }
     topics    = {},   -- [name] = { digest, want, pull, push }
     routes    = {},   -- [first field] = fn(payload, sender, dist)
-    tried     = {},   -- [whole name] = when the error line stops being hidden
     asked     = {},   -- [key] = version asked for this round
     asks      = 0,    -- questions asked this round
     dialed    = {},   -- [whole name] = true: a digest went there this round, and one list of names may come back
     failed    = {},   -- [error text] = true: each kind recorded once
     refused   = {},   -- [whole name] = true: senders the officer check refuses right now
-    allowance = 0,    -- whispers left this round for answering anybody
+    allowance = 0,    -- addon messages left this round, as AceComm puts them on the wire
     turns     = { digest = 0, beacon = 0 },   -- where each rotation stands
     stats     = { rounds = 0, adsIn = 0, adsOut = 0, dropped = 0 },
 }
 local S = AmazingHub.State.gossip
 
--- What a round may answer: ROUND_PEERS answers of REPLY_MAX ads and a list of names. Without it the
--- traffic grows with the network: every client that heard somebody yell can ask that one somebody.
+-- What a round may send. Without it the traffic grows with the network: every client that heard
+-- somebody yell can ask that one somebody. It counts addon messages, not payloads: AceComm splits
+-- anything over 255 bytes into parts of 254, so one CR3 ad of 2 KB is nine whispers to the server,
+-- and WoW: Forever answers a client that whispers that much with "You are doing that too fast" (#393).
 local function Allowance()
-    return Gossip.ROUND_PEERS * (Gossip.REPLY_MAX + 1)
+    return Gossip.ROUND_PARTS
+end
+
+-- How many addon messages `payload` takes on the wire.
+local function Parts(payload)
+    local n = #payload
+    if n <= 255 then return 1 end
+    return math.ceil(n / 254)
 end
 S.allowance = Allowance()
 
@@ -177,11 +185,12 @@ local function Turn(which, list, max)
     return out
 end
 
--- One answer out of the round's allowance; what it cannot pay for is a discard, and the asker gets
--- another chance from another peer next round.
-local function Spend()
-    if S.allowance > 0 then
-        S.allowance = S.allowance - 1
+-- `payload` out of the round's allowance, by its parts; what it cannot pay for is a discard, and the
+-- asker gets another chance from another peer next round.
+local function Spend(payload)
+    local cost = Parts(payload)
+    if S.allowance >= cost then
+        S.allowance = S.allowance - cost
         return true
     end
     S.stats.dropped = S.stats.dropped + 1
@@ -199,7 +208,7 @@ local function Serve(peer, ad)
         S.stats.dropped = S.stats.dropped + 1
         return false
     end
-    if not Spend() then return false end
+    if not Spend(ad) then return false end
     peer.served = (peer.served or 0) + 1
     S.stats.adsOut = S.stats.adsOut + 1
     Gossip:Whisper(peer.name, ad)
@@ -212,9 +221,10 @@ local function Ask(key, version, sender)
     if S.asks >= Gossip.REPLY_MAX or (S.asked[key] or -1) >= version then return end
     for _, topic in pairs(S.topics) do
         if Guarded(topic.want, key, version) then
-            if Spend() then
+            local ask = "CRG|" .. key
+            if Spend(ask) then
                 S.asks, S.asked[key] = S.asks + 1, version
-                Gossip:Whisper(sender, "CRG|" .. key)
+                Gossip:Whisper(sender, ask)
             end
             return
         end
@@ -258,8 +268,13 @@ local function TryNext(test)
     if Quiet() then return end
     test.at = test.at + 1
     local try = test.tries[test.at]
-    S.tried[Whole(try.name)] = GetTime() + TRIED_SECONDS
-    Compat.SendAddonMessageNow(PREFIX, "CRW|" .. test.token .. "|" .. test.at, "WHISPER", try.name)
+    local payload = "CRW|" .. test.token .. "|" .. test.at
+    local function send()
+        AmazingHub:NoteWhisper(try.name)
+        Compat.SendAddonMessageNow(PREFIX, payload, "WHISPER", try.name)
+    end
+    local queue = AmazingHub.WhisperQueue
+    if queue then queue:PushAddon(PREFIX, payload, try.name, "high", send) else send() end
 end
 
 local function StartTest()
@@ -281,21 +296,11 @@ local function OnTest(payload)
     if try then S.whisper, S.test = try.spelling, nil end
 end
 
--- The client's "no such player" line, for a name I tried and nobody else's. A peer that answers this
--- way has logged off, and is not worth another round. Chat in lockdown is secret, and a chat frame
--- is no place to raise.
-local function IsTried(msg)
-    if Compat.IsSecret(msg) or not next(S.tried) then return false end
-    local args = AmazingHub:MatchFormat(msg, ERR_CHAT_PLAYER_NOT_FOUND_S)
-    local name = args and Whole(args[1])
-    local till = name and S.tried[name]
-    if not till or GetTime() > till then return false end
-    S.peers[name] = nil
-    return true
-end
-
-local function HideNotFound(_, _, msg)
-    return Guarded(IsTried, msg)
+-- The client's "no such player" line, for a name we whispered, is hidden by AmazingHub:NoteWhisper's filter, the
+-- one every addon whisper of AmazingHub shares (issue #326). A peer it was about has logged off, and is not worth
+-- another round.
+local function Gone(name)
+    S.peers[Whole(name)] = nil
 end
 
 ----------------------------------------------------------------------
@@ -340,7 +345,8 @@ local function OnDigest(payload, sender)
         if not known.heardOf and known ~= peer then names[#names + 1] = known.name end
     end
     Sample(names, Gossip.PEX_MAX)
-    if #names > 0 and Spend() then Gossip:Whisper(peer.name, "CRP|" .. table.concat(names, ",")) end
+    local list = "CRP|" .. table.concat(names, ",")
+    if #names > 0 and Spend(list) then Gossip:Whisper(peer.name, list) end
     local proved = #order < Gossip.DIGEST_MAX and -1 or listed[order[Gossip.DIGEST_NEWEST]]
     for _, held in ipairs(Holdings()) do
         local theirs = listed[held.key]
@@ -453,7 +459,8 @@ function Gossip:Beacon()
             Compat.JoinChannel(self.CHANNEL_NAME)
         end
     else
-        mesh:Realm(PREFIX, payload, BEACON_KEY)
+        local queue = AmazingHub.WhisperQueue
+        if queue then queue:Realm(PREFIX, payload, BEACON_KEY) else mesh:Realm(PREFIX, payload, BEACON_KEY) end
     end
 end
 
@@ -461,10 +468,6 @@ end
 -- still goes: that is how a newcomer says it holds nothing.
 function Gossip:Round()
     S.allowance, S.asks, S.asked, S.dialed = Allowance(), 0, {}, {}
-    local now = GetTime()
-    for name, till in pairs(S.tried) do
-        if now > till then S.tried[name] = nil end
-    end
     local peers = self:Peers()   -- asked before anything can stop the round: this is what prunes the list
     for _, peer in ipairs(peers) do peer.answered, peer.served = nil, nil end
     if not CanAnswer() then return end
@@ -477,8 +480,10 @@ function Gossip:Round()
         for _, held in ipairs(Turn("digest", rest, self.DIGEST_MAX - #newest)) do
             listed[#listed + 1] = held.key .. ":" .. held.version
         end
+        local digest = "CRD|" .. table.concat(listed, ",")
+        if not Spend(digest) then break end
         S.dialed[peer.name] = true
-        self:Whisper(peer.name, "CRD|" .. table.concat(listed, ","))
+        self:Whisper(peer.name, digest)
     end
     S.stats.rounds = S.stats.rounds + 1
 end
@@ -500,7 +505,8 @@ function Gossip:Initialize()
     if S.started or AmazingHub.Client.isAnniversary then return end
     S.started = true
     -- A try at an offline name prints a line, and none may: with no filter there is no test, so no whisper.
-    local filtered = Guarded(Compat.AddChatFilter, "CHAT_MSG_SYSTEM", HideNotFound)
+    local filtered = AmazingHub:HideWhisperErrors()
+    AmazingHub:OnWhisperNotFound(Gone)
     if self.CHANNEL then Guarded(Compat.JoinChannel, self.CHANNEL_NAME) end
     Compat.After(TEST_DELAY, function()
         if filtered then Guarded(StartTest) end
@@ -564,7 +570,12 @@ function Gossip:Peers()
             list[#list + 1] = peer
         end
     end
-    table.sort(list, function(a, b) return a.at > b.at end)
+    -- Ties go by name: names heard of off one list share an `at`, and an order left to `pairs` would
+    -- make who a round picks hang on how the table happens to be laid out, not on the dice.
+    table.sort(list, function(a, b)
+        if a.at ~= b.at then return a.at > b.at end
+        return a.name < b.name
+    end)
     return list
 end
 
@@ -669,11 +680,21 @@ function Gossip:CanWhisper()
     return S.whisper ~= nil
 end
 
--- An addon whisper to `name`, its error line hidden while it is tried. False when nothing went.
-function Gossip:Whisper(name, payload)
+-- An addon whisper to `name`, its error line hidden while it is tried. It waits its turn in the
+-- WhisperQueue (#393): `prio` is "low" for the gossip itself, which the next round says again, and "high"
+-- for what somebody waits for (a join request, its answer). A door that shut while it waited (an instance,
+-- a lockdown) drops it. False when nothing will go.
+function Gossip:Whisper(name, payload, prio)
     local mesh = _G.AmzHubMesh
     if not (mesh and self:CanWhisper()) or Quiet() then return false end
     local target = self:WhisperName(name)
-    S.tried[Whole(target)] = GetTime() + TRIED_SECONDS
-    return mesh:Whisper(PREFIX, payload, target)
+    local function send()
+        local liveMesh = _G.AmzHubMesh
+        if not liveMesh or Quiet() then return false end
+        AmazingHub:NoteWhisper(target)
+        return liveMesh:Whisper(PREFIX, payload, target) and true or false
+    end
+    local queue = AmazingHub.WhisperQueue
+    if not queue then return send() end
+    return queue:PushAddon(PREFIX, payload, target, prio or "low", send) ~= false
 end

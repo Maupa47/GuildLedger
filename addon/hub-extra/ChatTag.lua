@@ -11,9 +11,6 @@
 --
 -- Copied in by tools/rebrand-hub.py from addon/hub-extra/; edit it there.
 ----------------------------------------------------------------------
-local UI = AmazingHub.UI
-local C = AmazingHub.Colors
-
 local T = {}
 AmazingHub.ChatTag = T
 
@@ -74,48 +71,25 @@ function T.Set(tag, off)
     return true
 end
 
--- Settings > General > CHAT, under the alt tag switches. Returns the new y.
-function T.BuildSettings(content, y)
-    local ok, newY = pcall(function()
-        local label = UI:CreateText(content, "What others see in the brackets for my lines:", 11,
-            C.text.r, C.text.g, C.text.b)
-        label:SetPoint("TOPLEFT", 28, -(y + 4))
-        y = y + 22
-
-        local box = CreateFrame("EditBox", nil, content, "InputBoxTemplate")
-        box:SetSize(150, 20)
-        box:SetPoint("TOPLEFT", 36, -y)
-        box:SetAutoFocus(false)
-        box:SetMaxLetters(40)
-        local tag, off = T.Mine()
-        box:SetText(tag)
-        local function save()
-            local _, nowOff = T.Mine()
-            T.Set(box:GetText(), nowOff)
-            box:SetText((T.Mine()))
-        end
-        box:SetScript("OnEnterPressed", function(self) save() self:ClearFocus() end)
-        box:SetScript("OnEditFocusLost", save)
-        box:SetScript("OnEscapePressed", function(self) self:SetText((T.Mine())) self:ClearFocus() end)
-
-        local hint = UI:CreateText(content, "e.g. Floy. Empty: the usual (alt of ...). Press Enter to save.", 10,
-            C.silver.r, C.silver.g, C.silver.b)
-        hint:SetPoint("LEFT", box, "RIGHT", 10, 0)
-        y = y + 26
-
-        local none = UI:CreateCheckbox(content, "Show no tag at all for my lines", 16)
-        none:SetPoint("TOPLEFT", 28, -y)
-        none.checkbox:SetChecked(off)
-        none.checkbox.onChanged = function(_, on) T.Set(box:GetText(), on and true or false) end
-        y = y + 22
-
-        local note = UI:CreateText(content, "Others see it when they use Amazing Hub 0.5.4 or newer with"
-            .. " \"Annotate guild chat\" on.", 10, C.silver.r, C.silver.g, C.silver.b)
-        note:SetPoint("TOPLEFT", 48, -y)
-        y = y + 22
-        return y
+-- Settings > Chat > Guild chat, under the alt tag switches (patched into UI/SettingsPanel.lua's chat page).
+-- F is upstream's Form; indent = its sub-option indent; enabled() = whether annotations are on.
+function T.BuildForm(F, indent, enabled)
+    local ok, err = pcall(function()
+        F:Field("What others see in the brackets for my lines", {
+            w = 150, max = 40, indent = indent, labelW = 300,
+            get = function() return (T.Mine()) end,
+            save = function(box)
+                local _, off = T.Mine()
+                T.Set(box:GetText(), off)
+                box:SetText((T.Mine()))
+            end,
+            hint = "e.g. Floy. Empty: the usual (alt of ...)",
+        })
+        F:Check("Show no tag at all for my lines",
+            "Others see your choice when they use Amazing Hub 0.5.4 or newer with \"Annotate guild chat\" on.",
+            function() local _, off = T.Mine(); return off end,
+            function(on) T.Set((T.Mine()), on and true or false) end,
+            { indent = indent, enabled = enabled })
     end)
-    if ok then return newY end
-    if AmazingHub.Debug then AmazingHub:Debug("Chat tag setting: " .. tostring(newY)) end
-    return y
+    if not ok and AmazingHub.Debug then AmazingHub:Debug("Chat tag setting: " .. tostring(err)) end
 end

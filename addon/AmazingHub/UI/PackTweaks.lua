@@ -25,7 +25,7 @@ end
 -- A line beside the checkbox in Settings, so players know what the tab is.
 local DESC = {
     raids = "Tab: raid sessions, attendance, raid groups. Off by default.",
-    loot = "Tab (officers): loot history and who got what. Off by default.",
+    loot = "Tab: the Loot window (loot rule, points, wishlists, history). Off by default.",
     trials = "Tab (officers): trial members and their progress. Off by default.",
 }
 for id, text in pairs(DESC) do
