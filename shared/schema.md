@@ -51,6 +51,9 @@ kind, name and actor within ±2 h of a stored one is the same event.
 
 `opts.collector` (schema 2: true = collector role, false/nil = member); `cursor[<s>]` newest club ID up to which a history sync completed; `floor` unix s of the oldest row kept
 after a ring-buffer trim (history sync never re-adds older rows); `opts` (`officer`, `other`, `debug`, `pageCap`).
+`first[<GUID>]` (0.7.0, G4) unix s of the earliest guild chat line this client saw from that member (Discord-bridged
+lines do not count; kept through ring-buffer trims); `firstGone[<GUID>]` when that member was first missing from a
+trusted member list; both entries are dropped 90 days after the member left. Read by `GuildLedgerAPI.GetJoined`.
 
 ### Roster entry (`roster["<GUID>"]`)
 
@@ -131,7 +134,7 @@ dropped), held during a boss-fight lock or a throttle. Every message ≤ 255 byt
 | `L` link request | a member who typed `/gl link CODE` | at once, then every 3 min until a collector answers `Y`, at most 30 min | HIGH | ≤ 10 per linking member |
 | `Y` link received | collectors | answer to `L`, ≤ 1 per code per minute | HIGH | ≤ 1 per `L` |
 | `A` alt | characters of an account that requested a link | once per session, 45 s after login | HIGH | ≤ 1 per login of a linked account |
-| `P` map position | players with sharing on (off by default) | only while a `V` for their zone or a parent map was heard in the last 45 s; ≤ 1 per 10 s, only after moving or every 30 s | HIGH | 50 sharers in one watched zone, all moving: 5/s; nobody looking: 0 |
+| `P` map position | players with sharing on (on by default since decision 6) | only while a `V` for their zone or a parent map was heard in the last 45 s; only after moving 15 units or every 30 s; at most 1 per 3 s with up to 10 sharers heard on that map in the last 30 s, 1 per 5 s with up to 30, 1 per 10 s with more (0.7.0; older clients: 1 per 10 s) | HIGH | 10 sharers: 3.3/s; 30 sharers at 5 s: 6/s; 50 at 10 s: 5/s; nobody looking: 0 |
 
 Receivers: every online GuildLedger client receives every message; handling one is a table lookup (no
 disk, no chat output). New kinds (map, link) must add their row here before code (docs/dev/PACK_PLAN.md rule 9).

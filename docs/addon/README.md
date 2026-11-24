@@ -36,7 +36,7 @@ Commands (all optional):
 | `/gl map shape round` / `square`, `/gl map size 6-24`, `/gl map outline on` / `off`, `/gl map reset` | The look of the dots (colours per class: in the hub's Settings) |
 | `/gl link CODE` | Link your characters to your Discord account (see below) |
 | `/gl messages on` / `off` | Show / hide chat messages nobody asked for (off by default; also in the hub's Settings) |
-| `/gl welcome off` / `on` | Login greeting and the guild's message of the day (on by default; also in the hub's Settings) |
+| `/gl welcome off` / `on` | Login greeting and the guild's message of the day, 30 seconds after login (on by default; also in the hub's Settings) |
 | `/gl map me on` / `off` | Your own dot on the world map (off by default: the game's arrow shows you) |
 | `/gl dev on` / `off` | Developer mode: reports in chat of what GuildLedger sends and receives (missing chat text asked for, lines received from whom, what is still missing). Off by default; also in the hub's Settings |
 

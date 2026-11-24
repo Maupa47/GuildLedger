@@ -9,7 +9,7 @@
 -- Text off the network is cleaned again before it reaches a chat line: no "|" codes, no brackets, at most
 -- 16 characters.
 --
--- Copied in by tools/rebrand-hub.py from tools/hub-extra/; edit it there.
+-- Copied in by tools/rebrand-hub.py from addon/hub-extra/; edit it there.
 ----------------------------------------------------------------------
 local UI = AmazingHub.UI
 local C = AmazingHub.Colors

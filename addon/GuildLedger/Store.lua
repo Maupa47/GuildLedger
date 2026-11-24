@@ -120,6 +120,35 @@ function S.Floor(clubId)
     return S.Guild(clubId).floor
 end
 
+-- G4 (0.7.0): the earliest guild chat line this client has seen from each member, first[guid] = t. It stays
+-- when the chat ring buffer is trimmed; dropped 90 days after the member left (S.PruneFirst). Lines bridged
+-- from Discord do not count.
+S.FIRST_KEEP = 90 * 86400
+
+local function noteFirst(g, row)
+    if row.fd or type(row.g) ~= "string" or row.g == "" or type(row.t) ~= "number" then return end
+    g.first = g.first or {}
+    local f = g.first[row.g]
+    if not f or row.t < f then g.first[row.g] = row.t end
+end
+
+-- After a trusted member list: forget first lines of members gone for more than 90 days.
+function S.PruneFirst(clubId, now)
+    local g = S.Guild(clubId)
+    if not g.first or not g.roster then return end
+    g.firstGone = g.firstGone or {}
+    for guid in pairs(g.first) do
+        if g.roster[guid] then
+            g.firstGone[guid] = nil
+        else
+            g.firstGone[guid] = g.firstGone[guid] or now
+            if now - g.firstGone[guid] > S.FIRST_KEEP then
+                g.first[guid], g.firstGone[guid] = nil, nil
+            end
+        end
+    end
+end
+
 -- Insert a row, or merge it into the stored copy. Returns "new", "updated" or nil (no change).
 -- A later copy may add text where there was none and set ed/del/fd; it never replaces text.
 function S.AddChat(clubId, row)
@@ -139,6 +168,7 @@ function S.AddChat(clubId, row)
     end
     g.chat[#g.chat + 1] = row
     idx[k] = row
+    noteFirst(g, row)
     S.unsaved = S.unsaved + 1
     trimChat(key, g)
     return "new"

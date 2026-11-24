@@ -85,6 +85,55 @@ function API.GetLink()
     return ns.Link.Info()
 end
 
+-- G4 (0.7.0): when a member's current stay in the guild began, as far as this client knows:
+-- { t = unix s, estimated = bool, src = "join"|"chat"|"seen" } or nil. The newest join event, else the earliest
+-- of the first guild chat line since the last leave and the member list's first-seen time.
+function API.GetJoined(who)
+    if not ready() or type(who) ~= "string" then return nil end
+    local cid = ns.Chat and ns.Chat.Club and ns.Chat.Club()
+    if not cid then return nil end
+    local g = S.Guild(cid)
+    local roster = g.roster or {}
+    local guid, name = nil, nil
+    if roster[who] then
+        guid, name = who, roster[who].n
+    else
+        for id, m in pairs(roster) do
+            if m.n == who then guid, name = id, m.n break end
+        end
+        name = name or who
+    end
+    local join, left
+    for _, ev in ipairs(g.ev or {}) do
+        if (guid and ev.g == guid) or ev.n == name then
+            if ev.k == "join" and (not join or ev.t > join.t) then join = ev end
+            if (ev.k == "leave" or ev.k == "kick") and (not left or ev.t > left) then left = ev.t end
+        end
+    end
+    local first = guid and g.first and g.first[guid]
+    if first and left and first < left then first = nil end -- a line from an earlier stay
+    if join and not (first and first < join.t and not join.p) then
+        return { t = join.t, estimated = not join.p, src = "join" }
+    end
+    local fs = guid and roster[guid] and roster[guid].fs
+    if first and (not fs or first <= fs) then return { t = first, estimated = true, src = "chat" } end
+    if fs then return { t = fs, estimated = true, src = "seen" } end
+    return nil
+end
+
+-- Collectors: link requests recorded since the data file was last saved, { { name, kind, t }, ... } (G3).
+function API.GetLinkQueue()
+    if not ready() or not ns.Link or not S.IsCollector() then return {} end
+    return ns.Link.Queue()
+end
+
+-- Save the data file now (= /gl flush): the game reloads the interface. Only from a click or a command.
+function API.Flush()
+    if not ready() then return end
+    S.MarkSaved()
+    ns.Compat.Reload()
+end
+
 -- Send a code from Discord's /link (same as /gl link CODE, without the chat line): ok, message.
 function API.RequestLink(code)
     if not ready() or not ns.Link then return false, "GuildLedger is not running" end

@@ -10,6 +10,7 @@ RUN useradd --system --home-dir /data --shell /usr/sbin/nologin guildledger \
 WORKDIR /app
 COPY companion/ /app/companion/
 COPY bot/ /app/bot/
+COPY shared/ /app/shared/
 RUN pip install --no-cache-dir /app/companion /app/bot \
     && rm -rf /app/companion/tests /app/bot/tests
 

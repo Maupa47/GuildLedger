@@ -8,7 +8,7 @@
 -- which also sends the list to the guild). Items the client has not cached yet are asked again a few times.
 -- A line for another character is refused.
 --
--- Copied in by tools/rebrand-hub.py from tools/hub-extra/; edit it there.
+-- Copied in by tools/rebrand-hub.py from addon/hub-extra/; edit it there.
 ----------------------------------------------------------------------
 local UI = AmazingHub.UI
 local C = AmazingHub.Colors

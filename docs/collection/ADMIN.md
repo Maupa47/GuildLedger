@@ -27,24 +27,21 @@ into git, chat or screenshots.
 
 ## 2. Discord setup (once)
 
+The bot application, its permissions, the server's channels and roles, the sign-up, role menus and the
+character forum are in **[../discord/SERVER.md](../discord/SERVER.md)** (moved there 2026-11-24). For the
+collection system you need in addition:
+
 1. **Channels** (all private: you, officers, the bot):
    - `#gl-ingest`: collectors upload here (bot: View Channel, Read Message History, Send Messages, Add Reactions,
      Manage Webhooks for `/collector invite`)
    - `#guild-chat-log` and `#guild-roster-log`: the bot posts here through a webhook each
    - optional `#gl-ops` (monitoring, section 5) and `#gl-backup` (section 6)
-2. **Bot application**: https://discord.com/developers/applications → your app.
-   - *Bot*: turn on **Message Content Intent**. *Reset Token* → put it in `[discord] token`.
-   - *Installation*: scopes `bot` and `applications.commands`; permissions **Manage Roles** (for `/roles`),
-     plus Manage Nicknames only if `set_nickname = true`. Open the install link and authorise your server.
-3. **Server Settings → Roles**: drag the bot's role above every role it should hand out.
-4. Fill in `bot\config.toml` (`[discord]`, `[post]`, `[collectors]`), then `.\tools\deploy.ps1 -UpdateConfig`.
-5. **Roles for linked members**, in Discord as an officer: `/roles verified role:@guild-member`, then
-   `/roles rank rank:<guild rank> role:<Discord role>` for each rank, `/roles show` to check, `/roles sync`
-   to apply now.
+2. Fill in `bot\config.toml` (`[discord]`, `[post]`, `[collectors]`), then `.\tools\deploy.ps1 -UpdateConfig`.
 
-Slash commands: `/link`, `/unlink`, `/chars`, `/whois`, `/seen`, `/joined`, `/activity`, `/dkp`, `/loot`,
-`/wishlist`, `/wish add|remove|export|list`; officers (Manage Roles): `/linkstatus`, `/inactive`, `/roles`, admins (Manage Server): `/collector invite|remove|list`, and
-`/wish` for anyone's characters (members only for their own linked ones).
+Slash commands: `/link`, `/unlink`, `/main`, `/chars`, `/whois`, `/seen`, `/joined`, `/activity`, `/dkp`, `/loot`,
+`/wishlist`, `/wish add|remove|export|list`, right-click → Apps → Characters; officers (Manage Roles):
+`/linkstatus`, `/linkapprove`, `/inactive`, `/roles`; admins (Manage Server): `/setup …`,
+`/collector invite|remove|list`, and `/wish` for anyone's characters (members only for their own linked ones).
 
 ### Loot channel (optional, Amazing Hub's DKP, loot, wishlists, raids)
 

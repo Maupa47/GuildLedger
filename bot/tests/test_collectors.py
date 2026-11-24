@@ -14,7 +14,7 @@ pytest.importorskip("discord")
 import discord as dpy  # noqa: E402
 
 from guildledger.upload import describe  # noqa: E402
-from guildledger_bot import collectors  # noqa: E402
+from guildledger_bot.collection import collectors  # noqa: E402
 from guildledger_bot.client import OK  # noqa: E402
 
 from test_client import CHANNEL, Msg, make_bot, shutdown, upload_msg  # noqa: E402

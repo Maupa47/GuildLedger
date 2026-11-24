@@ -449,3 +449,33 @@ Discord and Windows are only covered by tests with stand-ins.
 | E8 | `/collector remove user:@officer`, officer `/reload`s in game | the webhook is gone from `#gl-ingest`; the companion window shows an upload error (link no longer valid); nothing new in the archive |
 
 Result: (pending)
+
+## Community round 0.7.0 (2026-11-24) — run when ready
+
+Needs: the 0.7.0 bot deployed (`.\tools\deploy.ps1`), a second Discord account for the sign-up checks, a
+member without the addon for C8, the 0.7.0 addon pack on the admin's PC for C15–C18. Setup steps are in
+docs/discord/SERVER.md. Paste what you see in the right column when it differs.
+
+| # | Do | Expect |
+|---|---|---|
+| C0 | **Link chain (before anything else):** a member types `/link` in Discord, then `/gl link CODE` in game on their main; a collector `/reload`s | Discord DM "the character … used your link code"; **Confirm** → "Linked"; `/chars` lists the main. Then the member logs in on an alt (same WoW account), the collector `/reload`s again: a second DM "… logged in on the same WoW account", Confirm → both listed |
+| C1 | admin: `/setup gate channel:#test role:@<members' role>` in a test channel | "Verify button posted …"; the message with a green **Verify** button in `#test` |
+| C2 | second account: press **Verify** | a message only you see: "press **the …**" and five emoji buttons |
+| C3 | press a wrong button twice, then the right one | "That was not it (2 tries left). Press …", then "(1 try left)", then "Thanks, checking done"; the role appears; `#gl-ops` "✅ Bot check passed" (if monitoring is on) |
+| C4 | a fresh check: press three wrong buttons | "Try again in 10 minutes"; Verify again within 10 minutes says the same |
+| C5 | after passing: the bot's DM | your welcome text (default if none), the addon link (`/setup addon`), three link steps, a **Get my link code** button that answers with a code |
+| C6 | second account with DMs from server members off: pass the check | the same welcome shown right after the check, only to you |
+| C7 | `/setup welcome`, write a text, Save | "Saved. New members get:" with the text and the link steps |
+| C8 | a member **without the addon**: Get my link code, then in WoW write `!link CODE` in guild chat; a collector `/reload`s | DM to confirm that character; `#guild-chat-log` shows `!link ••••`, never the code |
+| C9 | `!link CODE` with a code older than 10 minutes | no DM (the bot log says "code expired") |
+| C10 | officer: `/linkapprove user:@member character:<their character>` | "Linked: … (approved by you)"; their roles/nickname follow; a second time: "already linked" |
+| C11 | member: `/main character:` (names suggested), with `/setup nickname mode:on` | "Main character: …"; the server nickname becomes that name within a minute |
+| C12 | admin: `/setup rolemenu preset group:languages`, `/setup rolemenu preset group:interests`, `/setup rolemenu post channel:#pick-roles` | a panel with two menus; a member picks "Deutsch" and "Raids": "Done: added Deutsch, Raids"; the role Deutsch now exists (made by the bot). Picking nothing in Interests removes Raids only |
+| C13 | admin: `/setup directory forum:#characters` (forum with class tags), wait 10–30 minutes | a help post, one post per linked member titled with their main (class tag), "Not linked yet: A-C" … posts; a later rank change edits exactly that post |
+| C14 | right-click a member → Apps → **Characters**; `/whois character:` (type 2 letters) | their characters with level, class, rank, armory link (level 10+), forum post; `/whois` suggests names |
+| C15 | addon 0.7.0: log in (not /reload) | the sprite's greeting about 30 s after login, not before |
+| C16 | two players share the map in the same zone, the other opens the world map | the dot moves about every 3 s and glides instead of jumping; `/gl status` → World map shows no throttling |
+| C17 | collector: a member types `/gl link CODE` while you are online; open `/amazing` → Ledger | "Link requests waiting: 1" and **Send now**; press it: the interface reloads, the line is gone, the DM follows after the upload |
+| C18 | Discord `/joined character:` for a member whose join the archive did not see | a date with "first guild chat line in the archive" when they wrote before the member list first showed them |
+
+Result: (pending)

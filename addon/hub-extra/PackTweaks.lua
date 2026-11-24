@@ -9,7 +9,7 @@
 -- OFF_BY_DEFAULT; a player's own choice is saved and wins):
 --   raids, loot, trials
 -- Keeps the hub quiet in chat unless the player switches messages on (see "Chat messages" below).
--- Copied in by tools/rebrand-hub.py from tools/hub-extra/; edit it there.
+-- Copied in by tools/rebrand-hub.py from addon/hub-extra/; edit it there.
 ----------------------------------------------------------------------
 local UI = AmazingHub.UI
 

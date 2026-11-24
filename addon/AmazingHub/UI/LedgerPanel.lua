@@ -2,7 +2,7 @@
 -- Amazing Hub - Ledger tab (Amazing Forever Guild Pack, Phase 10; our own file, not upstream)
 -- Shows GuildLedger's status (the same lines as /gl status), the Discord link box and a newer version
 -- seen in the guild, through the global GuildLedgerAPI. The world-map options are in Settings (SettingsPlus.lua). Without GuildLedger the tab says so and
--- nothing errors. Copied in by tools/rebrand-hub.py from tools/hub-extra/; edit it there.
+-- nothing errors. Copied in by tools/rebrand-hub.py from addon/hub-extra/; edit it there.
 ----------------------------------------------------------------------
 local UI = AmazingHub.UI
 local C = AmazingHub.Colors
@@ -100,6 +100,14 @@ function AmazingHub:CreateLedgerPanel(parent)
     codeBox:SetScript("OnEnterPressed", submit)
     linkBtn:SetScript("OnClick", submit)
 
+    -- Collectors: link requests waiting for the next save (GuildLedger 0.7.0, GetLinkQueue).
+    local sendBtn = UI:CreateButton(content, "Send now", 100)
+    sendBtn:SetScript("OnClick", function()
+        local a = api()
+        if a and a.Flush then call(a.Flush) end
+    end)
+    sendBtn:Hide()
+
     local function place(widget, h)
         widget:ClearAllPoints()
         widget:SetPoint("TOPLEFT", 8, -y)
@@ -142,6 +150,14 @@ function AmazingHub:CreateLedgerPanel(parent)
         place(codeBox, 30)
         linkBtn:Show()
         if linkMsg then line(linkMsg.text, 11, linkMsg.ok and C.green or C.red, 8, 10) end
+        local waiting = a.GetLinkQueue and call(a.GetLinkQueue) or nil
+        if type(waiting) == "table" and #waiting > 0 then
+            line(string.format("Link requests waiting: %d. They reach Discord with your next /reload or logout;"
+                .. " Send now does it at once (the interface reloads).", #waiting), 11, C.gold, 8, 4)
+            place(sendBtn, 30)
+        else
+            sendBtn:Hide()
+        end
         y = y + 6
 
         line("STATUS (same as /gl status)", 12, C.gold)

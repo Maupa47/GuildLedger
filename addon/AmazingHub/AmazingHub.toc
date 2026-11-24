@@ -175,7 +175,7 @@ UI\AchievementsPanel.lua
 UI\RaidHUD.lua
 UI\Features.lua
 
-# Amazing Forever Guild Pack (tools/hub-extra)
+# Amazing Forever Guild Pack (addon/hub-extra)
 UI\PackTweaks.lua
 UI\TableSort.lua
 UI\ChatTag.lua

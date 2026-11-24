@@ -48,6 +48,7 @@ say "code -> $APP/src"
 rm -rf "$APP/src.new"
 mkdir -p "$APP/src.new"
 cp -r "$SRC/companion" "$SRC/bot" "$APP/src.new/"
+[[ -d "$SRC/shared" ]] && cp -r "$SRC/shared" "$APP/src.new/"   # shared/catalog: item and recipe names
 find "$APP/src.new" -name '__pycache__' -prune -exec rm -rf {} + \
   -o \( -name 'config.toml' -o -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' -o -name '*.log' \) -exec rm -f {} +
 rm -rf "$APP/src.old"

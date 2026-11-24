@@ -115,3 +115,52 @@ def test_collector_switch_is_saved_and_reports_the_running_role():
     a.SetCollector(False)
     assert tuple(a.GetCollector()) == (False, False)
     assert tuple(api(Game()).GetCollector()) == (True, True)
+
+
+def test_joined_date_from_join_event_first_chat_line_or_first_seen():
+    """G4 (0.7.0): GetJoined and the first[guid] table (kept through ring-buffer trims, not for Discord lines)."""
+    game = Game()
+    game.run(30)
+    game.L.execute("""
+        local S, ns = W.ns.Store, W.ns
+        local cid = ns.Chat.Club()
+        local g = S.Guild(cid)
+        g.roster = g.roster or {}
+        g.roster["P-A"] = { n = "Ann Testa", fs = 5000 }
+        g.roster["P-B"] = { n = "Bob Testa", fs = 5000 }
+        g.roster["P-C"] = { n = "Cid Testa", fs = 5000 }
+        S.AddChat(cid, { id = "4000000000:1", t = 4000, s = "g", a = "Ann Testa", g = "P-A", m = "hi", src = "live" })
+        S.AddChat(cid, { id = "3000000000:1", t = 3000, s = "g", a = "Ann Testa", g = "P-A", m = "older", src = "meta" })
+        S.AddChat(cid, { id = "2000000000:1", t = 2000, s = "d", a = "Ann Testa", g = "P-A", fd = true, src = "live" })
+        S.AddChat(cid, { id = "4500000000:1", t = 4500, s = "g", a = "Bob Testa", g = "P-B", src = "meta" })
+        S.AddEvent(cid, { id = "join|Bob Testa||1", t = 4800, p = true, k = "join", n = "Bob Testa", g = "P-B",
+            src = "sys" })
+    """)
+    a = api(game)
+    ann = a.GetJoined("P-A")
+    assert (ann["t"], ann["estimated"], ann["src"]) == (3000, True, "chat"), "the earliest line, not the Discord one"
+    assert dict(a.GetJoined("Ann Testa").items()) == dict(ann.items()), "by name as well"
+    bob = a.GetJoined("Bob Testa")
+    assert (bob["t"], bob["estimated"], bob["src"]) == (4800, False, "join"), "a precise join event wins"
+    cid = a.GetJoined("P-C")
+    assert (cid["t"], cid["src"]) == (5000, "seen")
+    assert a.GetJoined("Nobody Here") is None
+    assert game.guild()["first"]["P-A"] == 3000
+
+
+def test_first_lines_are_forgotten_90_days_after_leaving():
+    game = Game()
+    game.run(30)
+    game.L.execute("""
+        local S, ns = W.ns.Store, W.ns
+        local cid = ns.Chat.Club()
+        local g = S.Guild(cid)
+        g.roster = { ["P-A"] = { n = "Ann Testa" } }
+        g.first = { ["P-A"] = 100, ["P-GONE"] = 100 }
+        S.PruneFirst(cid, 1000)
+        R1 = g.first["P-GONE"]
+        S.PruneFirst(cid, 1000 + 91 * 86400)
+        R2 = g.first["P-GONE"]
+        R3 = g.first["P-A"]
+    """)
+    assert game.L.eval("R1") == 100 and game.L.eval("R2") is None and game.L.eval("R3") == 100

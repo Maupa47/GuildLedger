@@ -50,7 +50,7 @@ def cmd_export(cfg, out: str) -> int:
 def cmd_backup(cfg, out_dir: str | None, keep_days: int) -> int:
     from pathlib import Path
 
-    from . import backup
+    from .collection import backup
     target = backup.make_backup(cfg.db_path, Path(out_dir) if out_dir else cfg.db_path.parent / "backups", keep_days)
     counts = backup.verify(target)
     print(f"backup {target} ok: {counts}")
@@ -66,7 +66,7 @@ def cmd_backup(cfg, out_dir: str | None, keep_days: int) -> int:
 def cmd_verify(cfg, path: str | None) -> int:
     from pathlib import Path
 
-    from . import backup
+    from .collection import backup
     f = Path(path) if path else backup.newest(cfg.db_path.parent / "backups")
     if f is None:
         log.error("no backup found")
@@ -85,7 +85,7 @@ def cmd_report(cfg, day: str | None) -> int:
 
     from guildledger.config import resolve_tz
 
-    from .ops import build_report, day_bounds
+    from .collection.ops import build_report, day_bounds
     from .store import Archive
     tz = resolve_tz(cfg.timezone)
     when = datetime.strptime(day, "%Y-%m-%d") if day else datetime.now(tz) - timedelta(days=1)

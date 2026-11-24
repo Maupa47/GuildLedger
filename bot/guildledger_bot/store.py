@@ -11,7 +11,7 @@ from pathlib import Path
 from guildledger import loot
 from guildledger.store import ImportResult, Spool
 
-from . import ingest
+from .collection import ingest
 
 log = logging.getLogger(__name__)
 

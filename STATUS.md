@@ -1,39 +1,60 @@
 # Status
 
-Last updated: 2026-11-19. Keep this file current when something changes. Overview of the project: [README.md](README.md).
+Last updated: 2026-11-24. Keep this file current when something changes. Overview of the project: [README.md](README.md).
 
 ## What runs right now
 
 | | Where | State |
 |---|---|---|
 | **Part 1: addon pack** | | |
-| Admin PC | linked from the repo (`tools\install.ps1`) | v0.5.4 (GuildLedger + Amazing Hub), role collector |
-| Players | CurseForge "Amazing Forever Guild Pack" | 0.5.2 released; 0.5.3 built (upload state: see the admin); 0.5.4 ready in `dist\` |
+| Admin PC | CurseForge copies in the AddOns folder (no longer linked from the repo: the CurseForge app deleted repo files through the links on 2026-11-24) | 0.6.0 |
+| Players | CurseForge "Amazing Forever Guild Pack" | 0.6.0 |
 | **Part 2: collection system** | | |
-| Bot | the VPS (`<server>` = `[deploy] ssh` in `bot\config.toml`), systemd `guildledger-bot` | updated 2026-11-14 18:19 (link + activity commands, `server_id` set); archive ~9 300 chat rows |
-| Collectors | the admin and two officers (`[collectors]` in `bot\config.toml`) | admin: up to date; the two officers: need the 0.5.4 collector zip (admin is checking with them) |
+| Bot | the VPS (`<server>` = `[deploy] ssh` in `bot\config.toml`), systemd `guildledger-bot` | 0.6.0, deployed 2026-11-24 with the `[loot]` webhook; 3 collector webhooks |
+| Collectors | the admin and two officers | officers: `/collector invite` still to do (bot needs *Manage Webhooks* in `#gl-ingest`) |
 | Backups | VPS, daily 04:30, 14 days | restore check passed 2026-11-12 |
 | Monitoring | `#gl-ops` | **off**: `[ops] webhook` empty (docs/collection/ADMIN.md section 5) |
-| Code | GitHub `Maupa47/GuildLedger` (public) | CI runs every test on push |
+| Code | GitHub `Maupa47/GuildLedger` (public) | CI runs every test on push; release `v0.6.0` published |
+| **Part 3: Discord community** | | |
+| Link, roles | the same bot | `/link`, `/roles`, lookups run since 0.4.0; link chain not yet verified in game (Phase 0 below) |
+| Sign-up, role menus, character forum | the same bot | **built, not deployed** (pack 0.7.0, docs/dev/PLAN_COMMUNITY.md D1-D3) |
 
 Discord can only be as current as the last `/reload` or logout of any collector (WoW writes addon data only
 then); the bot then holds chat 60 s before posting.
 
 ## Next steps (in order)
 
-1. **Easy collector setup (0.6.0):** deploy the bot, Manage Webhooks in `#gl-ingest`, tag `v0.6.0`, then run
-   checks E1–E8. After that officers are added with `/collector invite` and update by themselves. The two
-   existing officers: invite them (new package, new link) or send them the 0.6.0 zip once; later updates are
-   automatic either way.
-2. **Discord roles:** `/roles verified …`, `/roles rank …`, `/roles show` (docs/collection/ADMIN.md section 2).
-3. **Monitoring:** `#gl-ops` webhook (ADMIN.md section 5).
-4. **In-game test rounds** (docs/dev/INGAME_TESTS.md): bridge round B1–B15 (alone: `/reload` is enough), pack
-   round (relay, map, link, activity; needs a second player).
-5. **Upload 0.5.4 to CurseForge** (docs/addon/CURSEFORGE.md) after the tests and the GuildOS author's answer.
-6. Open decision: Discord nicknames (`set_nickname`). Later: delete the hub's unused upstream modules
-   (docs/addon/HUB_AUDIT.md section 9).
+1. **Phase 0 of the community plan:** run the checks in docs/dev/INGAME_TESTS.md "Community round 0.7.0" C0
+   first (one member links a main and an alt through the whole chain), then E1–E8, D1–D8, B38–B48, M1–M6.
+2. **Deploy the 0.7.0 bot** (`.\tools\deploy.ps1`), then set it up in Discord: docs/discord/SERVER.md
+   (bot permissions, `/setup gate` in a test channel first, role menus, character forum). Checks C1–C14.
+3. **Monitoring:** `#gl-ops` webhook (ADMIN.md section 5): the bot check and role menus report there.
+4. **Addon 0.7.0** (login greeting after 30 s, faster map dots, link requests waiting, join dates): CurseForge
+   upload after the in-game checks C15–C18.
+5. **Re-pin the hub to GuildOS 1.40** (plan phase U): audit done (docs/addon/HUB_AUDIT.md section 10). Waiting for
+   the admin: decision 7 (what acts for the player). Answered: alt tag for every link, copy the saved data over
+   to the new key; then U2 on a branch.
+   Item catalogue (phase C): `tools/build-catalog.py` → `shared/catalog/` (bot `/wish add` suggestions) and
+   `addon/hub-extra/Data/ItemCatalog.lua` (hub search, wired in after the re-pin). Forever has no boss loot data.
+6. GLMeterProbe: run `/glmeter` (M1–M6) so the result can be recorded and the probe removed.
+
+Defaults in use until the admin decides otherwise (docs/dev/PLAN_COMMUNITY.md section 4): nickname = the main's
+whole name (2); interests Raids, Dungeons, PvP, Levelling, Crafting, Social (3); everyone with the linked-member
+role may look up others (5); Joined column officers only (6); no public "joined" line (12, `/setup announce`).
+`!link CODE` in guild chat: kept, codes from guild chat live 10 minutes, the member still confirms in Discord,
+our log channels mask the code (Blizzard's own Discord bridge does not; it is not working at the moment).
+`/link approve` is named `/linkapprove`: Discord does not allow sub-commands under a command that is used on
+its own (`/link`).
 
 ## Done (newest first)
+
+- **0.7.0 community round (2026-11-24, built, not deployed, not tested against Discord or in game):**
+  bot split into `collection/` and `community/`; hub sources in `addon/hub-extra/`. Discord: Verify button with a
+  bot check, private welcome with a *Get my link code* button, `/setup …` (gate, welcome, addon, nickname,
+  announce, rolemenu, directory, armory, show), `/main`, `/linkapprove`, `!link CODE` in guild chat, role menus for
+  interests and 20 languages, right-click → Apps → Characters, `/whois` with suggestions and armory links, and a
+  character forum kept up to date. GuildLedger: greeting after 30 s, map dots every 3–10 s with gliding, collectors
+  see waiting link requests (hub: *Send now*), join dates from the first guild chat line (`GetJoined`, bot `/joined`).
 
 - **0.6.0, easy collector setup (2026-11-19, not deployed, not tested on Windows or against Discord):**
   `/collector invite @officer` → the officer presses a button → the bot creates their webhook, registers it

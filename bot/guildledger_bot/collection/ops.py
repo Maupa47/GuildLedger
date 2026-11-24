@@ -17,7 +17,7 @@ from typing import Any
 from guildledger import discord
 from guildledger.config import resolve_tz
 
-from .store import Archive
+from ..store import Archive
 
 log = logging.getLogger(__name__)
 

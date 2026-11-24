@@ -37,7 +37,7 @@ try {
     $skipDirs = @("__pycache__", "logs", "test2", ".pytest_cache", "build")
     $skipFiles = @("config.toml")
     $skipExt = @(".db", ".db-wal", ".db-shm", ".log", ".pyc", ".tmp", ".partial")
-    foreach ($top in @("companion", "bot")) {
+    foreach ($top in @("companion", "bot", "shared")) {
         $base = Join-Path $root $top
         Get-ChildItem -Path $base -Recurse -File | Where-Object {
             $rel = $_.FullName.Substring($root.Length + 1)
@@ -53,7 +53,7 @@ try {
         }
     }
     $tgz = Join-Path $stage "guildledger.tgz"
-    & $tar -czf $tgz -C (Join-Path $stage "src") companion bot
+    & $tar -czf $tgz -C (Join-Path $stage "src") companion bot shared
     if ($LASTEXITCODE -ne 0) { throw "tar failed" }
     if ($DryRun) {
         & $tar -tzf $tgz | Where-Object { $_ -notmatch '/$' }

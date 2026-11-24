@@ -14,7 +14,7 @@
 -- (zone/continent/world viewers or my zone only), which members I see (anywhere / my continent / my zone), on
 -- which kinds of map, names next to the dots, and the look of the dots: shape, size, outline, colour per class. Read and written through GuildLedgerAPI.
 --
--- Copied in by tools/rebrand-hub.py from tools/hub-extra/; edit it there.
+-- Copied in by tools/rebrand-hub.py from addon/hub-extra/; edit it there.
 ----------------------------------------------------------------------
 local UI = AmazingHub.UI
 local C = AmazingHub.Colors

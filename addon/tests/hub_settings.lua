@@ -1,4 +1,4 @@
--- Amazing Hub Settings additions (tools/hub-extra/SettingsPlus.lua, as built into addon/AmazingHub/UI): fold-out
+-- Amazing Hub Settings additions (addon/hub-extra/SettingsPlus.lua, as built into addon/AmazingHub/UI): fold-out
 -- sections and the World map section, with fake frames that keep their anchor points, a fake upstream Settings
 -- page and a fake GuildLedgerAPI. Run by addon/tests/test_hub.py with ADDON = the AmazingHub folder.
 ADDON = ADDON or "."

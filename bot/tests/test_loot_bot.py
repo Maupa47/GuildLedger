@@ -11,7 +11,7 @@ from guildledger import discord, loot as gl_loot
 from guildledger.store import Spool
 from guildledger.svparse import parse, parse_file
 from guildledger.upload import Uploader, describe
-from guildledger_bot import loot
+from guildledger_bot.collection import loot
 from guildledger_bot.store import Archive
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "companion" / "tests"))
@@ -130,3 +130,16 @@ def test_bot_config_reads_the_loot_section(tmp_path):
                  '[loot]\nwebhook = "https://y"\nhold_seconds = 60\nstandings_top = 5\n', encoding="utf-8")
     c = config.load(f)
     assert c.loot_webhook == "https://y" and c.loot_hold == 60 and c.loot_top == 5
+
+
+def test_catalog_names_and_search():
+    """Phase C: the generated catalogue (shared/catalog/items.json) gives names and /wish add suggestions."""
+    from guildledger_bot import catalog
+    items = catalog.items()
+    assert len(items) > 1000, "shared/catalog/items.json is in the repository"
+    some = next(iter(items.values()))
+    assert catalog.name_of(some["id"]) == some["name"]
+    hits = catalog.search_items(some["name"][:4])
+    assert hits and len(hits) <= 25 and all(some["name"][:4].lower() in h["name"].lower() for h in hits)
+    assert catalog.search_items("x") == [] and len(catalog.label(some)) <= 100
+    assert catalog.recipes() and {"spell", "name", "profession", "materials"} <= set(catalog.recipes()[0])

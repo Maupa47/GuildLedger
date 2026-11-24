@@ -28,6 +28,13 @@ NO_MENTIONS = {"parse": []}
 USER_AGENT = "GuildLedger-Companion/0.1 (python urllib)"
 
 NO_TEXT = "*(text not captured)*"
+# "!link CODE" typed in guild chat links a character to Discord (bot, docs/dev/PLAN_COMMUNITY.md D1): the log
+# channels never show the code.
+LINK_CODE = re.compile(r"(?i)^(\s*!link\s+)\S+")
+
+
+def mask_link_code(text: str) -> str:
+    return LINK_CODE.sub(lambda m: m.group(1) + "••••", text)
 
 # ---------------------------------------------------------------------- escaping
 
@@ -74,7 +81,7 @@ def chat_line(r: Any, tz: tzinfo | None, full_date: bool = False) -> str:
     name = f"**{escape(r['author'])}**"
     if r["from_discord"]:
         name += " *(Discord)*"
-    text = wow_to_discord(r["text"]) if r["text"] is not None else NO_TEXT
+    text = wow_to_discord(mask_link_code(r["text"])) if r["text"] is not None else NO_TEXT
     flags = (" *(edited)*" if r["edited"] else "") + (" *(deleted)*" if r["deleted"] else "")
     return _clip(f"{' '.join(parts)} {name}: {text}{flags}", MAX_LINE)
 

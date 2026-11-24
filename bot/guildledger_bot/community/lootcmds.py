@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING
 import discord as dpy
 from discord import app_commands
 
-from . import loot
-from .commands import NO_MENTIONS, esc, is_officer, ts
+from ..collection import loot
+from .common import NO_MENTIONS, esc, is_officer, ts
 
 if TYPE_CHECKING:
-    from .client import LedgerBot
+    from ..client import LedgerBot
 
 NO_DATA = ("No loot data yet. It arrives once an officer with the companion has Amazing Hub's Raids/Loot tabs"
            " in use (Settings -> Loot -> loot system) and has done a /reload or logout.")
@@ -117,7 +117,13 @@ def register_loot(bot: "LedgerBot") -> None:
 
     wish = app_commands.Group(name="wish", description="Your wishlist from Discord", guild_only=True)
 
+    async def item_choices(inter: dpy.Interaction, current: str):
+        from .. import catalog
+        return [app_commands.Choice(name=catalog.label(i), value=str(i["id"]))
+                for i in catalog.search_items(current)]
+
     @wish.command(name="add", description="Add an item to a wishlist (item ID, Wowhead link or exact item name)")
+    @app_commands.autocomplete(item=item_choices)
     @app_commands.describe(item="Item ID, a Wowhead link, or the item's name", character="Your character (empty: your"
                            " linked one); officers: anyone", offspec="Off spec (main spec if not ticked)")
     async def wish_add(inter: dpy.Interaction, item: str, character: str | None = None, offspec: bool = False):

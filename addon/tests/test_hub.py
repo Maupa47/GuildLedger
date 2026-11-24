@@ -79,7 +79,7 @@ def test_ledger_tab_is_built_in():
     assert toc.rstrip().endswith(
         "UI\\PackTweaks.lua\nUI\\TableSort.lua\nUI\\ChatTag.lua\nUI\\WishImport.lua\nUI\\LedgerPanel.lua\nUI\\SettingsPlus.lua")
     for name in ("PackTweaks.lua", "TableSort.lua", "ChatTag.lua", "WishImport.lua", "LedgerPanel.lua", "SettingsPlus.lua"):
-        assert (HUB / "UI" / name).read_bytes() == (ROOT / "tools" / "hub-extra" / name).read_bytes()
+        assert (HUB / "UI" / name).read_bytes() == (ROOT / "addon" / "hub-extra" / name).read_bytes()
 
 
 def test_no_upstream_names_left():
@@ -166,8 +166,10 @@ def test_hub_matches_the_script(tmp_path):
     out = tmp_path / "AmazingHub"
     subprocess.run([sys.executable, str(ROOT / "tools" / "rebrand-hub.py"), "--out", str(out)], check=True,
                    capture_output=True)
-    built = {p.relative_to(out).as_posix(): p.read_bytes() for p in out.rglob("*") if p.is_file()}
-    have = {p.relative_to(HUB).as_posix(): p.read_bytes() for p in HUB.rglob("*") if p.is_file()}
+    # line endings do not count: a Windows checkout may turn LF into CRLF in either copy
+    norm = lambda b: b.replace(b"\r\n", b"\n")  # noqa: E731
+    built = {p.relative_to(out).as_posix(): norm(p.read_bytes()) for p in out.rglob("*") if p.is_file()}
+    have = {p.relative_to(HUB).as_posix(): norm(p.read_bytes()) for p in HUB.rglob("*") if p.is_file()}
     assert built.keys() == have.keys()
     assert [k for k in built if built[k] != have[k]] == []
 
@@ -223,7 +225,7 @@ def test_wishlist_import_takes_the_bots_export_line():
     sys.path[:0] = [str(ROOT / "bot"), str(ROOT / "companion")]
     import sqlite3
 
-    from guildledger_bot.loot import wish_export
+    from guildledger_bot.collection.loot import wish_export
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
     db.execute("CREATE TABLE wishes (guild TEXT, member TEXT, name TEXT, item_id INT, offspec INT, added_at INT)")

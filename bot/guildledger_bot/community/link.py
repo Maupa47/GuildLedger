@@ -8,17 +8,20 @@ belongs to a linked user gets the same kind of confirmation.
 
 from __future__ import annotations
 
+import re
 import secrets
 import time
 import json
 from dataclasses import dataclass
 from typing import Any
 
-from .store import Archive
+from ..store import Archive
 
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no I, O, 0, 1 (same as the addon)
 CODE_LEN = 8
 CODE_TTL = 1800
+CHAT_CODE_TTL = 600  # "!link CODE" in guild chat: everyone there sees the line, so a shorter life
+CHAT_CODE = re.compile(r"^\s*!link\s+([A-Za-z0-9]{%d})\b" % CODE_LEN)
 MAX_OPEN = 3  # open confirmations per Discord user
 
 _DDL = """
@@ -35,6 +38,8 @@ CREATE TABLE IF NOT EXISTS link_confirms(
   name TEXT NOT NULL, tag TEXT, code TEXT, via_collector TEXT, created_at INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'open', notified INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS link_user_state(discord_user_id INTEGER PRIMARY KEY, out_since INTEGER);
+CREATE TABLE IF NOT EXISTS link_mains(discord_user_id INTEGER PRIMARY KEY, guild TEXT NOT NULL, guid TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS link_welcomed(discord_user_id INTEGER PRIMARY KEY, at INTEGER NOT NULL);
 """
 
 
@@ -108,6 +113,7 @@ class Links:
         """Handle uploaded link requests not seen yet. Returns how many confirmations were opened."""
         opened = 0
         rows = self.db.execute("SELECT * FROM link_rows WHERE processed=0 ORDER BY ts_utc").fetchall()
+        opened += self._process_chat_codes()
         with self.db:
             for r in rows:
                 result = self._process_row(r)
@@ -115,6 +121,31 @@ class Links:
                     opened += 1
                 self.log.append(f"link request {r['kind']} from {r['name']}: {result}")
                 self.db.execute("UPDATE link_rows SET processed=1 WHERE guild=? AND id=?", (r["guild"], r["id"]))
+        return opened
+
+    def _process_chat_codes(self) -> int:
+        """Members without the addon type "!link CODE" in guild chat; a collector archives the line with its text.
+        Each chat row is looked at once (by rowid) and then treated like a link request from its author."""
+        last = int(self.a.get_state("link.chat_rowid", "0") or 0)
+        rows = self.db.execute(
+            "SELECT rowid, guild, id, ts_utc, author, guid, text, first_collector FROM chat WHERE rowid>? AND"
+            " stream='g' AND text LIKE '%!link %' ORDER BY rowid", (last,)).fetchall()
+        top = self.db.execute("SELECT MAX(rowid) FROM chat").fetchone()[0] or 0
+        opened = 0
+        with self.db:
+            for c in rows:
+                m = CHAT_CODE.match(c["text"] or "")
+                if not m:
+                    continue
+                req = {"guild": c["guild"], "guid": c["guid"], "name": c["author"], "kind": "chat",
+                       "code": m.group(1).upper(), "ts_utc": c["ts_utc"], "tag": None,
+                       "first_collector": c["first_collector"]}
+                result = self._process_row(req)
+                if result == "confirmation opened":
+                    opened += 1
+                self.log.append(f"link code in guild chat from {c['author']}: {result}")
+        if top > last:
+            self.a.set_state("link.chat_rowid", str(top))
         return opened
 
     def _process_row(self, r: Any) -> str:
@@ -125,13 +156,14 @@ class Links:
         guid, name = member
         linked = self.db.execute("SELECT discord_user_id FROM links WHERE guild=? AND guid=?",
                                  (guild, guid)).fetchone()
-        if r["kind"] == "link":
+        if r["kind"] in ("link", "chat"):
             code = self.db.execute("SELECT * FROM link_codes WHERE code=?", (r["code"],)).fetchone()
             if code is None:
                 return "unknown code"
             if code["used_at"] is not None:
                 return "code already used"
-            if not (code["created_at"] - 60 <= r["ts_utc"] <= code["created_at"] + CODE_TTL):
+            ttl = CHAT_CODE_TTL if r["kind"] == "chat" else CODE_TTL
+            if not (code["created_at"] - 60 <= r["ts_utc"] <= code["created_at"] + ttl):
                 return "code expired"
             user = code["discord_user_id"]
             if linked:
@@ -188,6 +220,68 @@ class Links:
                 self.db.execute("UPDATE link_codes SET used_at=? WHERE code=?", (now, r["code"]))
         return f"Linked: {r['name']} is now your character."
 
+    # ------------------------------------------------------------------ officer approval, main character
+
+    def find_member(self, name: str) -> list[dict[str, Any]]:
+        """Current guild members called `name` (case-insensitive, whole name)."""
+        return [dict(r) for r in self.db.execute(
+            "SELECT guild, guid, name, level FROM members WHERE in_guild=1 AND lower(name)=lower(?)", (name,))]
+
+    def approve(self, officer_id: int, user_id: int, name: str) -> str:
+        """An officer links a current guild member at once (no code, no collector wait)."""
+        found = self.find_member(name)
+        if not found:
+            return f"{name} is not a current guild member (as of the newest member list)."
+        if len(found) > 1:
+            return f"There are {len(found)} guild members called {name}; ask the member to use /link."
+        m = found[0]
+        taken = self.db.execute("SELECT discord_user_id FROM links WHERE guild=? AND guid=?",
+                                (m["guild"], m["guid"])).fetchone()
+        if taken:
+            return (f"{m['name']} is already linked to this user." if taken[0] == user_id
+                    else f"{m['name']} is linked to another Discord user; unlink it first.")
+        with self.db:
+            self.db.execute("INSERT INTO links VALUES(?,?,?,?,?,?,?)",
+                            (m["guild"], m["guid"], m["name"], user_id, None, int(self.now()),
+                             f"approved by {officer_id}"))
+            self.db.execute("DELETE FROM link_blocks WHERE discord_user_id=? AND guild=? AND guid=?",
+                            (user_id, m["guild"], m["guid"]))
+        return f"Linked: {m['name']} is now a character of this user (approved by you)."
+
+    def set_main(self, user_id: int, name: str | None) -> str:
+        if not name:
+            with self.db:
+                self.db.execute("DELETE FROM link_mains WHERE discord_user_id=?", (user_id,))
+            return "Main character cleared: your highest-level character counts as main."
+        r = self.db.execute("SELECT guild, guid, name FROM links WHERE discord_user_id=? AND lower(name)=lower(?)",
+                            (user_id, name)).fetchone()
+        if r is None:
+            return f"{name} is not one of your linked characters (see /link)."
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO link_mains VALUES(?,?,?)", (user_id, r["guild"], r["guid"]))
+        return f"Main character: {r['name']}."
+
+    def main_of(self, user_id: int) -> dict[str, Any] | None:
+        """The main: the one the user chose (if still linked and in the guild), else the highest level in the guild."""
+        r = self.db.execute(
+            "SELECT l.name, l.guid, l.guild FROM link_mains x JOIN links l ON l.discord_user_id=x.discord_user_id"
+            " AND l.guild=x.guild AND l.guid=x.guid JOIN members m ON m.guild=l.guild AND m.guid=l.guid"
+            " WHERE x.discord_user_id=? AND m.in_guild=1", (user_id,)).fetchone()
+        if r is None:
+            r = self.db.execute(
+                "SELECT l.name, l.guid, l.guild FROM links l JOIN members m ON m.guild=l.guild AND m.guid=l.guid"
+                " WHERE l.discord_user_id=? AND m.in_guild=1 ORDER BY m.level DESC, l.linked_at LIMIT 1",
+                (user_id,)).fetchone()
+        return dict(r) if r else None
+
+    def first_link_done(self, user_id: int) -> bool:
+        """True exactly once: the first time a user has a confirmed link (role menus, public line)."""
+        if not self.db.execute("SELECT 1 FROM links WHERE discord_user_id=?", (user_id,)).fetchone():
+            return False
+        with self.db:
+            cur = self.db.execute("INSERT OR IGNORE INTO link_welcomed VALUES(?,?)", (user_id, int(self.now())))
+        return cur.rowcount == 1
+
     # ------------------------------------------------------------------ queries and unlinking
 
     def unlink(self, user_id: int, name: str | None = None) -> int:
@@ -203,10 +297,26 @@ class Links:
 
     def chars(self, user_id: int) -> list[dict[str, Any]]:
         rows = self.db.execute(
-            "SELECT l.name, l.guid, l.guild, m.in_guild, m.level, m.class, m.rank_name, m.last_seen FROM links l"
+            "SELECT l.name, l.guid, l.guild, m.in_guild, m.level, m.class, m.rank_name, m.last_seen, l.via_collector"
+            " FROM links l"
             " LEFT JOIN members m ON m.guild=l.guild AND m.guid=l.guid WHERE l.discord_user_id=? ORDER BY l.name",
             (user_id,)).fetchall()
         return [dict(r) for r in rows]
+
+    def search_members(self, text: str, limit: int = 25) -> list[str]:
+        """Guild member names for autocomplete: names starting with the text first, then names containing it."""
+        t = (text or "").strip().lower()
+        rows = [r[0] for r in self.db.execute(
+            "SELECT DISTINCT name FROM members WHERE in_guild=1 AND instr(lower(name), ?) > 0"
+            " ORDER BY (instr(lower(name), ?) = 1) DESC, name COLLATE NOCASE LIMIT ?", (t, t, limit))]
+        return rows
+
+    def lookup(self, name: str) -> list[dict[str, Any]]:
+        """/whois: guild characters called `name` (also ones who left), with the Discord user if linked."""
+        return [dict(r) for r in self.db.execute(
+            "SELECT m.name, m.level, m.class, m.rank_name, m.in_guild, m.last_seen, l.discord_user_id AS uid"
+            " FROM members m LEFT JOIN links l ON l.guild=m.guild AND l.guid=m.guid WHERE lower(m.name)=lower(?)"
+            " ORDER BY m.in_guild DESC", (name,))]
 
     def whois(self, name: str) -> list[tuple[int, str]]:
         return [(r[0], r[1]) for r in self.db.execute(
@@ -247,12 +357,9 @@ class Links:
         return [r[0] for r in self.db.execute("SELECT DISTINCT discord_user_id FROM links")]
 
     def main_name(self, user_id: int) -> str | None:
-        """Nickname candidate: the highest-level character in the guild."""
-        r = self.db.execute(
-            "SELECT l.name FROM links l JOIN members m ON m.guild=l.guild AND m.guid=l.guid"
-            " WHERE l.discord_user_id=? AND m.in_guild=1 ORDER BY m.level DESC, l.linked_at LIMIT 1",
-            (user_id,)).fetchone()
-        return r[0] if r else None
+        """Nickname: the main's whole name (decision 2), see main_of."""
+        m = self.main_of(user_id)
+        return m["name"] if m else None
 
     # ------------------------------------------------------------------ role settings (set with /roles in Discord)
 

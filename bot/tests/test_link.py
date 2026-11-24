@@ -2,8 +2,8 @@
 
 import pytest
 
-from guildledger_bot import activity
-from guildledger_bot.link import ALPHABET, MAX_OPEN, Links
+from guildledger_bot.community import activity
+from guildledger_bot.community.link import ALPHABET, MAX_OPEN, Links
 from guildledger_bot.store import Archive
 
 G = "42"
@@ -177,7 +177,8 @@ def test_activity_queries(env):
     (bob,) = activity.find_chars(links, "Bob Two")
     j = activity.joined(links, bob)
     assert j["when"] == T0 - 86400 and j["precision"] == "exact"
-    assert "first seen" in activity.joined(links, ann)["precision"]
+    j = activity.joined(links, ann)  # G4: her first guild chat line is older than the member list's first sight
+    assert j["when"] == T0 - 5 * 3600 and "first guild chat line" in j["precision"]
     code = links.new_code(USER)
     request(a, "link", "Ann One", code=code)
     links.process()
@@ -199,3 +200,15 @@ def test_role_settings_saved_in_the_archive_win_over_config(env):
     links.set_verified_role(None)
     assert links.role_settings(5, {}) == (0, {"Officer": 222})
     assert [r[0] for r in links.guild_ranks()] == ["Officer", "Member"]
+
+
+def test_joined_prefers_a_chat_line_inside_the_diff_window(env):
+    """G4: a diff join is an estimate made later; a chat line inside its window proves an earlier time."""
+    a, links, clock = env
+    a.import_rows(G, "Guild", [{"id": f"{T0 - 7200}000000:1", "t": T0 - 7200, "s": "g", "a": "Bob Two",
+                                "g": "P-BOB", "src": "meta"}],
+                  [{"id": "join|Bob Two||diff:1", "t": T0, "w": T0 - 86400, "p": False, "k": "join",
+                    "n": "Bob Two", "g": "P-BOB", "src": "diff"}], "c1")
+    (bob,) = activity.find_chars(links, "Bob Two")
+    j = activity.joined(links, bob)
+    assert j["when"] == T0 - 7200 and "chat line" in j["precision"]

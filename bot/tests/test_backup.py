@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from guildledger_bot import backup
+from guildledger_bot.collection import backup
 from guildledger_bot.store import Archive
 
 

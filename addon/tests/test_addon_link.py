@@ -113,3 +113,21 @@ def test_link_request_reaches_companion_and_bot_archive(tmp_path):
         assert spool.import_sv(data, "c1").links_new == 0
         (row,) = spool.pending_links("42")
         assert row["code"] == CODE and row["k"] == "link"
+
+
+def test_collector_sees_waiting_link_requests_until_the_file_is_saved():
+    """G3 (0.7.0): GetLinkQueue lists requests recorded since the last save; members get an empty list."""
+    guild = link_guild()
+    coll, mem = guild.g(COLL), guild.g(MEM)
+    api = coll.L.globals().GuildLedgerAPI
+    assert len(list(api.GetLinkQueue().values())) == 0
+    mem.slash(f"link {CODE}")
+    guild.run(5)
+    queue = list(api.GetLinkQueue().values())
+    assert len(queue) == 1 and queue[0]["name"] == f"{MEM}-Forever" and queue[0]["kind"] == "link"
+    guild.run(400)  # no re-sending after the ack; the member's alt announcement may follow
+    assert [q["kind"] for q in api.GetLinkQueue().values()].count("link") == 1
+    assert len(list(mem.L.globals().GuildLedgerAPI.GetLinkQueue().values())) == 0
+    coll.reload()
+    assert len(list(coll.L.globals().GuildLedgerAPI.GetLinkQueue().values())) == 0, "saved: nothing waits"
+    assert coll.errors == 0, coll.last_error()

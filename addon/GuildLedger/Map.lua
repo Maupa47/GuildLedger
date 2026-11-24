@@ -2,7 +2,9 @@
 -- Demand-driven, so an idle guild sends nothing (budget in shared/schema.md 5):
 --   V mapID        a viewer: "my world map shows this map" (while it is open, at most every 30 s)
 --   P mapID x y    a sharer: "I am here" (x, y 0..9999) - only while a V for their map or a parent map was
---                  heard in the last 45 s, at most every 10 s, and only if moved or 30 s passed.
+--                  heard in the last 45 s, only if moved or 30 s passed, and at most every 3, 5 or 10 s: the
+--                  gap grows with the number of sharers heard on the same map in the last 30 s (0.7.0, G2).
+--                  Viewers glide a dot from its last position to the new one (display only).
 -- Sharing is ON by default (decision 6, 2026-11-14); /gl map share off is remembered (opts.mapOptOut).
 -- Never in instances, during a boss-fight lock or outside the guild. Positions live in memory only.
 -- Look of the dots (0.5.2; /gl map shape|size|outline|colors, or the hub's Settings): opts.mapShape
@@ -24,9 +26,14 @@ local SEP = Comms.SEP
 local TICK = 1
 local WATCH_EVERY = 30 -- s: a viewer repeats its V while the map stays open on the same map
 local WATCH_TTL = 45 -- s: a sharer answers V messages heard within this
-local POS_GAP = 10 -- s: at most one P per sharer this often
+-- At most one P per sharer this often; the gap follows how many sharers were heard on my map in the last
+-- SHARERS_WINDOW s (me included): up to 10 -> 3 s, up to 30 -> 5 s, more -> 10 s (budget: shared/schema.md 5).
+local POS_GAPS = { { 10, 3 }, { 30, 5 } }
+local POS_GAP_MAX = 10
+local SHARERS_WINDOW = 30
 local POS_REFRESH = 30 -- s: P again even without moving, so dots do not fade
-local MOVE_MIN = 30 -- in 0..9999 units: smaller moves are not worth a message
+local MOVE_MIN = 15 -- in 0..9999 units: smaller moves are not worth a message
+local GLIDE_MAX = 10 -- s: a dot glides from its old to its new place over the time between the two messages
 local FADE_AFTER, DROP_AFTER = 60, 120 -- s: dots fade, then disappear
 local PARENT_DEPTH = 8
 local ROSTER_REFRESH = 600 -- s: viewers ask the game for the member list (for class colours) this often
@@ -36,7 +43,7 @@ local RIM = 2 -- px: the dark outline on each side
 local ROUND = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 
 local watches = {} -- [mapID] = GetTime() of the last V heard
-local positions = {} -- [sender] = { map, x, y, at }
+local positions = {} -- [sender] = { map, x, y, at, fx, fy, span } (fx/fy: where the glide starts)
 local lastWatch = { map = nil, at = -1e9 }
 local lastPos = { map = nil, x = -1e9, y = -1e9, at = -1e9 }
 local stats = { sentP = 0, sentV = 0, shown = 0 }
@@ -178,8 +185,35 @@ Comms.Handle("P", function(sender, text, me)
     local m, x, y = text:match("^P\t(%d+)\t(%d+)\t(%d+)$")
     m, x, y = int(m, 1, 1e9), int(x, 0, 9999), int(y, 0, 9999)
     if not (m and x and y) then return end
-    positions[sender] = { map = m, x = x, y = y, at = C.Clock() }
+    local now, old = C.Clock(), positions[sender]
+    local p = { map = m, x = x, y = y, at = now }
+    if old and old.map == m and now - old.at <= GLIDE_MAX then
+        p.fx, p.fy = M.Shown(old, now)
+        p.span = now - old.at
+    end
+    positions[sender] = p
 end)
+
+-- Where a dot is drawn now: on its way from (fx, fy) to (x, y) while the glide lasts.
+function M.Shown(p, now)
+    if not p.fx or not p.span or p.span <= 0 then return p.x, p.y end
+    local t = (now - p.at) / p.span
+    if t >= 1 then return p.x, p.y end
+    if t < 0 then t = 0 end
+    return math.floor(p.fx + (p.x - p.fx) * t + 0.5), math.floor(p.fy + (p.y - p.fy) * t + 0.5)
+end
+
+-- The gap between my P messages: how many sharers were heard on this map lately (me included).
+function M.PosGap(map, now)
+    local n = 1
+    for _, p in pairs(positions) do
+        if p.map == map and now - p.at <= SHARERS_WINDOW then n = n + 1 end
+    end
+    for _, step in ipairs(POS_GAPS) do
+        if n <= step[1] then return step[2] end
+    end
+    return POS_GAP_MAX
+end
 
 ---------------------------------------------------------------------------------------------------
 -- Sharing my position
@@ -187,9 +221,10 @@ end)
 
 local function share(now)
     if not sharing() or not club() or C.InLockdown() or C.InInstance() then return end
-    if now - lastPos.at < POS_GAP then return end
+    if now - lastPos.at < 3 then return end -- the shortest gap; the real one is checked below
     local map = C.PlayerMap()
     if not map or not watched(map, now) then return end
+    if now - lastPos.at < M.PosGap(map, now) then return end
     local fx, fy = C.PlayerMapPos(map)
     if not fx then return end
     local x, y = math.floor(fx * 9999 + 0.5), math.floor(fy * 9999 + 0.5)
@@ -317,7 +352,8 @@ local function draw(frame, view, now)
     end
     for sender, p in pairs(positions) do
         local age = now - p.at
-        local nx, ny = project(p, view)
+        local sx, sy = M.Shown(p, now)
+        local nx, ny = project({ map = p.map, x = sx, y = sy }, view)
         local info, name = memberInfo(sender)
         local known = info ~= nil or next(rosterInfo) == nil -- with a loaded member list, only guild members
         if nx and known and not Comms.IsSelf(sender) and not C.InGroupWith(sender) and near(p.map) then

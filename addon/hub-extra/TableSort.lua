@@ -4,7 +4,7 @@
 -- tables (tools/rebrand-hub.py patches them); the Roster sorts this way already. Until a heading is clicked a table
 -- keeps its own order. The choice is remembered per table (settings.tableSort).
 --
--- Copied in by tools/rebrand-hub.py from tools/hub-extra/; edit it there.
+-- Copied in by tools/rebrand-hub.py from addon/hub-extra/; edit it there.
 ----------------------------------------------------------------------
 local T = {}
 AmazingHub.TableSort = T

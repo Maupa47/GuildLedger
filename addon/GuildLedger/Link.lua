@@ -24,6 +24,19 @@ local lastSent = -1e9
 local altSent = false
 local ackedAt = {} -- collector: [code] = GetTime()
 local stats = { passedOn = 0, alts = 0 }
+-- Link requests this collector recorded since its file was last saved (G3, 0.7.0): they reach Discord only after
+-- the next /reload or logout, so the collector is told once and the hub's Ledger tab offers "Send now".
+local queue = {} -- { n = sender, k = "link"|"alt", t = time }
+local told = false
+
+local function queued(sender, kind)
+    queue[#queue + 1] = { n = sender, k = kind, t = C.Now() }
+    if not told then
+        told = true
+        ns.Notice("a guild member's Discord link request is waiting in your data file. /gl flush (or the hub's"
+            .. " Ledger tab: Send now) passes it on now; otherwise it goes with your next /reload or logout.")
+    end
+end
 
 local function club()
     if ns.Chat and ns.Chat.Club then return ns.Chat.Club() end
@@ -116,6 +129,7 @@ Comms.Handle("L", function(sender, text, me)
     if S.AddLink(cid, { id = "link|" .. code .. "|" .. sender, t = now, k = "link", code = code, tag = tag,
         n = sender, g = guidOf(sender) }) then
         stats.passedOn = stats.passedOn + 1
+        queued(sender, "link")
     end
     if C.Clock() - (ackedAt[code] or -1e9) >= ACK_GAP then
         ackedAt[code] = C.Clock()
@@ -132,6 +146,7 @@ Comms.Handle("A", function(sender, text, me)
     if S.AddLink(cid, { id = "alt|" .. tag .. "|" .. sender .. "|" .. math.floor(now / 86400), t = now, k = "alt",
         tag = tag, n = sender, g = guidOf(sender) }) then
         stats.alts = stats.alts + 1
+        queued(sender, "alt")
     end
 end)
 
@@ -152,6 +167,13 @@ function M.OnInit()
             end
         end)
     end)
+end
+
+-- Link requests waiting for the next save (GuildLedgerAPI.GetLinkQueue): a plain copy.
+function M.Queue()
+    local out = {}
+    for i, q in ipairs(queue) do out[i] = { name = q.n, kind = q.k, t = q.t } end
+    return out
 end
 
 -- Plain copy of the link state (GuildLedgerAPI): no table of ours leaves.

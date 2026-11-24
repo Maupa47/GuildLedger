@@ -71,7 +71,7 @@ RosterLog stays on (trials need it). Details and test status: docs/addon/HUB_AUD
 Hub round reported OK by the admin 2026-11-14.
 **Progress (2026-11-14, later):** Phase 10 built: `GuildLedger/API.lua` (global `GuildLedgerAPI`, apiVersion 1:
 Version, IsCollector, GetModules, GetStatus = the exact `/gl status` lines, GetMap / SetMapShare / SetMapPins
-(quiet), GetLink, NewerVersion) and the hub's **Ledger** tab (`tools/hub-extra/LedgerPanel.lua`, copied in by the
+(quiet), GetLink, NewerVersion) and the hub's **Ledger** tab (`addon/hub-extra/LedgerPanel.lua`, copied in by the
 rebrand script): status, map switches, update notice; `/amazing map` opens the world map. Not tested in game
 (docs/dev/INGAME_TESTS.md "Bridge test round"). Deviation from section 8: the two map setters are the only
 state-changing calls (the plan asked for toggles); Link stays `/gl link CODE` (a code is typed, not toggled).

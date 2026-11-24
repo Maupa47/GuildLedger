@@ -235,14 +235,16 @@ def item_names(db: sqlite3.Connection, guild: str) -> dict[int, str]:
 def resolve_item(db: sqlite3.Connection, guild: str, text: str) -> tuple[int | None, str | None, str]:
     """An item typed in Discord: an item ID, a Wowhead link (…item=12345) or a name the archive knows.
     Returns (item_id, name, problem)."""
+    from .. import catalog  # the generated item catalogue (shared/catalog), names for any wishable item
     t = text.strip()
     if t.isdigit():
-        return int(t), item_names(db, guild).get(int(t)), ""
+        return int(t), item_names(db, guild).get(int(t)) or catalog.name_of(int(t)), ""
     m = _ITEM_URL.search(t)
     if m:
         iid = int(m.group(1))
-        return iid, item_names(db, guild).get(iid), ""
-    known = item_names(db, guild)
+        return iid, item_names(db, guild).get(iid) or catalog.name_of(iid), ""
+    known = {i: c["name"] for i, c in catalog.items().items()}
+    known.update(item_names(db, guild))
     exact = [(i, n) for i, n in known.items() if n.lower() == t.lower()]
     part = exact or [(i, n) for i, n in known.items() if t.lower() in n.lower()]
     if len(part) == 1:

@@ -284,7 +284,7 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "            end\n"
      "            local cc = c.class and AmazingHub.ClassColors[c.class] or C.white\n",
      "crafter lists on item tooltips: 5 names at most"),
-    # Wishlist import from Discord (0.5.4, tools/hub-extra/WishImport.lua): a button in the title bar.
+    # Wishlist import from Discord (0.5.4, addon/hub-extra/WishImport.lua): a button in the title bar.
     ("UI/FeaturePanels.lua",
      "        AmazingHub:Print(L[\"[Wishlist] Sent to the guild.\"])\n"
      "    end)\n"
@@ -300,7 +300,7 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "\n"
      "    AmazingHub.WishlistFrame = f\n",
      "wishlist window: Import from Discord"),
-    # Sortable columns (0.5.4, tools/hub-extra/TableSort.lua): DKP standings and the two Professions tables.
+    # Sortable columns (0.5.4, addon/hub-extra/TableSort.lua): DKP standings and the two Professions tables.
     ("UI/PointsPanel.lua",
      "    hcol(L[\"MEMBER\"], 4)\n"
      "    hcol(L[\"CURRENT\"], 250)\n"
@@ -338,7 +338,7 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "                        function() panel:Refresh() end, AmazingHub.TableSort.PROFESSIONS_NUMERIC[col.key])\n"
      "                end\n",
      "Professions headings are sort buttons"),
-    # Own chat tag (0.5.4, tools/hub-extra/ChatTag.lua): the player picks what others see in the brackets.
+    # Own chat tag (0.5.4, addon/hub-extra/ChatTag.lua): the player picks what others see in the brackets.
     ("Modules/DataCollector.lua",
      "        addonVersion = AmazingHub.VERSION,\n",
      "        addonVersion = AmazingHub.VERSION,\n"
@@ -488,7 +488,7 @@ PATCHES_ALL: list[tuple[str, str, str, str, int]] = [
      "style test: blocks that check the flat look pick Modern (nothing saved is Classic now)", 3),
 ]
 
-# Our own hub files: (file in tools/hub-extra, folder in the hub). Appended to the TOC in this order.
+# Our own hub files: (file in addon/hub-extra, folder in the hub). Appended to the TOC in this order.
 EXTRAS = [("PackTweaks.lua", "UI"), ("TableSort.lua", "UI"), ("ChatTag.lua", "UI"), ("WishImport.lua", "UI"), ("LedgerPanel.lua", "UI"), ("SettingsPlus.lua", "UI")]
 
 # Files that call the chat globals directly get guarded file-locals in front, so no code path sends past the guard.
@@ -595,11 +595,11 @@ def build(src: Path, out: Path, any_commit: bool) -> int:
         if n != times:
             sys.exit(f"patch '{why}' expected its anchor {times}x in {rel}, found {n}: GuildOS changed; update it.")
         f.write_bytes(text.replace(old, new).encode("utf-8"))
-    # Our own files (tools/hub-extra), loaded last so they can register tabs and replace hub functions.
+    # Our own files (addon/hub-extra), loaded last so they can register tabs and replace hub functions.
     toc = out / "AmazingHub.toc"
-    toc_text = toc.read_bytes().decode("utf-8").rstrip("\n") + "\n\n# Amazing Forever Guild Pack (tools/hub-extra)\n"
+    toc_text = toc.read_bytes().decode("utf-8").rstrip("\n") + "\n\n# Amazing Forever Guild Pack (addon/hub-extra)\n"
     for name, folder in EXTRAS:
-        shutil.copy2(ROOT / "tools" / "hub-extra" / name, out / folder / name)
+        shutil.copy2(ROOT / "addon" / "hub-extra" / name, out / folder / name)
         toc_text += f"{folder}\\{name}\n"
         count += 1
     toc.write_bytes(toc_text.encode("utf-8"))

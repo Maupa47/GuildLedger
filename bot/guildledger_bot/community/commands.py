@@ -15,25 +15,13 @@ import discord as dpy
 from discord import app_commands
 
 from . import activity
+from .common import NO_MENTIONS, esc, is_officer, reply, ts  # noqa: F401 (re-exported)
+from .roles import register_roles
 
 if TYPE_CHECKING:
-    from .client import LedgerBot
+    from ..client import LedgerBot
 
 log = logging.getLogger(__name__)
-NO_MENTIONS = dpy.AllowedMentions.none()
-
-
-def ts(t: int | None, style: str = "f") -> str:
-    return f"<t:{int(t)}:{style}>" if t else "never"
-
-
-def esc(s: str | None) -> str:
-    return dpy.utils.escape_markdown(s or "?")
-
-
-def is_officer(inter: dpy.Interaction) -> bool:
-    p = getattr(inter, "permissions", None)
-    return bool(p and (p.manage_roles or p.administrator))
 
 
 # --------------------------------------------------------------------------------- confirmation buttons
@@ -60,7 +48,63 @@ class LinkButton(dpy.ui.DynamicItem[dpy.ui.Button], template=r"gl:link:(?P<act>y
         except dpy.DiscordException:
             await interaction.response.send_message(msg, ephemeral=True)
         if msg.startswith("Linked"):
-            await bot.sync_roles(interaction.user.id)
+            await after_link(bot, interaction.user.id, interaction)
+
+
+async def after_link(bot: "LedgerBot", user_id: int, interaction: dpy.Interaction | None = None) -> None:
+    """Roles and nickname; the first time a user is linked also the role menus and the public line (D1 5)."""
+    await bot.sync_roles(user_id)
+    if not await bot._db(bot._links.first_link_done, user_id):
+        return
+    from .rolemenus_ui import PANEL_TEXT, panel_view
+    if interaction is not None:
+        try:
+            if interaction.guild is not None:  # roles can only be changed on the server
+                view = await panel_view(bot)
+                if view is not None:
+                    await interaction.followup.send(PANEL_TEXT, view=view, ephemeral=True,
+                                                    allowed_mentions=NO_MENTIONS)
+            else:
+                where = await bot._db(bot._settings.get_int, "rolemenu.channel", 0)
+                if where:
+                    await interaction.followup.send(f"Next: pick your interest and language roles in <#{where}>.",
+                                                    allowed_mentions=NO_MENTIONS)
+        except dpy.DiscordException as e:
+            log.info("role menus after the first link of %s: %s", user_id, e)
+    channel_id = await bot._db(bot._settings.get_int, "announce.channel", 0)
+    main = await bot._db(bot._links.main_name, user_id)
+    if channel_id and main:
+        channel = bot.get_channel(channel_id)
+        try:
+            if channel is not None:
+                await channel.send(f"👋 <@{user_id}> joined us, main **{esc(main)}**.", allowed_mentions=NO_MENTIONS)
+        except dpy.DiscordException as e:
+            log.info("announce channel %s: %s", channel_id, e)
+
+
+async def may_see_others(bot: "LedgerBot", inter: dpy.Interaction) -> bool:
+    """Decision 5: everyone with the linked-member role (without such a role: everyone linked), and officers."""
+    if is_officer(inter):
+        return True
+    verified, _ = await bot._db(bot._links.role_settings, bot.cfg.verified_role_id, bot.cfg.rank_roles)
+    if verified:
+        return any(r.id == verified for r in getattr(inter.user, "roles", []))
+    return bool(await bot._db(bot._links.chars, inter.user.id))
+
+
+async def characters_text(bot: "LedgerBot", target: dpy.abc.User) -> str:
+    from .directory import char_line
+    from .directory_ui import armory_template
+    rows = await bot._db(bot._links.chars, target.id)
+    if not rows:
+        return f"{esc(target.display_name)} has no linked characters."
+    main = await bot._db(bot._links.main_name, target.id)
+    template = await armory_template(bot)
+    rows.sort(key=lambda r: (r["name"] != main, -(r["in_guild"] or 0), -(r["level"] or 0), r["name"]))
+    lines = [char_line(r, template, main=r["name"] == main) for r in rows]
+    thread = await bot._db(bot._directory.thread_of_user, target.id)
+    post = f"\nForum post: <#{thread}>" if thread else ""
+    return f"Characters of {esc(target.display_name)}:\n" + "\n".join(lines) + post
 
 
 def confirm_view(cid: int) -> dpy.ui.View:
@@ -78,81 +122,25 @@ def confirm_text(name: str, kind: str) -> str:
             " If you did not type the code on that character, press **Not me**.")
 
 
-# --------------------------------------------------------------------------------- /roles (decision 5)
-
-def register_roles(bot: "LedgerBot") -> None:
-    roles = app_commands.Group(name="roles", description="Officers: which Discord roles linked members get",
-                               default_permissions=dpy.Permissions(manage_roles=True), guild_only=True)
-
-    async def reply(inter: dpy.Interaction, text: str) -> None:
-        await inter.response.send_message(text[:1990], ephemeral=True, allowed_mentions=NO_MENTIONS)
-
-    async def rank_names(inter: dpy.Interaction, current: str):
-        ranks = await bot._db(bot._links.guild_ranks)
-        return [app_commands.Choice(name=r[0][:100], value=r[0][:100]) for r in ranks
-                if current.lower() in r[0].lower()][:25]
-
-    @roles.command(name="show", description="Guild ranks, member counts and the Discord role each one gets")
-    async def show(inter: dpy.Interaction):
-        verified, ranks = await bot._db(bot._links.role_settings, bot.cfg.verified_role_id, bot.cfg.rank_roles)
-        guild_ranks = await bot._db(bot._links.guild_ranks)
-        lines = ["**Role for every linked guild member:** " + (f"<@&{verified}>" if verified else "none (/roles verified)")]
-        lines.append("**Guild rank -> Discord role:**")
-        for name, _, count in guild_ranks:
-            lines.append(f"- {esc(name)} ({count} members): " + (f"<@&{ranks[name]}>" if name in ranks else "no role"))
-        for name, rid in ranks.items():
-            if name not in {g[0] for g in guild_ranks}:
-                lines.append(f"- {esc(name)} (no member has this rank now): <@&{rid}>")
-        if not guild_ranks:
-            lines.append("- (no member list yet: it arrives with a collector's upload)")
-        lines.append("Nicknames: " + ("set to the main character" if bot.cfg.set_nickname else "left alone"))
-        await reply(inter, "\n".join(lines))
-
-    @roles.command(name="verified", description="The role every member with a linked character in the guild gets")
-    @app_commands.describe(role="e.g. @guild-member; leave empty to stop giving a role")
-    async def verified(inter: dpy.Interaction, role: dpy.Role | None = None):
-        await bot._db(bot._links.set_verified_role, role.id if role else None)
-        await reply(inter, f"Linked guild members get {role.mention}." if role else "No role for linked members.")
-
-    @roles.command(name="rank", description="The Discord role for one guild rank")
-    @app_commands.describe(rank="Guild rank as in game", role="Discord role; leave empty to remove")
-    @app_commands.autocomplete(rank=rank_names)
-    async def rank(inter: dpy.Interaction, rank: str, role: dpy.Role | None = None):
-        await bot._db(bot._links.set_rank_role, rank, role.id if role else None, bot.cfg.rank_roles)
-        await reply(inter, f"Guild rank **{esc(rank)}** gets {role.mention}." if role
-                    else f"Guild rank **{esc(rank)}** gets no role now.")
-
-    @roles.command(name="sync", description="Apply the role settings to every linked member now")
-    async def sync(inter: dpy.Interaction):
-        await inter.response.defer(ephemeral=True, thinking=True)
-        users = await bot._db(bot._links.linked_users)
-        for uid in users:
-            await bot.sync_roles(uid)
-        await inter.followup.send(f"Checked the roles of {len(users)} linked member(s).", ephemeral=True)
-
-    bot.tree.add_command(roles)
-
-
 # --------------------------------------------------------------------------------- commands
 
 def register(bot: "LedgerBot") -> None:
     tree = bot.tree
     register_roles(bot)
-    from .lootcmds import register_loot  # here: lootcmds imports helpers from this module
+    from .lootcmds import register_loot
     register_loot(bot)
-
-    async def reply(inter: dpy.Interaction, text: str, file: dpy.File | None = None) -> None:
-        kw = {"ephemeral": True, "allowed_mentions": NO_MENTIONS}
-        if file:
-            kw["file"] = file
-        await inter.response.send_message(text[:1990], **kw)
 
     @tree.command(name="link", description="Link your WoW characters to your Discord account")
     async def link(inter: dpy.Interaction):
+        from .onboarding_ui import code_text
         code = await bot._db(bot._links.new_code, inter.user.id)
         pending = await bot._db(bot._links.open_for, inter.user.id)
-        text = (f"In WoW, type **`/gl link {code}`** (valid 30 minutes). An officer's GuildLedger must be online to"
-                " pass it on; then I ask you here to confirm the character.")
+        text = code_text(code)
+        mine = await bot._db(bot._links.chars, inter.user.id)
+        if mine:
+            main = await bot._db(bot._links.main_name, inter.user.id)
+            text += ("\n\nLinked now: " + ", ".join(esc(r["name"]) for r in mine)
+                     + (f"; main **{esc(main)}** (change it with /main)." if main else "."))
         if not pending:
             await reply(inter, text)
             return
@@ -180,25 +168,71 @@ def register(bot: "LedgerBot") -> None:
     @tree.command(name="chars", description="Characters linked to a Discord user")
     async def chars(inter: dpy.Interaction, user: dpy.User | None = None):
         target = user or inter.user
-        if target.id != inter.user.id and not is_officer(inter):
-            await reply(inter, "Only officers can look up other users.")
+        if target.id != inter.user.id and not await may_see_others(bot, inter):
+            await reply(inter, "Link your own character first (/link), then you can look up others.")
             return
-        rows = await bot._db(bot._links.chars, target.id)
-        if not rows:
-            await reply(inter, f"{esc(target.display_name)} has no linked characters.")
+        await reply(inter, await characters_text(bot, target))
+
+    async def characters_menu(inter: dpy.Interaction, user: dpy.Member):
+        if user.id != inter.user.id and not await may_see_others(bot, inter):
+            await reply(inter, "Link your own character first (/link), then you can look up others.")
             return
-        lines = [f"**{esc(r['name'])}** - level {r['level'] or '?'} {r['class'] or ''} {r['rank_name'] or ''}"
-                 f"{'' if r['in_guild'] else ' (not in the guild)'} - last seen online {ts(r['last_seen'], 'R')}"
-                 for r in rows]
-        await reply(inter, f"Characters of {esc(target.display_name)}:\n" + "\n".join(lines))
+        await reply(inter, await characters_text(bot, user))
+
+    tree.add_command(app_commands.ContextMenu(name="Characters", callback=characters_menu))
+
+    async def member_names(inter: dpy.Interaction, current: str):
+        names = await bot._db(bot._links.search_members, current)
+        return [app_commands.Choice(name=n[:100], value=n[:100]) for n in names]
+
+    async def my_chars(inter: dpy.Interaction, current: str):
+        rows = await bot._db(bot._links.chars, inter.user.id)
+        return [app_commands.Choice(name=r["name"][:100], value=r["name"][:100]) for r in rows
+                if current.lower() in r["name"].lower()][:25]
 
     @tree.command(name="whois", description="Which Discord user plays this character")
+    @app_commands.autocomplete(character=member_names)
     async def whois(inter: dpy.Interaction, character: str):
-        rows = await bot._db(bot._links.whois, character)
+        from .directory import char_line
+        from .directory_ui import armory_template
+        rows = await bot._db(bot._links.lookup, character)
         if not rows:
-            await reply(inter, f"**{esc(character)}** is not linked to anyone.")
+            await reply(inter, f"No guild character called **{esc(character)}** is known.")
             return
-        await reply(inter, "\n".join(f"**{esc(n)}** is played by <@{u}>." for u, n in rows))
+        template = await armory_template(bot)
+        out = []
+        for r in rows:
+            line = char_line(r, template)
+            if r["uid"]:
+                thread = await bot._db(bot._directory.thread_of_user, r["uid"])
+                line += f" - played by <@{r['uid']}>" + (f" (<#{thread}>)" if thread else "")
+            else:
+                line += " - not linked to Discord yet"
+            out.append(line)
+        await reply(inter, "\n".join(out))
+
+    @tree.command(name="main", description="Choose your main character (your nickname and forum post follow it)")
+    @app_commands.describe(character="One of your linked characters; empty = the highest level counts")
+    @app_commands.autocomplete(character=my_chars)
+    async def main_cmd(inter: dpy.Interaction, character: str | None = None):
+        msg = await bot._db(bot._links.set_main, inter.user.id, character)
+        await reply(inter, msg)
+        await bot.sync_roles(inter.user.id)
+
+    @tree.command(name="linkapprove", description="Officers: link a guild member's character at once")
+    @app_commands.describe(user="The Discord member", character="Their character (current guild member)")
+    @app_commands.autocomplete(character=member_names)
+    @app_commands.default_permissions(manage_roles=True)
+    async def linkapprove(inter: dpy.Interaction, user: dpy.Member, character: str):
+        if not is_officer(inter):
+            await reply(inter, "Only officers can use this.")
+            return
+        msg = await bot._db(bot._links.approve, inter.user.id, user.id, character)
+        await reply(inter, msg)
+        if msg.startswith("Linked"):
+            log.info("link approved by %s: %s -> %s", inter.user.id, character, user.id)
+            await bot.ops_line(f"🔗 {inter.user} linked {character} to {user} (approved by hand).")
+            await after_link(bot, user.id, None)
 
     @tree.command(name="linkstatus", description="Officers: how many guild members are linked")
     async def linkstatus(inter: dpy.Interaction):

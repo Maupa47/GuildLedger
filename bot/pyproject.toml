@@ -10,8 +10,8 @@ requires-python = ">=3.11"
 # Also needs the companion package (merge rules, formatting): pip install ../companion
 dependencies = ["discord.py>=2.4,<3"]
 
-[tool.setuptools]
-packages = ["guildledger_bot"]
+[tool.setuptools.packages.find]
+include = ["guildledger_bot*"]
 
 [tool.pytest.ini_options]
 pythonpath = [".", "../companion"]

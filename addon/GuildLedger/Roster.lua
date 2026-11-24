@@ -233,6 +233,7 @@ local function snapshot()
         end
     end
     g.rosterAt = now
+    S.PruneFirst(clubId, now)
     S.unsaved = S.unsaved + ((joins + leaves > 0 or first) and 1 or 0)
     stats.snapshots = stats.snapshots + 1
     stats.diff = stats.diff + joins + leaves

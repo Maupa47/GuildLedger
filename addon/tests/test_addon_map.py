@@ -53,14 +53,45 @@ def test_nothing_is_sent_when_nobody_looks_and_watching_stops_it():
     assert len(sent(guild, SHARER, "P")) == later
 
 
-def test_moving_sharer_updates_every_10_seconds_at_most():
+def test_moving_sharer_updates_every_3_seconds_when_few_share():
+    """G2 (0.7.0): with up to 10 sharers on the map the gap is 3 s (was 10 s)."""
     guild = map_guild()
     guild.g(VIEWER).L.execute("WorldMapFrame.open = true")
     for i in range(40):
         guild.g(SHARER).L.execute(f"W.where.x = {0.3 + i * 0.01}")
         guild.run(1)
     n = len(sent(guild, SHARER, "P"))
-    assert 3 <= n <= 5
+    assert 10 <= n <= 14
+
+
+def test_gap_grows_with_the_number_of_sharers():
+    g = map_guild().g(SHARER)
+    g.L.execute("""
+        local M = W.ns.Map
+        local P = M.Positions()
+        for k in pairs(P) do P[k] = nil end
+        R = {}
+        local function fill(n) for i = 1, n do P["S" .. i] = { map = 1453, x = 1, y = 1, at = 0 } end end
+        fill(9);  R[1] = M.PosGap(1453, 10)
+        fill(29); R[2] = M.PosGap(1453, 10)
+        fill(40); R[3] = M.PosGap(1453, 10)
+        R[4] = M.PosGap(9999, 10)          -- nobody on another map
+        R[5] = M.PosGap(1453, 100)         -- heard too long ago
+    """)
+    assert [g.L.eval(f"R[{i}]") for i in range(1, 6)] == [3, 5, 10, 3, 3]
+
+
+def test_dots_glide_between_two_positions():
+    g = map_guild().g(VIEWER)
+    g.L.execute("""
+        local M = W.ns.Map
+        local p = { map = 1, x = 2000, y = 1000, at = 100, fx = 1000, fy = 1000, span = 4 }
+        R = { M.Shown(p, 100) }
+        R[2] = select(1, M.Shown(p, 102))
+        R[3] = select(1, M.Shown(p, 104))
+        R[4] = select(1, M.Shown({ map = 1, x = 5, y = 6, at = 0 }, 50))
+    """)
+    assert [g.L.eval(f"R[{i}]") for i in range(1, 5)] == [1000, 1500, 2000, 5]
 
 
 def test_no_sharing_when_off_in_an_instance_or_in_a_boss_fight():

@@ -1,4 +1,4 @@
--- Amazing Hub's Ledger tab (tools/hub-extra/LedgerPanel.lua, as built into addon/AmazingHub/UI) with fake frames
+-- Amazing Hub's Ledger tab (addon/hub-extra/LedgerPanel.lua, as built into addon/AmazingHub/UI) with fake frames
 -- and a fake GuildLedgerAPI. Run by addon/tests/test_hub.py with ADDON = the AmazingHub folder. Raises on failure.
 ADDON = ADDON or "."
 

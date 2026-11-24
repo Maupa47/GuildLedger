@@ -10,8 +10,8 @@ from guildledger.config import resolve_tz
 from guildledger.direct import PostResult, Poster
 
 from . import loot
-from .config import BotConfig
-from .store import Archive
+from ..config import BotConfig
+from ..store import Archive
 
 log = logging.getLogger(__name__)
 

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from guildledger import discord
-from guildledger_bot.ops import Ops, build_report, day_bounds
+from guildledger_bot.collection.ops import Ops, build_report, day_bounds
 from guildledger_bot.store import Archive
 
 G = "100200300"

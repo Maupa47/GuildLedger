@@ -23,8 +23,8 @@ from discord import app_commands
 from guildledger import package
 
 if TYPE_CHECKING:
-    from .client import LedgerBot
-    from .store import Archive
+    from ..client import LedgerBot
+    from ..store import Archive
 
 log = logging.getLogger(__name__)
 NO_MENTIONS = dpy.AllowedMentions.none()

@@ -9,8 +9,8 @@ local C = ns.Compat
 local M = ns.Module("Welcome")
 ns.Welcome = M
 
-local DELAY = 8 -- s after login: after the game's own login lines
-local WAIT_MOTD = 20 -- s: how much longer to wait for the message of the day
+local DELAY = 30 -- s after login: well after the game's own login lines (W24, 2026-11-24)
+local WAIT_MOTD = 10 -- s: how much longer to wait for the message of the day (it is long there by 30 s)
 local GREETING = "Maupa's sprite wishes you a wonderful journey and blows a kiss your way!"
 
 local motd -- the latest message of the day, plain string

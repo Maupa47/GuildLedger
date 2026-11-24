@@ -16,11 +16,16 @@ import time
 import discord as dpy
 from discord import app_commands
 
-from . import collectors, commands, ingest
-from .link import Links
+from .collection import collectors, ingest
+from .collection.ops import Ops
+from .collection.post import make_loot_poster, make_poster, post_loot_once, post_once
+from .community import commands, counters, directory_ui, onboarding_ui, roles, rolemenus_ui, setup
+from .community.directory import Directory
+from .community.link import Links
+from .community.onboarding import Gate
+from .community.rolemenus import RoleMenus
+from .community.settings import Settings
 from .config import BotConfig
-from .ops import Ops
-from .post import make_loot_poster, make_poster, post_loot_once, post_once
 from .store import Archive, Outcome
 
 log = logging.getLogger(__name__)
@@ -45,6 +50,14 @@ class LedgerBot(dpy.Client):
         self._ops: Ops | None = None
         self._links: Links | None = None
         self._collectors: collectors.Registry | None = None
+        self._settings: Settings | None = None
+        self._gate: Gate | None = None
+        self._menus: RoleMenus | None = None
+        self._directory: Directory | None = None
+        self._owner_nick_logged: set[int] = set()
+        self._menu_refusal_logged = False
+        self._directory_at = 0.0
+        self._counters_at = 0.0
         self._hooks: dict[int, str] = dict(cfg.collectors)  # webhook ID -> collector name (config + registry)
         self.tree = app_commands.CommandTree(self)
         self._roles_at = 0.0
@@ -66,11 +79,17 @@ class LedgerBot(dpy.Client):
                             self.cfg.alert_after_hours)
             self._links = Links(self._archive)
             self._collectors = collectors.Registry(self._archive)
+            self._settings = Settings(self._archive)
+            self._gate = Gate(self._archive)
+            self._menus = RoleMenus(self._archive)
+            self._directory = Directory(self._archive)
         await self._db(open_archive)
         await self.refresh_collectors()
         commands.register(self)
         collectors.register(self)
-        self.add_dynamic_items(commands.LinkButton, collectors.PackageButton)
+        setup.register_setup(self)
+        self.add_dynamic_items(commands.LinkButton, collectors.PackageButton, onboarding_ui.VerifyButton,
+                               onboarding_ui.PickButton, onboarding_ui.CodeButton, rolemenus_ui.RoleSelect)
         if not self.once:
             try:
                 if self.cfg.server_id:
@@ -123,6 +142,8 @@ class LedgerBot(dpy.Client):
                 await self._db(post_loot_once, self._archive, self.cfg, self._loot_poster)
                 await self._db(self._ops.tick)
                 await self._link_round()
+                await self._directory_round()
+                await counters.counters_round(self)
             except Exception:  # noqa: BLE001 - keep the loop alive; the next round retries
                 log.exception("posting round failed")
             await asyncio.sleep(self.cfg.post_every)
@@ -150,49 +171,36 @@ class LedgerBot(dpy.Client):
             for uid in await self._db(self._links.linked_users):
                 await self.sync_roles(uid)
 
+    async def _directory_round(self) -> None:
+        """Character forum (D3): every 10 minutes, at most 10 writes."""
+        if time.monotonic() - self._directory_at < 600:
+            return
+        self._directory_at = time.monotonic()
+        n = await directory_ui.directory_round(self)
+        if n:
+            log.info("directory: %d forum write(s)", n)
+
+    async def ops_line(self, text: str) -> None:
+        """One line to #gl-ops when configured (never raises)."""
+        if self._ops is None:
+            return
+        try:
+            await self._db(self._ops.send, text)
+        except Exception as e:  # noqa: BLE001
+            log.info("ops line not sent: %s", e)
+
     async def sync_roles(self, user_id: int) -> None:
-        """Decision 5 (docs/dev/PACK_PLAN.md): roles by guild rank, verified role, nickname. Off unless configured."""
-        cfg = self.cfg
-        if not cfg.server_id or not self._links:
-            return
-        verified_id, rank_roles = await self._db(self._links.role_settings, cfg.verified_role_id, cfg.rank_roles)
-        if not (rank_roles or verified_id or cfg.set_nickname):
-            return
-        server = self.get_guild(cfg.server_id)
-        if server is None:
-            return
-        try:
-            member = server.get_member(user_id) or await server.fetch_member(user_id)
-        except dpy.DiscordException:
-            return
-        rank, inside = await self._db(self._links.desired_rank, user_id)
-        out_since = await self._db(self._links.out_of_guild_since, user_id)
-        managed = set(rank_roles.values()) | ({verified_id} if verified_id else set())
-        if inside:
-            want = {rank_roles[rank]} if rank in rank_roles else set()
-            if verified_id:
-                want.add(verified_id)
-        elif out_since is not None and time.time() - out_since > cfg.grace_days * 86400:
-            want = set()
-        else:
-            return  # left recently: keep roles during the grace period
-        have = {r.id for r in member.roles} & managed
-        try:
-            add = [server.get_role(i) for i in want - have if server.get_role(i)]
-            remove = [server.get_role(i) for i in have - want if server.get_role(i)]
-            if add:
-                await member.add_roles(*add, reason="GuildLedger link: guild rank")
-            if remove:
-                await member.remove_roles(*remove, reason="GuildLedger link: guild rank changed or left")
-            if cfg.set_nickname and inside and member.id != server.owner_id:
-                nick = await self._db(self._links.main_name, user_id)
-                if nick and member.nick != nick:
-                    await member.edit(nick=nick[:32], reason="GuildLedger link: main character")
-        except dpy.Forbidden:
-            log.error("roles/nickname for %s refused: give the bot Manage Roles and Manage Nicknames and move its"
-                      " role above the roles it assigns", user_id)
-        except dpy.DiscordException as e:
-            log.error("roles/nickname for %s failed: %s", user_id, e)
+        await roles.sync_roles(self, user_id)
+
+    async def setting(self, key: str, default: Any = None) -> Any:
+        if self._settings is None:
+            return default
+        return await self._db(self._settings.get, key, default)
+
+    async def setting_bool(self, key: str, default: bool = False) -> bool:
+        if self._settings is None:
+            return default
+        return await self._db(self._settings.get_bool, key, default)
 
     async def backfill(self) -> None:
         async with self._backfilling:

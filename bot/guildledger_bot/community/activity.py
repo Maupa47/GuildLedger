@@ -38,14 +38,31 @@ def seen(links: Links, chars: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def joined(links: Links, char: dict[str, Any]) -> dict[str, Any]:
+    """When the current stay began (G4, W21): the newest join event; without one the earliest of the first guild
+    chat line since the last leave and the first time the member list showed them. Says which it used."""
+    g, guid, name = char["guild"], char["guid"], char["name"]
     r = links.db.execute(
         "SELECT ts_utc, window_from, src, actor FROM events WHERE guild=? AND kind='join' AND superseded_by IS NULL"
-        " AND (guid=? OR name=?) ORDER BY ts_utc DESC LIMIT 1", (char["guild"], char["guid"], char["name"])).fetchone()
+        " AND (guid=? OR name=?) ORDER BY ts_utc DESC LIMIT 1", (g, guid, name)).fetchone()
+    left = links.db.execute(
+        "SELECT MAX(ts_utc) FROM events WHERE guild=? AND kind IN ('leave','kick') AND superseded_by IS NULL"
+        " AND (guid=? OR name=?)", (g, guid, name)).fetchone()[0]
+    since = max(left or 0, r["window_from"] or 0) if r else (left or 0)
+    first_chat = links.db.execute(
+        "SELECT MIN(ts_utc) FROM chat WHERE guild=? AND from_discord=0 AND ts_utc>=? AND"
+        " ((guid IS NOT NULL AND guid=?) OR (guid IS NULL AND author=?))", (g, since, guid, name)).fetchone()[0]
     if r:
+        if first_chat is not None and first_chat < r["ts_utc"]:
+            # the join event is an estimate made later (diff/log); a chat line proves an earlier time
+            return {"when": first_chat, "from": r["window_from"],
+                    "precision": "first guild chat line (joined at the latest then)", "by": r["actor"]}
         return {"when": r["ts_utc"], "from": r["window_from"], "precision": PRECISION.get(r["src"], r["src"]),
                 "by": r["actor"]}
-    return {"when": char["first_seen"], "from": None, "precision": "first seen by GuildLedger (joined earlier)",
-            "by": None}
+    seen = char.get("first_seen")
+    if first_chat is not None and (seen is None or first_chat < seen):
+        return {"when": first_chat, "from": None, "precision": "first guild chat line in the archive (joined earlier)",
+                "by": None}
+    return {"when": seen, "from": None, "precision": "first seen by GuildLedger (joined earlier)", "by": None}
 
 
 def activity(links: Links, user_id: int, now: int) -> list[dict[str, Any]]:
