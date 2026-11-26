@@ -84,7 +84,88 @@ local function recordSections(F)
         self.__amzHeads[#self.__amzHeads + 1] = { title = title, first = first, row = #self.rows, fs = fs }
         return fs
     end
+    -- and every switch with its label, for the title bar's search (0.8.0, SearchBox.lua)
+    local check = Form.Check
+    if type(check) == "function" then
+        Form.Check = function(self, label, ...)
+            local f = check(self, label, ...)
+            self.__amzChecks = self.__amzChecks or {}
+            self.__amzChecks[#self.__amzChecks + 1] = { label = label, obj = f, row = #self.rows }
+            return f
+        end
+    end
     Form.__amzSections = true
+    return true
+end
+
+----------------------------------------------------------------------
+-- What Settings holds, for the title bar's search (0.8.0, SearchBox.lua): every page, and on each page built
+-- so far its section headings and switches. Plus.Reveal opens one: the page, its section, scrolled to it,
+-- and the line blinks.
+----------------------------------------------------------------------
+local PAGE_ORDER = { "profile", "interface", "chat", "modules", "rules", "data" }
+local PAGE_LABEL = { profile = "Profile", interface = "Interface", chat = "Chat", modules = "Modules",
+    rules = "Rules", data = "Data" }
+local index = {}   -- [page] = { entries }
+local function T(k) local L = AmazingHub.L; return L and L[k] or k end
+
+local function pageLabel(page)
+    return T("Settings") .. " \226\128\186 " .. T(PAGE_LABEL[page] or page)
+end
+
+function Plus.Record(page, F)
+    local heads, list = F.__amzHeads or {}, {}
+    local function sectionOf(row)
+        local title
+        for _, h in ipairs(heads) do if h.row <= row then title = h.title end end
+        return title
+    end
+    for _, h in ipairs(heads) do
+        list[#list + 1] = { page = page, pageLabel = pageLabel(page), label = h.title, section = h.title, F = F, obj = h.fs }
+    end
+    local rowOf = {}
+    for i, r in ipairs(F.rows) do if r.obj then rowOf[r.obj] = i end end
+    for _, c in ipairs(F.__amzChecks or {}) do
+        local row = rowOf[c.obj]
+        if row and type(c.label) == "string" then
+            list[#list + 1] = { page = page, pageLabel = pageLabel(page), label = c.label, section = sectionOf(row),
+                                F = F, obj = c.obj }
+        end
+    end
+    index[page] = list
+end
+
+function Plus.Index()
+    local out = {}
+    for _, page in ipairs(PAGE_ORDER) do
+        out[#out + 1] = { page = page, pageLabel = T("Settings"), label = T(PAGE_LABEL[page]) }
+        for _, e in ipairs(index[page] or {}) do out[#out + 1] = e end
+    end
+    return out
+end
+
+local function blink(obj, n)
+    if not (obj and obj.SetAlpha) or n <= 0 then if obj and obj.SetAlpha then obj:SetAlpha(1) end return end
+    obj:SetAlpha(n % 2 == 0 and 0.25 or 1)
+    if AmazingHub.Compat and AmazingHub.Compat.After then AmazingHub.Compat.After(0.2, function() blink(obj, n - 1) end) end
+end
+
+function Plus.Reveal(e)
+    if type(e) ~= "table" or not e.page then return false end
+    if e.section then openSections()[e.section] = true end
+    if not UI:OpenWindow("settings", e.page) then return false end
+    local F = index[e.page] and e.F
+    if not (F and e.obj) then return true end
+    F:Refresh()
+    local win = AmazingHub.RosterFrame
+    local panel = win and win.tabPanels and win.tabPanels.settings
+    local info = panel and panel.subPanels and panel.subPanels[e.page]
+    local scroll = info and info.scroll
+    if scroll and scroll.SetVerticalScroll and F.content.GetTop and e.obj.GetTop then
+        local top, at = F.content:GetTop(), e.obj:GetTop()
+        if top and at then scroll:SetVerticalScroll(math.max(0, top - at - 12)) end
+    end
+    blink(e.obj, 6)
     return true
 end
 
@@ -172,6 +253,22 @@ function Plus.BuildCollector(F)
     F:Buttons({ { "Reload now", function() if ReloadUI then ReloadUI() end end, w = 110 } },
         { indent = 34, shown = pending })
     F:Note("The change takes effect after a reload.", { indent = 34, shown = pending })
+end
+
+----------------------------------------------------------------------
+-- Member list (0.8.0, H4): a column sort mixes online and offline members unless this is on
+-- (tools/rebrand-hub.py patches UI/RosterFrame.lua's sort to read the setting).
+----------------------------------------------------------------------
+function Plus.BuildRoster(F)
+    F:Section("Member list")
+    F:Check("Online members first, whatever column is sorted",
+        "Off: the column you click alone decides the order, online and offline mixed. Sorting by Last seen"
+        .. " always puts online members first.",
+        function() return AmazingHub:GetSetting("rosterOnlineFirst") == true end,
+        function(on)
+            AmazingHub:SetSetting("rosterOnlineFirst", on and true or false)
+            if AmazingHub.RefreshRosterUI then AmazingHub:SafeCall(AmazingHub.RefreshRosterUI, AmazingHub) end
+        end)
 end
 
 ----------------------------------------------------------------------
@@ -455,7 +552,8 @@ end
 -- Hook into upstream's Settings pages
 ----------------------------------------------------------------------
 
-local EXTRA = { chat = Plus.BuildMessages, interface = Plus.BuildMap, profile = Plus.BuildCollector }
+local EXTRA = { chat = Plus.BuildMessages, profile = Plus.BuildCollector,
+    interface = function(F) Plus.BuildRoster(F); Plus.BuildMap(F) end }
 -- upstream's page keys, and the old ones it still accepts (UI/SettingsPanel.lua OLD_KEYS); anything else is "profile"
 local KNOWN = { profile = true, interface = true, chat = true, modules = true, rules = true, data = true }
 local OLD_KEYS = { general = "profile", raid = "rules", officer = "rules", about = "data" }
@@ -478,6 +576,7 @@ function AmazingHub:RefreshSettingsPanel(content, key, ...)
         end
         local ok, err = pcall(Plus.Fold, F)
         if not ok and AmazingHub.Debug then AmazingHub:Debug("Settings sections: " .. tostring(err)) end
+        pcall(Plus.Record, page, F)
         F:Refresh()
     end
     return F

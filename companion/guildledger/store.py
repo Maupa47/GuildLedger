@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
-from . import loot
+from . import hubdata, loot
 from .svparse import as_dict, as_list
 
 log = logging.getLogger(__name__)
@@ -105,6 +105,7 @@ class Spool:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(_DDL)
         loot.ensure(self.db)  # Amazing Hub's loot data (shared/schema.md 7)
+        hubdata.ensure(self.db)  # professions, guild bank, alt links (shared/schema.md 8)
         self._migrate()
 
     def _migrate(self) -> None:

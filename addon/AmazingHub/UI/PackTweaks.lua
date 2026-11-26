@@ -65,6 +65,15 @@ if type(SlashCmdList) == "table" and type(SlashCmdList.AMAZINGHUB) == "function"
     end
 end
 
+-- Any mouse click counts too (GLOBAL_MOUSE_DOWN, SystemDocumentation): buttons the hub makes itself, such as
+-- the secure "Next" of Leadership > Bulk actions, answer in chat too (U3, 2026-11-24: on Forever that answer
+-- is the line to type, and it was hidden).
+if type(CreateFrame) == "function" and AmazingHub.Compat and AmazingHub.Compat.RegisterEvent then
+    local clicks = CreateFrame("Frame")
+    AmazingHub.Compat.RegisterEvent(clicks, "GLOBAL_MOUSE_DOWN")
+    clicks:SetScript("OnEvent", AmazingHub.UserActed)
+end
+
 -- Clicks on the hub's own buttons and checkboxes count as "the player just did something".
 for _, name in ipairs({ "CreateButton", "CreateCheckbox" }) do
     local make = UI[name]
@@ -75,5 +84,25 @@ for _, name in ipairs({ "CreateButton", "CreateCheckbox" }) do
             if target and target.HookScript then target:HookScript("OnMouseDown", AmazingHub.UserActed) end
             return w
         end
+    end
+end
+
+----------------------------------------------------------------------
+-- Guild chat annotation defaults (0.8.0, H6 / PLAN_COMMUNITY W16): once per guild's saved data, marked with
+-- settings.packChatDefaults = 1: annotation on, class icon off, level on, alt tag on. What the player changes
+-- afterwards is kept. Applied just before ChatTweaks starts, which reads `enabled` once at login.
+----------------------------------------------------------------------
+local CT = AmazingHub.ChatTweaks
+if CT and CT.Initialize then
+    local init = CT.Initialize
+    function CT:Initialize(...)
+        local db = AmazingHub.db
+        if db and db.settings and db.settings.packChatDefaults ~= 1 then
+            db.chatTweaks = db.chatTweaks or {}
+            local c = db.chatTweaks
+            c.enabled, c.classIcon, c.level, c.altTag = true, false, true, true
+            db.settings.packChatDefaults = 1
+        end
+        return init(self, ...)
     end
 end

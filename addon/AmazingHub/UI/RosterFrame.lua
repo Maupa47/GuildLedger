@@ -714,10 +714,30 @@ function AmazingHub:CreateRosterPanel(parent, host)
     -- on the header opens it too), Analytics, the invite field and the search box. Show Offline always
     -- stays. The invite field is only for who may invite: Anniversary only (#256), at a rank that
     -- invites; read again on every refresh.
+    -- Amazing Hub: Reset, back to the whole list in its default order: no rank, no class, no search, the
+    -- default sort (H35). Always there; with nothing to reset a click changes nothing.
+    local resetBtn = UI:CreateButton(statsBar, "Reset", 64, 22)
+    local function filtered()
+        local s = AmazingHub.db.settings
+        return (host.segment or "all") ~= "all" or host.classFilter ~= nil or (host.searchFilter or "") ~= ""
+            or (s.sortBy ~= nil and (s.sortBy ~= "level" or s.sortAsc == true))
+    end
+    resetBtn:SetScript("OnClick", function()
+        if not filtered() then return end
+        local s = AmazingHub.db.settings
+        s.sortBy, s.sortAsc = nil, nil
+        host.classFilter, host.segment = nil, "all"
+        if host.UpdateRailActive then host:UpdateRailActive() end
+        if searchBox:GetText() ~= "" then searchBox:SetText("") end
+        searchBox:ClearFocus()
+        host:RefreshRoster()
+    end)
+    host.resetButton = resetBtn
     local TOOLBAR_PAD, TOOLBAR_GAP = 12, 10
     local TOOLBAR = {
         { key = "result",    frame = resultText,   priority = 20, weight = 1, min = 60 },
         { key = "analytics", frame = analyticsBtn, priority = 50 },
+        { key = "reset",     frame = resetBtn,     priority = 95 }, -- Amazing Hub
         { key = "search",    frame = searchBox,    priority = 90 },
         { key = "columns",   frame = columnsBtn,   priority = 30 },
         { key = "offline",   frame = offlineBtn,   priority = 100, required = true },
@@ -729,7 +749,7 @@ function AmazingHub:CreateRosterPanel(parent, host)
         self.toolbarW = w
         local spec, items = {}, {}
         for _, item in ipairs(TOOLBAR) do
-            if not item.invite or AmazingHub.Compat.AddonMayInvite() then
+            if (not item.invite or AmazingHub.Compat.AddonMayInvite()) and (not item.active or item.active()) then
                 items[#items + 1] = item
                 spec[#spec + 1] = { key = item.key, min = item.min or item.frame:GetWidth(), weight = item.weight or 0,
                                     priority = item.priority, required = item.required }
@@ -1261,8 +1281,9 @@ function AmazingHub:CreateRosterPanel(parent, host)
         end
 
         table.sort(members, function(a, b)
-            -- Online always first
-            if a.isOnline ~= b.isOnline then
+            -- Amazing Hub: online first only by Last seen, or everywhere with the setting (H4, UI/SettingsPlus.lua)
+            if (sortBy == "lastSeen" or AmazingHub:GetSetting("rosterOnlineFirst") == true)
+                and a.isOnline ~= b.isOnline then
                 return a.isOnline
             end
 

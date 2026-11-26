@@ -221,5 +221,12 @@ UI\ChatTag.lua
 UI\WishImport.lua
 UI\LedgerPanel.lua
 UI\SettingsPlus.lua
+UI\Windows.lua
+UI\Links.lua
+UI\ClearBox.lua
+UI\Materials.lua
+UI\Joined.lua
+UI\SearchBox.lua
+UI\OrderWhisper.lua
 Data\ItemCatalog.lua
 UI\ItemCatalog.lua

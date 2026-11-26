@@ -75,17 +75,20 @@ end
 -- F is upstream's Form; indent = its sub-option indent; enabled() = whether annotations are on.
 function T.BuildForm(F, indent, enabled)
     local ok, err = pcall(function()
-        F:Field("What others see in the brackets for my lines", {
-            w = 150, max = 40, indent = indent, labelW = 300,
+        -- Short label and no hint beside the box: the label column is at most 40 % of the page and cuts the rest
+        -- (U3, 2026-11-24); the explanation is a note of its own that wraps.
+        F:Field("My own tag", {
+            w = 150, max = 40, indent = indent,
             get = function() return (T.Mine()) end,
             save = function(box)
                 local _, off = T.Mine()
                 T.Set(box:GetText(), off)
                 box:SetText((T.Mine()))
             end,
-            hint = "e.g. Floy. Empty: the usual (alt of ...)",
         })
-        F:Check("Show no tag at all for my lines",
+        F:Note("What others see in the brackets in front of your guild chat messages, e.g. Floy. Leave it empty for the usual tag"
+            .. " (\"alt of\" and the main's name).", { indent = indent })
+        F:Check("No tag at all in front of my guild chat messages",
             "Others see your choice when they use Amazing Hub 0.5.4 or newer with \"Annotate guild chat\" on.",
             function() local _, off = T.Mine(); return off end,
             function(on) T.Set((T.Mine()), on and true or false) end,

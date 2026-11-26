@@ -400,10 +400,10 @@ PAGES.interface = function(F)
     scaleRow:SetSize(1, 34)
     local scaleLabel = UI:CreateText(scaleRow, L["UI scale"], 12, C.text.r, C.text.g, C.text.b)
     scaleLabel:SetPoint("LEFT", 0, 2)
-    -- Amazing Hub: five buttons instead of the slider (the slider moved with the window it scaled)
+    -- Amazing Hub: buttons 60%-140% instead of the slider (the slider moved with the window it scaled)
     local scaleBtns = {}
-    for i, v in ipairs({ 0.8, 0.9, 1.0, 1.1, 1.2 }) do
-        local b = UI:CreateButton(scaleRow, "", 50, 20)
+    for i, v in ipairs({ 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4 }) do
+        local b = UI:CreateButton(scaleRow, "", 44, 20)
         b:SetScript("OnClick", function()
             AmazingHub:SetSetting("uiScale", v)
             UI:ApplyScale()
@@ -420,11 +420,13 @@ PAGES.interface = function(F)
     end)
     F:Row(scaleRow, { wide = true, place = function(_, w)
         local lw = labelColumn(w)
+        local per = math.max(1, math.floor((w - lw - 8) / 48))   -- a narrow page wraps to a second line
         for i, e in ipairs(scaleBtns) do
+            local col, line = (i - 1) % per, math.floor((i - 1) / per)
             e.b:ClearAllPoints()
-            e.b:SetPoint("LEFT", scaleRow, "LEFT", lw + 8 + (i - 1) * 54, 2)
+            e.b:SetPoint("TOPLEFT", scaleRow, "TOPLEFT", lw + 8 + col * 48, -7 - line * 24)
         end
-        return 34
+        return 34 + math.floor((#scaleBtns - 1) / per) * 24
     end })
 
     -- The interface style (issue #122), where the client draws more than one.
@@ -516,7 +518,7 @@ PAGES.chat = function(F, isOfficer)
     F:Check(L["Alt tag"], nil, function() return ct().altTag ~= false end, setCt("altTag"),
         { indent = SUB_INDENT, enabled = annotating })
     -- Guild Roster Manager's tag (#269).
-    F:Check(L["Short tag: [M] on a main, [Main] on an alt"], nil, function() return ct().altShort end, setCt("altShort"),
+    F:Check("Short tag: [M] on a main, the main's name on an alt", nil, function() return ct().altShort end, setCt("altShort"),
         { indent = 2 * SUB_INDENT, enabled = function() return annotating() and ct().altTag ~= false end })
     if AmazingHub.ChatTag then AmazingHub.ChatTag.BuildForm(F, SUB_INDENT, annotating) end -- Amazing Hub: own tag
     -- The officers' nickname, and the same prefix in whispers, party and raid from guild members (#429).

@@ -63,6 +63,31 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "-- guild member. Public channels, SAY, YELL and whispers to strangers are dropped here, at the choke point.\n"
      "local GUILD_ONLY = { GUILD = true, OFFICER = true, PARTY = true, RAID = true, RAID_WARNING = true,\n"
      "    INSTANCE_CHAT = true }\n"
+     "-- A whisper names a member as /w takes it: on Forever \"First-Surname\" for \"First Surname\" (WhisperTarget),\n"
+     "-- elsewhere \"Name\" or \"Name-Realm\". So names are compared without case, spaces and hyphens, against the\n"
+     "-- roster's names, their member keys and \"name-realm\" (U3, 2026-11-24: every whisper was dropped before).\n"
+     "local function squash(s) return (s:lower():gsub(\"[%s%-]\", \"\")) end\n"
+     "local members, membersAt = {}, nil\n"
+     "local function memberSet(force)\n"
+     "    local t = (GetTime and GetTime()) or 0\n"
+     "    if membersAt and t - membersAt < (force and 5 or 30) then return members end\n"
+     "    if not (GetNumGuildMembers and GetGuildRosterInfo) then return members end\n"
+     "    local n = GetNumGuildMembers() or 0\n"
+     "    if Compat.IsSecret(n) or n == 0 then return members end\n"
+     "    local set, realm = {}, GetRealmName and GetRealmName() or nil\n"
+     "    if Compat.IsSecret(realm) or type(realm) ~= \"string\" then realm = nil end\n"
+     "    for i = 1, n do\n"
+     "        local rn = GetGuildRosterInfo(i)\n"
+     "        if type(rn) == \"string\" and rn ~= \"\" and not Compat.IsSecret(rn) then\n"
+     "            set[squash(rn)] = true\n"
+     "            if realm and not rn:find(\"-\", 1, true) then set[squash(rn .. realm)] = true end\n"
+     "            local ok, key = pcall(AmazingHub.GetPlayerKey, AmazingHub, rn)\n"
+     "            if ok and type(key) == \"string\" then set[squash(key)] = true end\n"
+     "        end\n"
+     "    end\n"
+     "    members, membersAt = set, t\n"
+     "    return members\n"
+     "end\n"
      "function Compat.InOurGuild(name)\n"
      "    if type(name) ~= \"string\" or name == \"\" or Compat.IsSecret(name) then return false end\n"
      "    if C_GuildInfo and C_GuildInfo.MemberExistsByName then\n"
@@ -70,7 +95,9 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "        if ok and not Compat.IsSecret(yes) and yes then return true end\n"
      "    end\n"
      "    local ok, yes = pcall(AmazingHub.IsGuildmate, AmazingHub, name)\n"
-     "    return ok and yes == true\n"
+     "    if ok and yes == true then return true end\n"
+     "    local key = squash(name)\n"
+     "    return memberSet()[key] == true or memberSet(true)[key] == true\n"
      "end\n"
      "function Compat.AllowedOutbound(channel, target)\n"
      "    if GUILD_ONLY[channel] then return true end\n"
@@ -466,10 +493,10 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "        scale:SetWidth(math.max(100, math.min(200, w - lw - 8 - 40)))\n"
      "        return 34\n"
      "    end })\n",
-     "    -- Amazing Hub: five buttons instead of the slider (the slider moved with the window it scaled)\n"
+     "    -- Amazing Hub: buttons 60%-140% instead of the slider (the slider moved with the window it scaled)\n"
      "    local scaleBtns = {}\n"
-     "    for i, v in ipairs({ 0.8, 0.9, 1.0, 1.1, 1.2 }) do\n"
-     "        local b = UI:CreateButton(scaleRow, \"\", 50, 20)\n"
+     "    for i, v in ipairs({ 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4 }) do\n"
+     "        local b = UI:CreateButton(scaleRow, \"\", 44, 20)\n"
      "        b:SetScript(\"OnClick\", function()\n"
      "            AmazingHub:SetSetting(\"uiScale\", v)\n"
      "            UI:ApplyScale()\n"
@@ -486,13 +513,15 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "    end)\n"
      "    F:Row(scaleRow, { wide = true, place = function(_, w)\n"
      "        local lw = labelColumn(w)\n"
+     "        local per = math.max(1, math.floor((w - lw - 8) / 48))   -- a narrow page wraps to a second line\n"
      "        for i, e in ipairs(scaleBtns) do\n"
+     "            local col, line = (i - 1) % per, math.floor((i - 1) / per)\n"
      "            e.b:ClearAllPoints()\n"
-     "            e.b:SetPoint(\"LEFT\", scaleRow, \"LEFT\", lw + 8 + (i - 1) * 54, 2)\n"
+     "            e.b:SetPoint(\"TOPLEFT\", scaleRow, \"TOPLEFT\", lw + 8 + col * 48, -7 - line * 24)\n"
      "        end\n"
-     "        return 34\n"
+     "        return 34 + math.floor((#scaleBtns - 1) / per) * 24\n"
      "    end })\n",
-     "UI scale: five buttons instead of the slider"),
+     "UI scale: buttons 60%-140% instead of the slider"),
     ("UI/FeaturePanels.lua",
      "    f.syncBtn = syncBtn\n",
      "    f.syncBtn = syncBtn\n"
@@ -665,6 +694,137 @@ PATCHES: list[tuple[str, str, str, str]] = [
      "        AmazingHubDB[dbKey] = {}\n"
      "    end\n",
      "saved data without the realm is copied to the realm's key"),
+    ("UI/RosterFrame.lua",
+     "            -- Online always first\n"
+     "            if a.isOnline ~= b.isOnline then\n",
+     "            -- Amazing Hub: online first only by Last seen, or everywhere with the setting (H4, UI/SettingsPlus.lua)\n"
+     "            if (sortBy == \"lastSeen\" or AmazingHub:GetSetting(\"rosterOnlineFirst\") == true)\n"
+     "                and a.isOnline ~= b.isOnline then\n",
+     "roster: a column sort mixes online and offline members"),
+    ("UI/SettingsPanel.lua",
+     "L[\"Short tag: [M] on a main, [Main] on an alt\"]",
+     "\"Short tag: [M] on a main, the main's name on an alt\"",
+     "settings: the short tag's label says what [Main] stands for (U3)"),
+    # Whisper buttons open "/w <name> " in the chat box: a Forever surname needs the hyphen there, or the box
+    # whispers the first name with the surname as text (U3b, 2026-11-25).
+    ("Core/Utils.lua",
+     "function AmazingHub:WhisperTarget(name)\n"
+     "    if self.Client.has.surnames then return (name:gsub(\" \", \"-\")) end\n"
+     "    return name\n"
+     "end\n",
+     "function AmazingHub:WhisperTarget(name)\n"
+     "    if self.Client.has.surnames then return (name:gsub(\" \", \"-\")) end\n"
+     "    return name\n"
+     "end\n\n"
+     "-- Amazing Hub: the chat box opened on a whisper to `name`, `text` typed in; the player sends it.\n"
+     "function AmazingHub:OpenWhisper(name, text)\n"
+     "    if type(name) ~= \"string\" or name == \"\" or not ChatFrame_OpenChat then return false end\n"
+     "    -- A member key may carry a realm (\"First Surname-Realm\": craft orders, U3c). Forever names never hold a\n"
+     "    -- hyphen (LocalMemberKey), and the server finds a guild member by name alone there.\n"
+     "    if self.Client.has.surnames then name = name:match(\"^([^-]+)\") or name end\n"
+     "    ChatFrame_OpenChat(\"/w \" .. self:WhisperTarget(name) .. \" \" .. (text or \"\"))\n"
+     "    return true\n"
+     "end\n",
+     "OpenWhisper: the chat box on a whisper, surname-safe"),
+    ("UI/CraftOrdersPanel.lua",
+     "    if ChatFrame_OpenChat then ChatFrame_OpenChat(\"/w \" .. nameOf(key) .. \" \") end\n",
+     "    AmazingHub:OpenWhisper(nameOf(key)) -- Amazing Hub: surname-safe\n",
+     "craft orders: Whisper button with a surname"),
+    ("UI/CraftFinder.lua",
+     "            ChatFrame_OpenChat(\"/w \" .. name .. \" \" .. string.format(L[\"Can you craft %s?\"], subject))\n",
+     "            AmazingHub:OpenWhisper(name, string.format(L[\"Can you craft %s?\"], subject)) -- Amazing Hub: surname-safe\n",
+     "craft finder: whisper with a surname"),
+    ("UI/RecipesPanel.lua",
+     "                            ChatFrame_OpenChat(\"/w \" .. firstOnlineCrafter .. \" \" .. string.format(L[\"Can you craft %s?\"], itemLink))\n",
+     "                            AmazingHub:OpenWhisper(firstOnlineCrafter, string.format(L[\"Can you craft %s?\"], itemLink))\n",
+     "recipes: whisper with a surname (item link)"),
+    ("UI/RecipesPanel.lua",
+     "                            ChatFrame_OpenChat(\"/w \" .. firstOnlineCrafter .. \" \" .. string.format(L[\"Can you craft %s?\"], entry.name or L[\"this item\"]))\n",
+     "                            AmazingHub:OpenWhisper(firstOnlineCrafter, string.format(L[\"Can you craft %s?\"], entry.name or L[\"this item\"]))\n",
+     "recipes: whisper with a surname (item name)"),
+    ("tools/probe.lua",
+     "check(#Probe.EVENTS == 66, \"the probe checks the 66 events the addon registers\")",
+     "check(#Probe.EVENTS == 68, \"the probe checks the 68 events the addon registers\")",
+     "probe test: two events more (GLOBAL_MOUSE_DOWN and _UP, Amazing Hub)"),
+    ("Core/Probe.lua",
+     "    \"MERCHANT_CLOSED\", \"MERCHANT_SHOW\",   -- the guild bank cleanup sells at a vendor (#380)\n",
+     "    \"MERCHANT_CLOSED\", \"MERCHANT_SHOW\",   -- the guild bank cleanup sells at a vendor (#380)\n"
+     "    \"GLOBAL_MOUSE_DOWN\", \"GLOBAL_MOUSE_UP\",   -- Amazing Hub: clicks (UI/PackTweaks.lua, Windows.lua, Links.lua)\n",
+     "probe: the event PackTweaks registers"),
+    # --- 9. Round H answers (2026-11-26) ------------------------------------------------------------------------
+    ("UI/RosterFrame.lua",
+     "    local TOOLBAR_PAD, TOOLBAR_GAP = 12, 10\n",
+     "    -- Amazing Hub: Reset, back to the whole list in its default order: no rank, no class, no search, the\n"
+     "    -- default sort (H35). Always there; with nothing to reset a click changes nothing.\n"
+     "    local resetBtn = UI:CreateButton(statsBar, \"Reset\", 64, 22)\n"
+     "    local function filtered()\n"
+     "        local s = AmazingHub.db.settings\n"
+     "        return (host.segment or \"all\") ~= \"all\" or host.classFilter ~= nil or (host.searchFilter or \"\") ~= \"\"\n"
+     "            or (s.sortBy ~= nil and (s.sortBy ~= \"level\" or s.sortAsc == true))\n"
+     "    end\n"
+     "    resetBtn:SetScript(\"OnClick\", function()\n"
+     "        if not filtered() then return end\n"
+     "        local s = AmazingHub.db.settings\n"
+     "        s.sortBy, s.sortAsc = nil, nil\n"
+     "        host.classFilter, host.segment = nil, \"all\"\n"
+     "        if host.UpdateRailActive then host:UpdateRailActive() end\n"
+     "        if searchBox:GetText() ~= \"\" then searchBox:SetText(\"\") end\n"
+     "        searchBox:ClearFocus()\n"
+     "        host:RefreshRoster()\n"
+     "    end)\n"
+     "    host.resetButton = resetBtn\n"
+     "    local TOOLBAR_PAD, TOOLBAR_GAP = 12, 10\n",
+     "roster: a Reset button for rank, class, search and sort"),
+    ("UI/RosterFrame.lua",
+     "        { key = \"analytics\", frame = analyticsBtn, priority = 50 },\n",
+     "        { key = \"analytics\", frame = analyticsBtn, priority = 50 },\n"
+     "        { key = \"reset\",     frame = resetBtn,     priority = 95 }, -- Amazing Hub\n",
+     "roster: Reset between Analytics and the search box"),
+    ("UI/RosterFrame.lua",
+     "            if not item.invite or AmazingHub.Compat.AddonMayInvite() then\n",
+     "            if (not item.invite or AmazingHub.Compat.AddonMayInvite()) and (not item.active or item.active()) then\n",
+     "roster: a toolbar item may be there only while it applies (Reset)"),
+    ("Core/Commands.lua",
+     "    elseif msg == \"search\" or msg:match(\"^find\") then\n"
+     "        if AmazingHub.Search then\n"
+     "            local q = strtrim((msg:gsub(\"^find%s*\", \"\")))\n",
+     "    elseif msg == \"search\" or msg:match(\"^search%s\") or msg:match(\"^find\") then -- Amazing Hub: /amazing search text\n"
+     "        if AmazingHub.Search then\n"
+     "            local q = strtrim((msg:gsub(\"^find%s*\", \"\"):gsub(\"^search%s+\", \"\")))\n",
+     "/amazing search <text> searches (only /amazing find <text> did)"),
+    ("UI/ProfessionsPanel.lua",
+     "            if IsShiftKeyDown() and e.out and e.out > 0 and HandleModifiedItemClick then\n"
+     "                local _, link = AmazingHub.Compat.GetItemInfo(e.out)\n"
+     "                if link then HandleModifiedItemClick(link) end\n"
+     "                return\n"
+     "            end\n",
+     "            if IsShiftKeyDown() and HandleModifiedItemClick then\n"
+     "                -- Amazing Hub: the item it makes; a recipe that makes none (an enchant) links itself (H32)\n"
+     "                local link = e.out and e.out > 0 and select(2, AmazingHub.Compat.GetItemInfo(e.out)) or nil\n"
+     "                if not link and AmazingHub.PackLinks then link = AmazingHub.PackLinks.RecipeLink(e.id) end\n"
+     "                if link then HandleModifiedItemClick(link) end\n"
+     "                return\n"
+     "            end\n",
+     "crafts: Shift-click links the item, an enchant its recipe"),
+    ("UI/ProfessionsPanel.lua",
+     "        detail:SetRecipe({ id = e.id, recipeId = e.id, item = (e.out and e.out > 0) and e.out or nil, crafters = list2,\n",
+     "        detail:SetRecipe({ id = e.id, recipeId = e.id, item = (e.out and e.out > 0) and e.out or nil, crafters = list2,\n"
+     "                           recipeItem = (e.recipeItem and e.recipeItem > 0) and e.recipeItem or nil, -- Amazing Hub\n",
+     "crafts: the opened recipe knows what teaches it (UI/Materials.lua)"),
+    ("Core/Compat.lua",
+     "function Compat.TooltipUnit(tooltip)\n",
+     "-- Amazing Hub: a spell's chat link (a recipe is a spell), or nil. C_Spell.GetSpellLink is in Forever 1.60.1's\n"
+     "-- SpellDocumentation; the global GetSpellLink is the older clients'.\n"
+     "function Compat.SpellLink(spellID)\n"
+     "    if type(spellID) ~= \"number\" then return nil end\n"
+     "    local get = (C_Spell and C_Spell.GetSpellLink) or GetSpellLink\n"
+     "    if not get then return nil end\n"
+     "    local ok, link = pcall(get, spellID)\n"
+     "    if ok and type(link) == \"string\" and link ~= \"\" then return link end\n"
+     "    return nil\n"
+     "end\n\n"
+     "function Compat.TooltipUnit(tooltip)\n",
+     "Compat.SpellLink: a recipe's link"),
 ]
 
 # Patches whose anchor occurs a known number of times: (file, old, new, why, times).
@@ -675,11 +835,13 @@ PATCHES_ALL: list[tuple[str, str, str, str, int]] = [
     ("tools/style.lua", "S = load({ db = {} }); S:Resolve()",
      "S = load({ db = { style = \"amazinghub\" } }); S:Resolve()",
      "style test: blocks that check the flat look pick Modern (nothing saved is Classic now)", 5),
+    ("tools/settings-panel.lua", "\"Short tag: [M] on a main, [Main] on an alt\"",
+     "\"Short tag: [M] on a main, the main's name on an alt\"", "settings test: the short tag's new label (U3)", 2),
 ]
 
 # Our own hub files: (file in addon/hub-extra, folder in the hub). Appended to the TOC in this order. The item
 # catalogue's data (tools/build-catalog.py) comes before the file that hands it to the wishlist.
-EXTRAS = [("PackMigrate.lua", "UI"), ("PackTweaks.lua", "UI"), ("TableSort.lua", "UI"), ("ChatTag.lua", "UI"), ("WishImport.lua", "UI"), ("LedgerPanel.lua", "UI"), ("SettingsPlus.lua", "UI"),
+EXTRAS = [("PackMigrate.lua", "UI"), ("PackTweaks.lua", "UI"), ("TableSort.lua", "UI"), ("ChatTag.lua", "UI"), ("WishImport.lua", "UI"), ("LedgerPanel.lua", "UI"), ("SettingsPlus.lua", "UI"), ("Windows.lua", "UI"), ("Links.lua", "UI"), ("ClearBox.lua", "UI"), ("Materials.lua", "UI"), ("Joined.lua", "UI"), ("SearchBox.lua", "UI"), ("OrderWhisper.lua", "UI"),
           ("Data/ItemCatalog.lua", "Data"), ("ItemCatalog.lua", "UI")]
 
 # Files that call the chat globals directly get guarded file-locals in front, so no code path sends past the guard.

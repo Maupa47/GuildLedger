@@ -404,8 +404,10 @@ function AmazingHub:CreateProfessionsPanel(parent, _win)
         row:SetScript("OnClick", function(self)
             local e = self.data
             if not (e and state.mode == "recipes" and detail) then return end
-            if IsShiftKeyDown() and e.out and e.out > 0 and HandleModifiedItemClick then
-                local _, link = AmazingHub.Compat.GetItemInfo(e.out)
+            if IsShiftKeyDown() and HandleModifiedItemClick then
+                -- Amazing Hub: the item it makes; a recipe that makes none (an enchant) links itself (H32)
+                local link = e.out and e.out > 0 and select(2, AmazingHub.Compat.GetItemInfo(e.out)) or nil
+                if not link and AmazingHub.PackLinks then link = AmazingHub.PackLinks.RecipeLink(e.id) end
                 if link then HandleModifiedItemClick(link) end
                 return
             end
@@ -513,6 +515,7 @@ function AmazingHub:CreateProfessionsPanel(parent, _win)
         if not e then detail:Hide(); return end
         local list2 = crafterList(e.crafters, state.who)
         detail:SetRecipe({ id = e.id, recipeId = e.id, item = (e.out and e.out > 0) and e.out or nil, crafters = list2,
+                           recipeItem = (e.recipeItem and e.recipeItem > 0) and e.recipeItem or nil, -- Amazing Hub
                            meta = metaText(e) }, state.openTo, fresh)
     end
 

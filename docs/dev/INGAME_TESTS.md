@@ -492,17 +492,28 @@ features)" ticked):
 | # | Do | Expect |
 |---|---|---|
 | H1 | log in, `/amazing` | the window opens, no Lua error (BugSack); the About text says "Amazing Forever Guild Pack" |
+works
 | H2 | Settings → each sub-tab (Profile, Interface, Chat, Modules, Rules, Data) | every heading has + or −; the first section of a page is open, the others closed; a click opens or closes it |
+works
 | H3 | Settings → Chat → "Chat messages"; Interface → "World map"; Profile → "Collector (officers)" | our three sections at the end of those pages, switches work as in 0.6 |
+works
 | H4 | Settings → Chat → Guild chat | under "Short tag": "What others see in the brackets for my lines" with a Save button, and "Show no tag at all" |
+text gets shortenend to "brackets for my li..." also "Floy. Empty: the us...", i understands [M] on main, [Main] on an alt says main or the mains name? if it says the main put in the brackets "your maincharacters name" , also who does it work now with saving alts?
 | H5 | Settings → Interface → UI scale | five buttons 80%–120%, the current one gold; a click rescales at once |
+works, do a bigger range like 60 70 ... 130 140%
 | H6 | Groups tab → create a group | "Also post in guild chat" and "Invite whoever asks" are there, both **unticked** |
+i did it, i coulkd do both once, looking for group and looking for members, once i was able to post it through the ui in guildchat, bute the other times nothing happend, after /reload looking for group works, but looking for members i cant get to work, trtied different actions, group configs, post to guild on and off , its get posted on the active tab but not published in guildchat
 | H7 | Leadership tab | sub-tabs "Bulk actions", "Without AmazingHub", "Chat alerts", "Alert rules" are there |
+tested bulk actions, can set filter and all, i see preview but when i actuall click next nothing happens, like actual command doesnt get written in chat maybe same issue as h6, reminder whisper to get the addon also didnt work
 | H8 | Bank tab (officer, at the bank) | the Cleanup sub-tab and the Cleanup button in the bank bar |
+seems work, i was able to post a request
 | H9 | a member's detail → Warn | the "Only record it, without a whisper" box is there |
+also whisper didnt go out
 | H10 | Ranks sub-tab | arrows only on members below your rank |
-| H11 | Loot window → Accounts (DKP standings), Professions → Recipes and Crafters | clicking a heading sorts, again flips, with an arrow |
-| H12 | Wishlist window | "Import from Discord" in the title bar |
+yes
+tested professions tab, orders get posted but whispers again dont go out
+| H11 | Loot window → Accounts (DKP standings) i see the tabs but couldnt test it, Professions → Recipes and Crafters | clicking a heading sorts, again flips, with an arrow | yeah sorting works, but if u do a sort by lvl exampl it should mix the offline and online players, not list first all onlines by level and then all offlines by level
+| H12 | Wishlist window | "Import from Discord" in the title bar | couldnt test it but was there
 | H13 | the data you had before 21/11 and since (Raids, wishlists, notes) | both are there; in the SavedVariables file the old key `"<guild>-"` still exists and `_packRealmMerged` names it |
 
 **Without the developer addon** (untick "Amazing Hub (developer features)" in the AddOns list, log in; this is
@@ -510,10 +521,124 @@ what CurseForge players get):
 
 | # | Do | Expect |
 |---|---|---|
-| H14 | Groups tab → create a group | neither "Also post in guild chat" nor "Invite whoever asks"; nothing is said in /g |
-| H15 | Leadership tab | no "Bulk actions", "Without AmazingHub", "Chat alerts", "Alert rules"; `/amazing bulk` says "Not available" |
-| H16 | Bank tab | no Cleanup sub-tab, no Cleanup button at the bank |
+| H14 | Groups tab → create a group | neither "Also post in guild chat" nor "Invite whoever asks"; nothing is said in /g | ah answers it from before
+| H15 | Leadership tab | no "Bulk actions", "Without AmazingHub", "Chat alerts", "Alert rules"; `/amazing bulk` says "Not available" | answered later
+| H16 | Bank tab | no Cleanup sub-tab, no Cleanup button at the bank | works
 | H17 | Warn a member | no "Only record it" box; the text label says it is kept with the warning; the member gets **no** whisper |
 | H18 | a second player with the old 0.6 pack online at the same time | no Lua errors on either side; roster and professions sync both ways |
 
-Tick the developer addon again afterwards. Result: (pending)
+ah okay that answer some things in regards to issues i emntioned
+
+Tick the developer addon again afterwards.
+
+Result (2026-11-24): H1–H3, H5, H7 (list and preview), H8, H10–H12 work; H13–H18 not run yet. Fixed after the round:
+- **No whisper ever went out** (H7 reminder, H9 warn, profession orders): our guild-members-only check did not
+  know Forever's whisper form "First-Surname". It now compares names without case, spaces and hyphens against
+  the roster (`Compat.InOurGuild`, test `test_whispers_reach_guild_members_by_their_whisper_name_only`).
+- **H7 Next did nothing visible**: on Forever the game refuses /gpromote from an addon, so the hub prints the line
+  to type, and our quiet-chat setting hid it (the secure Next button was not a counted click). Every mouse click
+  now counts (`GLOBAL_MOUSE_DOWN`, PackTweaks).
+- **H6 only the first post reached /g**: upstream's limit of one hub line in guild chat per 5 minutes (LFG and
+  group share it), kept on purpose. The repeat every 10 minutes is dropped by Forever (needs a click); the button
+  "Post in chat" on your own group shows the minutes left ("in 3m").
+- H4: the field is "My own tag" with the explanation as a note under it; the short tag reads "[M] on a main,
+  the main's name on an alt". H5: nine buttons 60 %–140 %. H11: the roster mixes online and offline members
+  except when sorted by Last seen.
+
+### Hub round U3b (after the fixes; `/reload` is enough, the folders are linked)
+
+| # | Do | Expect |
+|---|---|---|
+| H19 | warn a guild member who is online, without "Only record it" | they get the whisper | works
+| H20 | Leadership → Without AmazingHub → remind one member | they get the whisper | works
+| H21 | Professions → an order to an online crafter | they get the whisper | no whisper got send
+| H22 | Bulk actions → set up a promote → Next | chat says "Type /gpromote … in chat"; typing it works; Next shows the one after | yeah but thats useless, i also know the command for kicking, it just says what i need to type, how come it can whisper but not automatically type this?
+| H23 | Settings → Chat → Guild chat | "My own tag" with Save, the note under it is whole; Interface → UI scale 60 %–140 % | yeah works, but instead of lines write textlines otherwise its confusing what is ment
+| H24 | Members list, sort by Level, then by Last seen | Level mixes online and offline; Last seen puts online first | yes works perfect
+| H25 | H13–H18 above | as written |
+
+Result (2026-11-25): H19, H20, H23, H24 work. H13, H17, H18 still open. Fixed after the round:
+- H21: an order reaches the crafter through the hub (guild addon message), never by whisper (my expectation in
+  H21 was wrong). But the Whisper buttons (Orders, the craft finder, Recipes "Can you craft …?") opened
+  `/w First Surname`, which whispers "First" with "Surname" as the text. They now use the whisper form
+  "First-Surname" (`AmazingHub:OpenWhisper`).
+- H22: works as the game allows. Promote, demote and remove are protected actions: WoW lets only Blizzard's own
+  code run them, and blocks an addon even from a click (Forever 1.60.1, measured 2026-11-04 for guild invites:
+  the call, a secure macro button and a line left in the chat box were all refused). A whisper is not
+  protected, so the hub may send it. Nothing to fix.
+- H23: the tag texts say "guild chat messages" instead of "lines".
+
+### Hub round U3c (`/reload`)
+
+| # | Do | Expect |
+|---|---|---|
+| H26 | Professions → Orders → Whisper on an order of a member with a surname; Recipes → "Can you craft"; the craft finder's whisper | the chat box opens on `/w First-Surname …`; Enter sends it to the right person |
+| H27 | Settings → Chat → Guild chat | the note and "No tag at all in front of my guild chat messages" read clearly |
+| H28 | H13, H17, H18 | as written |
+
+Result: (pending)
+
+## Hub round H (our own hub changes, PLAN_COMMUNITY phase H, branch repin-140, 2026-11-25) — run when ready
+
+Needs: `/reload` (the folders are linked). With the developer addon ticked, as you play. Paste what differs.
+
+| # | Do | Expect |
+|---|---|---|
+| H29 | open the hub, then a member's card, the wishlist, a craft order; click the hub's main window | each new window opens in front; a click on one brings it to the front (H1) | yes it opens in front
+| H30 | title bar: type `li` in the search box | a list under it: Members, Recipes, Items, Bank, Settings, Tabs, at most 8 lines each; nothing for one letter (H2) | yes it works, make the search field 50% bigger and replace search with search everything
+| H31 | click a member / a recipe / an item / a setting / a tab in that list | the member's card; Crafts opened on the recipe; the Bank tab (if the bank holds it) or the wishlist; the Settings page, its section open, the switch blinking; that tab | works
+| H32 | in the list: Up/Down, Enter, Esc; Shift + click an item line | the mark moves (if not, tell me: Up/Down is not proven on Forever), Enter opens the marked line, Esc closes; Shift + click puts the item link into chat | works, would also be nice if i could shift click the recipe so i can link it to people
+| H33 | `/amazing search linen` | the hub opens with `linen` in the box and the list open | doesnt work
+| H34 | any search field (members, recipes, bank): type something | an "×" at its right end; a click empties the field (H3) | yes there is an x
+| H35 | Members: click a rank and a class on the left, type a name | the search field shows "×"; one click: whole list again, no rank, no class, no text | yes this x shows up but its really small and people wont see it, combine the reset of ranks and classes on the left side and the sort that is applied to columns and add a reset button between analytics and the search bar
+| H36 | Settings → Interface → "Member list" → "Online members first, whatever column is sorted" | on: online first in every sort; off: mixed (Last seen always online first) (H4) | works
+| H37 | fold the hub to the bar (minimise), close it, `/amazing` | it opens full size (H5) | works
+| H38 | in a fresh WTF copy or a new guild: guild chat with annotation | on by default: level and alt tag, no class icon; after you change them and `/reload` your choice stays (H6) |works
+| H39 | Shift + click a material in an opened recipe, a wishlist line, a loot line | the item link goes into the open chat box, once (H7) | works
+| H40 | relog twice on a character with an alt in the guild; "Not now" once; relog | the question comes at most once per login, and never again after "Not now" or "Link" (H8) | works
+| H41 | Crafts → open a recipe whose materials the guild bank holds | "· bank N" after the material's name; the "MATERIALS × N" buttons multiply the need (H9) | works
+| H42 | Members → column Joined (officer) | a member who joined before your hub saw them shows GuildLedger's earlier date with "~" (H10) | works
+
+Result (2026-11-26): all work except H33. U3c: the order Whisper still does not reach the crafter (open, see
+below). Changes after the round:
+- H30: the box is 50 % wider and says "Search everything".
+- H32: Shift + click on a recipe (Crafts list and the search list) links the recipe itself (`Compat.SpellLink`:
+  `C_Spell.GetSpellLink`), else the item it makes.
+- H33: `/amazing search text` did nothing because upstream only searched `/amazing find text`; both work now.
+- H35: a **Reset** button between Analytics and the search box, there only while a rank, class, search or column
+  sort differs from the default; one click restores all. The search fields' "×" only empties the field now.
+
+### Hub round H-b (`/reload`)
+
+| # | Do | Expect |
+|---|---|---|
+| H43 | title bar | a wider box "Search everything" |
+| H44 | Shift + click a recipe in Crafts, and a recipe line in the search list, with the chat box open | the recipe's link, e.g. "[Tailoring: Linen Cloak]" |
+| H45 | `/amazing search linen` | the hub opens with `linen` in the box and the list open |
+| H46 | Members: pick a rank, a class, type a name, sort by Class | "Reset" appears between Analytics and the search box; one click: whole list by level, Reset gone |
+| H47 | the order whisper: exactly which button, on which order (yours or someone else's, open or accepted), what the chat box shows after the click, and what happens on Enter | (describe) |
+
+Result (2026-11-26, from the admin's notes): H44 linked the recipe, but the item is wanted; Reset should always be
+there; H47 meant: an order to one crafter should whisper them. Changed, to check in the next round:
+
+| # | Do | Expect |
+|---|---|---|
+| H48 | Crafts list: Shift + click a recipe that makes an item; then an enchant | the item's link; the enchant's recipe link. Same in the title bar's search list |
+| H49 | open a Blacksmithing recipe learned from plans | under the crafters: "Recipe: [Blacksmithing: …]" and "Learned from: [Plans: …]"; hover shows the tooltip, Shift + click links each; a trainer recipe shows only "Recipe" |
+| H50 | Members toolbar | "Reset" always between Analytics and the search box; with nothing to reset a click changes nothing |
+| H51 | Crafts → an item → "Ask" one crafter (To <name> only) → Send order | the order is in the list, and the crafter gets "[Amazing Hub] I sent you a craft order: [item] … Open Amazing Hub > Crafts > Orders to accept it." |
+| H52 | the same with "Send to anyone" | the order is in the list, nobody gets a whisper |
+
+Result: (pending)
+
+## Hub data upload (phase X, 2026-11-26) — after the next deployment
+
+Order: deploy the bot first (`.\tools\deploy.ps1`), then run the companion from the repo or the next release.
+
+| # | Do | Expect |
+|---|---|---|
+| X1 | in game `/reload` with the hub, then watch the companion window | a line "imported AmazingHub.lua: hub: professions N, bank tabs N, money 1, ledger +N, alt links N" |
+| X2 | wait for the upload | no ❌ in `#gl-ingest`; the upload message gets ✅ |
+| X3 | `/reload` again without changes | no new "hub:" line with numbers above 0, no new upload for it |
+
+Result: (pending)

@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from guildledger import loot
+from guildledger import hubdata, loot
 from guildledger.store import ImportResult, Spool
 
 from .collection import ingest
@@ -60,6 +60,9 @@ class Archive(Spool):
             if rows.loot:
                 for kind in loot.ROW_TYPES:
                     lres.add(loot.merge(self.db, guild, kind, [r for k, r in rows.loot if k == kind], collector))
+            if rows.hub:  # professions, guild bank, alt links (shared/schema.md 8)
+                for kind in hubdata.ROW_TYPES:
+                    hubdata.merge(self.db, guild, kind, [r for k, r in rows.hub if k == kind], collector)
             for k in ("chat_new", "chat_updated", "chat_merged", "chat_dup", "events_new", "events_dup",
                       "events_updated", "members_new", "links_new", "skipped"):
                 setattr(total, k, getattr(total, k) + getattr(res, k))

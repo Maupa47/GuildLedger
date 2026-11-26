@@ -289,9 +289,9 @@ local function handleCommand(msg)
         if AmazingHub.Polls then AmazingHub.Polls:Show() end
     elseif msg == "calendar" or msg == "cal" or msg == "events" then
         if AmazingHub.ShowCalendar then AmazingHub:ShowCalendar() end
-    elseif msg == "search" or msg:match("^find") then
+    elseif msg == "search" or msg:match("^search%s") or msg:match("^find") then -- Amazing Hub: /amazing search text
         if AmazingHub.Search then
-            local q = strtrim((msg:gsub("^find%s*", "")))
+            local q = strtrim((msg:gsub("^find%s*", ""):gsub("^search%s+", "")))
             AmazingHub.Search:Show(q ~= "search" and q or "")
         end
     elseif msg:match("^order") and AmazingHub.ShowCraftOrderDialog then

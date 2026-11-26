@@ -30,7 +30,7 @@ from . import __version__
 from . import config as config_mod
 from . import detect
 from . import discord
-from . import loot
+from . import hubdata, loot
 from . import package as package_mod
 from . import update as update_mod
 from . import upload as upload_mod
@@ -56,6 +56,9 @@ def import_hub_file(spool: Spool, path: Path, collector: str, data: dict | None 
     res = loot.import_hub(spool.db, data, spool.guild_names(), collector, seen)
     if res.changed:
         log.info("imported %s: %s", path.name, res.summary())
+    hres = hubdata.import_hub(spool.db, data, spool.guild_names(), collector)  # shared/schema.md 8
+    if hres.changed:
+        log.info("imported %s: %s", path.name, hres.summary())
     return res
 
 

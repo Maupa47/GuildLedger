@@ -498,9 +498,9 @@ function AmazingHub:CreateRecipesPanel(parent, _mainFrame)
                             itemLink = select(2, AmazingHub.Compat.GetItemInfo(entry.itemId))
                         end
                         if itemLink then
-                            ChatFrame_OpenChat("/w " .. firstOnlineCrafter .. " " .. string.format(L["Can you craft %s?"], itemLink))
+                            AmazingHub:OpenWhisper(firstOnlineCrafter, string.format(L["Can you craft %s?"], itemLink))
                         else
-                            ChatFrame_OpenChat("/w " .. firstOnlineCrafter .. " " .. string.format(L["Can you craft %s?"], entry.name or L["this item"]))
+                            AmazingHub:OpenWhisper(firstOnlineCrafter, string.format(L["Can you craft %s?"], entry.name or L["this item"]))
                         end
                     end
                 end)

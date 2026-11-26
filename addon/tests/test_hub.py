@@ -95,8 +95,8 @@ def test_settings_sections_and_world_map():
 def test_ledger_tab_is_built_in():
     toc = (HUB / "AmazingHub.toc").read_text("utf-8")
     assert toc.rstrip().endswith(
-        "UI\\PackMigrate.lua\nUI\\PackTweaks.lua\nUI\\TableSort.lua\nUI\\ChatTag.lua\nUI\\WishImport.lua\nUI\\LedgerPanel.lua\nUI\\SettingsPlus.lua\nData\\ItemCatalog.lua\nUI\\ItemCatalog.lua")
-    for name in ("PackMigrate.lua", "PackTweaks.lua", "TableSort.lua", "ChatTag.lua", "WishImport.lua", "LedgerPanel.lua", "SettingsPlus.lua",
+        "UI\\PackMigrate.lua\nUI\\PackTweaks.lua\nUI\\TableSort.lua\nUI\\ChatTag.lua\nUI\\WishImport.lua\nUI\\LedgerPanel.lua\nUI\\SettingsPlus.lua\nUI\\Windows.lua\nUI\\Links.lua\nUI\\ClearBox.lua\nUI\\Materials.lua\nUI\\Joined.lua\nUI\\SearchBox.lua\nUI\\OrderWhisper.lua\nData\\ItemCatalog.lua\nUI\\ItemCatalog.lua")
+    for name in ("PackMigrate.lua", "PackTweaks.lua", "TableSort.lua", "ChatTag.lua", "WishImport.lua", "LedgerPanel.lua", "SettingsPlus.lua", "Windows.lua", "Links.lua", "ClearBox.lua", "Materials.lua", "Joined.lua", "SearchBox.lua", "OrderWhisper.lua",
                  "ItemCatalog.lua"):
         assert (HUB / "UI" / name).read_bytes() == (ROOT / "addon" / "hub-extra" / name).read_bytes()
 
@@ -416,4 +416,397 @@ def test_item_catalogue_reaches_the_wishlist_on_forever_only():
         n = g.AmazingHub.Wishlist.catalogCount
         assert (n is not None and n > 4000) is want, (game, n)
         assert g.AmazingHub.Wishlist.catalog[19019].name == "from the journal"  # never overwritten
+
+
+def test_whispers_reach_guild_members_by_their_whisper_name_only():
+    """U3 (2026-11-24): every whisper was dropped, because Forever whispers "First-Surname" for "First Surname"."""
+    src = (HUB / "Core" / "Compat.lua").read_text("utf-8")
+    start = src.index("local GUILD_ONLY")
+    end = src.index("-- Stands in for the global SendChatMessage")
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        Compat = { IsSecret = function() return false end }
+        AmazingHub = { IsGuildmate = function() return false end,
+                       GetPlayerKey = function(_, n) return n .. "-Realm" end }
+        ROSTER = { "Floyd Mainchar", "Neu", "Other-Elsewhere" }
+        function GetTime() return 100 end
+        function GetRealmName() return "Realm" end
+        function GetNumGuildMembers() return #ROSTER end
+        function GetGuildRosterInfo(i) return ROSTER[i] end
+    """)
+    lua.execute(src[start:end])
+    ok = lua.eval("function(n) return Compat.AllowedOutbound('WHISPER', n) end")
+    for name in ("Floyd-Mainchar", "Floyd Mainchar", "floyd-mainchar", "Neu", "Neu-Realm", "Other-Elsewhere",
+                 "Floyd Mainchar-Realm"):
+        assert ok(name) is True, name
+    for name in ("Floyd", "Mainchar", "Stranger", "Neu-Elsewhere", "", None):
+        assert ok(name) is False, name
+    assert lua.eval("Compat.AllowedOutbound('SAY', 'Neu')") is False
+    assert lua.eval("Compat.AllowedOutbound('GUILD')") is True
+
+
+
+def test_alt_question_is_asked_once_and_remembered():
+    """H8 (PLAN_COMMUNITY W18): upstream's fix, checked across logins: Not now and Link both stop the question."""
+    lj = _luajit()
+    assert _run_lua(lj, Path(__file__).with_name("hub_alts.lua"), HUB) == "ok"
+
+
+def _frame_lua():
+    return """
+        local function frame(shown)
+            local f = { shown = shown, raised = 0, top = false, hooks = {} }
+            function f:SetToplevel(v) self.top = v end
+            function f:Raise() self.raised = self.raised + 1 end
+            function f:IsShown() return self.shown end
+            function f:Show() self.shown = true; for _, h in ipairs(self.hooks) do h(self) end end
+            function f:Hide() self.shown = false end
+            function f:SetShown(v) if v then self:Show() else self:Hide() end end
+            function f:HookScript(_, h) self.hooks[#self.hooks + 1] = h end
+            return f
+        end
+        NEW_FRAME = frame
+    """
+
+
+def test_hub_windows_come_to_the_front_and_reopen_whole():
+    """H1 (W11) and H5 (W15): hub-extra/Windows.lua."""
+    lua = _luajit().LuaRuntime()
+    lua.execute(_frame_lua())
+    lua.execute("""
+        clicks, timers = nil, {}
+        function CreateFrame() return { SetScript = function(_, _, fn) clicks = fn end } end
+        AmazingHub = { db = { settings = { window = { collapsed = true } } },
+            Compat = { RegisterEvent = function() end, After = function(_, fn) timers[#timers + 1] = fn end } }
+        main = NEW_FRAME(false); main.band = "bar"; main.folds = 0
+        function main:ToggleCollapsed() self.folds = self.folds + 1; AmazingHub.db.settings.window.collapsed = nil end
+        AmazingHub.UI = {
+            StylePopup = function(_, f) f.styled = true; return f end,
+            GetMainWindow = function() AmazingHub.RosterFrame = main; return main end,
+            ToggleMain = function(self) local f = self:GetMainWindow(); f:SetShown(not f:IsShown()) end,
+        }
+    """)
+    lua.execute((HUB / "UI" / "Windows.lua").read_text("utf-8"))
+    out = lua.eval("""(function()
+        local UI, r = AmazingHub.UI, {}
+        local p = NEW_FRAME(true)
+        UI:StylePopup(p)
+        r[#r + 1] = tostring(p.styled and p.top and p.raised == 1)      -- a styled popup: top-level, in front
+        p:Hide(); p:Show()
+        r[#r + 1] = tostring(p.raised == 2)                              -- in front again when shown
+        UI:ToggleMain()
+        r[#r + 1] = tostring(main.shown and main.folds == 1 and main.top) -- closed folded: opens whole
+        UI:ToggleMain(); main.band = "full"; UI:ToggleMain()
+        r[#r + 1] = tostring(main.folds == 1)                            -- not folded: left as it is
+        AmazingHubWishlistFrame = NEW_FRAME(true)                        -- made later by a click
+        clicks(); for _, fn in ipairs(timers) do fn() end
+        r[#r + 1] = tostring(AmazingHubWishlistFrame.top and AmazingHubWishlistFrame.raised == 1)
+        clicks(); for _, fn in ipairs(timers) do fn() end
+        r[#r + 1] = tostring(AmazingHubWishlistFrame.raised == 1)        -- hooked once only
+        return table.concat(r, ",")
+    end)()""")
+    assert out == "true,true,true,true,true,true"
+
+
+def test_chat_annotation_defaults_apply_once():
+    """H6 (W16): annotate on, class icon off, level on, alt tag on, once; the player's later choice stays."""
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        AmazingHub = { UI = { GetFeature = function() end }, db = { settings = {}, chatTweaks = { classIcon = true } } }
+        started = 0
+        AmazingHub.ChatTweaks = { Initialize = function() started = started + 1 end }
+    """)
+    lua.execute((HUB / "UI" / "PackTweaks.lua").read_text("utf-8"))
+    out = lua.eval("""(function()
+        local db, r = AmazingHub.db, {}
+        AmazingHub.ChatTweaks:Initialize()
+        local c = db.chatTweaks
+        r[#r + 1] = table.concat({ tostring(c.enabled), tostring(c.classIcon), tostring(c.level), tostring(c.altTag),
+            tostring(db.settings.packChatDefaults), started }, " ")
+        c.enabled, c.level = false, false
+        AmazingHub.ChatTweaks:Initialize()
+        r[#r + 1] = tostring(c.enabled) .. " " .. tostring(c.level) .. " " .. started
+        return table.concat(r, ";")
+    end)()""")
+    assert out == "true false true true 1 1;false false 2"
+
+
+def test_shift_click_links_the_tooltip_item_once():
+    """H7 (W17): hub-extra/Links.lua links what the tooltip shows unless the row linked it itself."""
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        T, linked, mouse = 10, {}, true
+        function GetTime() return T end
+        hooks = {}
+        function hooksecurefunc(name, fn) hooks[name] = fn end
+        function HandleModifiedItemClick(l) linked[#linked + 1] = l; if hooks.HandleModifiedItemClick then hooks.HandleModifiedItemClick(l) end end
+        tip = "|cff1eff00|Hitem:2589::::::::|h[Linen Cloth]|h|r"
+        GameTooltip = { IsShown = function() return tip ~= nil end }
+        AmazingHub = { Compat = { TooltipItem = function() return "Linen Cloth", tip end } }
+        AmazingHub.RosterFrame = { IsShown = function() return true end, IsMouseOver = function() return mouse end }
+    """)
+    lua.execute((HUB / "UI" / "Links.lua").read_text("utf-8"))
+    out = lua.eval("""(function()
+        local L, r = AmazingHub.PackLinks, {}
+        r[#r + 1] = tostring(L.AfterClick(10))                -- a row with only a tooltip: linked
+        HandleModifiedItemClick("row's own")                  -- a row that links itself, same click
+        r[#r + 1] = tostring(L.AfterClick(10))                -- not linked twice
+        T = 11; mouse = false
+        r[#r + 1] = tostring(L.AfterClick(11))                -- not over a hub window
+        mouse = true; tip = "|Hspell:123|h[Enchant]|h"
+        r[#r + 1] = tostring(L.AfterClick(11))                -- a spell is not an item
+        return table.concat(r, ",") .. ";" .. #linked
+    end)()""")
+    assert out == "true,false,false,false;2"
+
+
+def test_search_fields_get_a_clear_button():
+    """H3 (W13): hub-extra/ClearBox.lua."""
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        local function widget()
+            local w = { shown = true, hooks = {}, scripts = {} }
+            function w:SetSize() end
+            function w:SetPoint() end
+            function w:SetShown(v) self.shown = v end
+            function w:SetScript(k, fn) self.scripts[k] = fn end
+            function w:HookScript(k, fn) self.hooks[k] = self.hooks[k] or {}; table.insert(self.hooks[k], fn) end
+            return w
+        end
+        function CreateFrame() return widget() end
+        local function input()
+            local b = widget()
+            b.text = ""
+            function b:GetText() return self.text end
+            function b:SetText(t) self.text = t; for _, fn in ipairs(self.hooks.OnTextChanged or {}) do fn(self) end end
+            function b:ClearFocus() end
+            function b:SetTextInsets() end
+            return b
+        end
+        AmazingHub = { UI = {
+            CreateText = function() return { SetPoint = function() end } end,
+            CreateInput = function() return input() end,
+        } }
+        function AmazingHub:CreateRosterPanel(parent, host)
+            host.searchBox = AmazingHub.UI:CreateInput(parent, 160, 22, { placeholder = "Search" })
+            host.segment, host.classFilter, host.refreshed = "all", nil, 0
+            function host:UpdateRailActive() end
+            function host:SetSegment(id) self.segment = id; self:UpdateRailActive() end
+            host.searchBox:HookScript("OnTextChanged", function(b) host.searchFilter = b:GetText() end)
+        end
+    """)
+    lua.execute((HUB / "UI" / "ClearBox.lua").read_text("utf-8"))
+    out = lua.eval("""(function()
+        local UI, r = AmazingHub.UI, {}
+        local plain = UI:CreateInput(nil, 100, 22, { placeholder = "Search recipes" })
+        local note = UI:CreateInput(nil, 100, 22, { multiline = true, placeholder = "Note" })
+        local amount = UI:CreateInput(nil, 100, 22, { numeric = true, placeholder = "0" })
+        r[#r + 1] = tostring(plain.packClear ~= nil and note.packClear == nil and amount.packClear == nil)
+        r[#r + 1] = tostring(plain.packClear.shown)                 -- empty: no x
+        plain:SetText("linen")
+        r[#r + 1] = tostring(plain.packClear.shown)                 -- text: x
+        plain.packClear.scripts.OnClick()
+        r[#r + 1] = tostring(plain:GetText() == "" and not plain.packClear.shown)
+        return table.concat(r, ",")
+    end)()""")
+    assert out == "true,false,true,true"
+
+
+def test_recipe_materials_show_the_guild_bank_count():
+    """H9 (W19): hub-extra/Materials.lua."""
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        local function fs() return { t = "", SetText = function(s, t) s.t = t end, GetText = function(s) return s.t end } end
+        seen = 0
+        AmazingHub = {
+            GuildBank = { Newest = function() return seen end,
+                          CountOf = function(_, id) return ({ [2589] = 40 })[id] or 0 end },
+            CraftOrders = { Reagents = function() return { { itemID = 2589, count = 2 }, { itemID = 2320, count = 1 } } end },
+        }
+        function AmazingHub:CreateCraftDetail()
+            local d = { mats = { { name = fs() }, { name = fs() } } }
+            function d:Paint() self.mats[1].name:SetText("Linen Cloth"); self.mats[2].name:SetText("Coarse Thread") end
+            return d
+        end
+    """)
+    lua.execute((HUB / "UI" / "Materials.lua").read_text("utf-8"))
+    out = lua.eval("""(function()
+        local d = AmazingHub:CreateCraftDetail()
+        d.recipe = { item = 2580 }
+        d:Paint()
+        local before = d.mats[1].name.t
+        seen = 1790000000
+        d:Paint()
+        return before .. "#" .. d.mats[1].name.t .. "#" .. d.mats[2].name.t
+    end)()""")
+    before, linen, thread = out.split("#", 2)
+    assert before == "Linen Cloth"                       # never saw the bank: nothing added
+    assert linen.startswith("Linen Cloth") and "bank 40" in linen
+    assert thread == "Coarse Thread"                     # the bank holds none
+
+
+def test_join_dates_from_guildledger_fill_the_member_history_read_only():
+    """H10 (W21): hub-extra/Joined.lua."""
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        H = {
+          ["Seen-Realm"]   = { stints = { { joinAt = 5000, joinEst = true } } },
+          ["Exact-Realm"]  = { stints = { { joinAt = 5000 } } },
+          ["Noted-Realm"]  = { stints = { { joinAt = 5000, joinEst = true, joinSrc = "note" } } },
+          ["Gone-Realm"]   = { stints = { { joinAt = 5000, leftAt = 6000 } } },
+          ["Back-Realm"]   = { stints = { { joinAt = 1000, leftAt = 3000 }, { joinAt = 5000, joinEst = true } } },
+        }
+        AmazingHub = { MemberHistory = {}, IsGuildmate = function(_, k) return k == "New-Realm" end }
+        local MH = AmazingHub.MemberHistory
+        function MH:Stints(key) return H[key] and H[key].stints or {} end
+        function MH:JoinedAt(key)
+            local s = self:Stints(key); local last = s[#s]
+            if last and last.leftAt == nil and last.joinAt then return last.joinAt, last.joinEst == true end
+        end
+        LEDGER = { Seen = 4000, Exact = 4000, Noted = 4000, Gone = 4000, Back = 2000, New = 4000, Stranger = 4000 }
+        GuildLedgerAPI = { GetJoined = function(n) return LEDGER[n] and { t = LEDGER[n], estimated = true } end }
+    """)
+    lua.execute((HUB / "UI" / "Joined.lua").read_text("utf-8"))
+    out = lua.eval("""(function()
+        local MH, r = AmazingHub.MemberHistory, {}
+        for _, k in ipairs({ "Seen", "Exact", "Noted", "Gone", "Back", "New", "Stranger" }) do
+            local t, est = MH:JoinedAt(k .. "-Realm")
+            r[#r + 1] = k .. "=" .. tostring(t) .. ":" .. tostring(est)
+        end
+        LEDGER.Seen = 6000
+        local t = MH:JoinedAt("Seen-Realm"); r[#r + 1] = "later=" .. tostring(t)
+        return table.concat(r, " ") .. " " .. tostring(H["Seen-Realm"].stints[1].joinAt)
+    end)()""")
+    assert out.split() == [
+        "Seen=4000:true",       # only seen by a hub: GuildLedger's earlier date, estimated
+        "Exact=5000:false",     # the game's own line stays
+        "Noted=5000:true",      # a day from the note stays
+        "Gone=nil:nil",         # not a member now
+        "Back=5000:true",       # GuildLedger's date lies in the earlier stay: ignored
+        "New=4000:true",        # no history yet, in the roster now
+        "Stranger=nil:nil",     # not in the roster
+        "later=5000",           # a later date changes nothing
+        "5000",                 # nothing written into the history
+    ]
+
+
+def test_title_bar_search_groups_its_results():
+    """H2 (W12): hub-extra/SearchBox.lua's query, and the Settings index it reads (SettingsPlus)."""
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        opened = {}
+        AmazingHub = {
+            L = setmetatable({}, { __index = function(_, k) return k end }),
+            UI = { featureOrder = { "roster", "bank", "settings", "dkp" },
+                   features = { roster = { id = "roster", label = "Roster", tab = true },
+                                bank = { id = "bank", label = "Bank", tab = true },
+                                settings = { id = "settings", label = "Settings", tab = true },
+                                dkp = { id = "dkp", label = "DKP", tab = false } },
+                   OpenWindow = function(_, id, sub) opened[#opened + 1] = id .. ":" .. tostring(sub); return true end },
+            IsFeatureEnabled = function() return true end,
+            Search = { Query = function(_, q) return { members = q:find("^lin") and { { name = "Linnea", class = "MAGE", level = 30, online = true } } or {} } end },
+            ProfDirectory = { RecipeRows = function(_, _, q)
+                local out = {}
+                for _, r in ipairs({ { id = 1, name = "Linen Bandage", out = 1251, crafters = {} },
+                                     { id = 2, name = "Linen Cloak", out = 2570, crafters = { "a" } } }) do
+                    if r.name:lower():find(q, 1, true) then out[#out + 1] = r end
+                end
+                return out
+            end },
+            Wishlist = { catalog = { [2589] = { name = "Linen Cloth" }, [4306] = { name = "Silk Cloth" } } },
+            GuildBank = { Index = function() return { list = { { id = 2589, total = 40 } } } end,
+                          ItemInfo = function() return {} end, CountOf = function(_, id) return id == 2589 and 40 or 0 end },
+            SettingsPlus = { Index = function() return {
+                { page = "chat", pageLabel = "Settings", label = "Chat" },
+                { page = "interface", pageLabel = "Settings > Interface", label = "Online members first, whatever column is sorted",
+                  section = "Member list" } } end, Reveal = function(e) opened[#opened + 1] = "reveal:" .. e.page end },
+            Compat = {},
+            SafeCall = function(_, fn, ...) return fn(...) end,
+        }
+        for i = 1, 20 do AmazingHub.Wishlist.catalog[10000 + i] = { name = "Linen Thing " .. i } end
+    """)
+    lua.execute((HUB / "UI" / "SearchBox.lua").read_text("utf-8"))
+    out = lua.eval("""(function()
+        local S, r = AmazingHub.PackSearch, {}
+        r[#r + 1] = tostring(#S.Query("l"))                    -- one letter: nothing
+        local g = S.Query("Lin")
+        for _, x in ipairs(g) do r[#r + 1] = x.key .. "=" .. #x.rows end
+        r[#r + 1] = g[2].rows[1].text:sub(1, 11)               -- a recipe the guild knows first
+        r[#r + 1] = g[3].rows[1].text                          -- an item whose name starts with it first
+        g[4].rows[1].go(); g[2].rows[1].go = g[2].rows[1].go
+        local t = S.Query("bank")
+        r[#r + 1] = t[#t].key .. ":" .. t[#t].rows[1].text     -- a tab
+        local s = S.Query("online members")
+        s[1].rows[1].go()
+        r[#r + 1] = s[1].key
+        return table.concat(r, ",") .. ";" .. table.concat(opened, ",")
+    end)()""")
+    head, opened = out.split(";")
+    assert head.split(",") == ["0", "members=1", "recipes=2", "items=8", "bank=1", "settings=1", "Linen Cloak",
+                               "Linen Cloth", "tabs:Bank", "settings"]
+    assert opened == "bank:nil,reveal:interface"
+
+
+
+def test_whisper_box_drops_the_realm_of_a_member_key_on_forever():
+    """U3c (2026-11-26): an order's Whisper opened "/w First-Surname-Realm"."""
+    src = (HUB / "Core" / "Utils.lua").read_text("utf-8")
+    start = src.index("function AmazingHub:WhisperTarget")
+    end = src.index("\nend\n", src.index("function AmazingHub:OpenWhisper")) + 5
+    lua = _luajit().LuaRuntime()
+    lua.execute("opened = {}; function ChatFrame_OpenChat(t) opened[#opened + 1] = t end;"
+                " AmazingHub = { Client = { has = { surnames = true } } }")
+    lua.execute(src[start:end])
+    lua.execute('AmazingHub:OpenWhisper("Floyd Mainchar-OtherRealm"); AmazingHub:OpenWhisper("Neu", "hi");'
+                ' AmazingHub.Client.has.surnames = false; AmazingHub:OpenWhisper("Bob-Realm")')
+    assert list(lua.eval("opened").values()) == ["/w Floyd-Mainchar ", "/w Neu hi", "/w Bob-Realm "]
+
+
+def test_order_to_one_crafter_whispers_them_and_to_anyone_does_not():
+    """Round H-b (2026-11-26): hub-extra/OrderWhisper.lua."""
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        sent = {}
+        AmazingHub = {
+            Client = { has = { surnames = true } },
+            Compat = { GetItemInfo = function(id) return "Cloak", "|Hitem:" .. id .. "|h[Linen Cloak]|h" end,
+                       SendWhisper = function(text, target) sent[#sent + 1] = target .. "=" .. text; return true end },
+            CraftOrders = { NameOf = function(k) return k end,
+                            Place = function(_, item, opts) return { item = item, n = opts.n, to = opts.to } end },
+        }
+        function AmazingHub:WhisperTarget(n) return (n:gsub(" ", "-")) end
+    """)
+    lua.execute((HUB / "UI" / "OrderWhisper.lua").read_text("utf-8"))
+    lua.execute('AmazingHub.CraftOrders:Place(2570, { n = 2, to = "Floyd Mainchar-Realm" })'
+                '; AmazingHub.CraftOrders:Place(2570, { n = 1 })')
+    sent = list(lua.eval("sent").values())
+    assert len(sent) == 1
+    assert sent[0].startswith("Floyd-Mainchar=[Amazing Hub] I sent you a craft order: ")
+    assert "[Linen Cloak]" in sent[0] and " x2." in sent[0]
+
+
+def test_opened_recipe_lists_its_recipe_and_what_teaches_it():
+    """Round H-b: hub-extra/Materials.lua's two link lines."""
+    lua = _luajit().LuaRuntime()
+    lua.execute("""
+        AmazingHub = {
+            PackLinks = { RecipeLink = function(id) return "|Hspell:" .. id .. "|h[Tailoring: Linen Cloak]|h" end },
+            Compat = { GetItemInfo = function(id) if id == 6270 then return "P", "|Hitem:6270|h[Pattern: Linen Cloak]|h" end end },
+            Wishlist = { catalog = { [7000] = { name = "Plans: Copper Bracers" } } },
+        }
+    """)
+    lua.execute((HUB / "UI" / "Materials.lua").read_text("utf-8"))
+    out = lua.eval("""(function()
+        local M, r = AmazingHub.PackMaterials, {}
+        for _, rec in ipairs({ { recipeId = 2387, recipeItem = 6270 }, { recipeId = 2662, recipeItem = 7000 }, { recipeId = 7418 } }) do
+            local parts = {}
+            for _, e in ipairs(M.RecipeLines(rec)) do parts[#parts + 1] = e.label .. (e.text or e.link) .. (e.link and "*" or "") end
+            r[#r + 1] = table.concat(parts, " / ")
+        end
+        return table.concat(r, " # ")
+    end)()""")
+    a, b, c = out.split(" # ")
+    assert "Recipe: " in a and "[Tailoring: Linen Cloak]" in a and "Learned from: |Hitem:6270|h[Pattern: Linen Cloak]|h*" in a
+    assert "Learned from: Plans: Copper Bracers" in b and not b.endswith("Bracers*")   # not cached: name, no link yet
+    assert "Learned from" not in c                                                       # trainer recipe: nothing to link
 

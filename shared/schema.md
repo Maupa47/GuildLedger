@@ -192,3 +192,38 @@ added_by, added_at)` — wishes entered in Discord.
 
 **Discord → game wishlist string** (`/wish export`): `GLW1:<character>:<itemID>[o],<itemID>[o],…` (`o` = off spec;
 oldest first). The game side needs an import that accepts this line (Amazing Hub has no wishlist import yet).
+
+## 8. Hub data outside the game: professions, guild bank, alt links (PLAN_COMMUNITY phase X, 2026-11-26)
+
+Same source and switch as section 7 (`AmazingHub.lua`, `[loot] enabled`); the same guild keys and guild match.
+Code: `companion/guildledger/hubdata.py` (companion and bot). Upload rows travel in files of their own
+(`…-hub.jsonl.gz`, counted in `rowcount`); a bot before 0.8 counts and ignores them. Deploy the bot first anyway.
+
+**Where the hub keeps it** (`AmazingHubDB["<Guild>-<Realm>"]`):
+
+| Hub data | Fields read |
+|---|---|
+| `professions[<member key>]` | `src` ("addon": the member's hub sent it; "native": only the game's roster), `ts`, `profs[<skill line id>] = {rank, max, spec, recipes = {spell id…}, extra = {…}}` (a native line is `{}`) |
+| `guildBank.tabs[i]` | `name, icon, ts, by, slots[<slot>] = {id, c, l?}` |
+| `guildBank` money | `moneyNow, moneyTs, moneyBy` |
+| `guildBank.ledger[i]` | `k` (tab, 0 = money), `t, ty` (d/w/m; money d/w/r/b/s), `n` (who), `id, c` (item, count), `g` (copper), `t2` (move: other tab) |
+| `altSync.links[<alt key>]` | `main, author, ts, removed?, legacy?` |
+
+A member key is `"<Name>-<Realm>"` (Forever names never hold a hyphen); `member` below is the name before the first
+hyphen in lower case, `name` that name as written.
+
+**Upload rows:**
+
+| `type` | Keys | ID / merge rule |
+|---|---|---|
+| `prof` | `member, name, prof (skill line id), skill, max, spec, recipes [ids], extra [ids], src, seen` | key `(member, prof)`; a newer `seen` (the hub's `ts`) replaces; same `seen`: an `addon` row beats a `native` one |
+| `bank_tab` | `tab, name, t, by, slots [[slot, item, count]…]` | key `tab`; a newer `t` replaces |
+| `bank_money` | `t, copper, by` | one per guild; the newest `t` wins |
+| `bank_log` | `id, k, t, ty, n, item, c, g, t2` | `id = sha1("k\|t\|ty\|n\|item\|c\|g\|t2")[:16]`, the n-th equal line in the ledger `…#n` (two equal deposits in one hour are two lines); insert-if-absent (the hub syncs its ledger, so every client holds the same lines in the same order) |
+| `altlink` | `alt, main, author, t, removed, legacy` | key `alt`; a newer `t` replaces (`removed`: unlinked) |
+
+**Tables** (spool and archive, `guildledger.hubdata.ensure`): `hub_profs(guild, member, prof, name, skill, max, spec,
+recipes JSON, extra JSON, src, seen_at, uploaded)`, `bank_tabs(guild, tab, name, read_at, read_by, slots JSON,
+uploaded)`, `bank_money(guild, read_at, copper, read_by, uploaded)`, `bank_log(guild, id, ts_utc, stream, kind, who,
+item_id, count, copper, tab2, first_collector, uploaded, posted)`, `alt_links(guild, alt, main, author, ts, removed,
+legacy, uploaded)`. Discord use: phase D4 (professions) and D5 (bank); the ledger goes to an officers' channel only.

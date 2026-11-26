@@ -352,6 +352,14 @@ still on 0.6.0 sees no errors.
 
 ### Phase H — Hub changes of our own (on the re-pinned hub)
 
+**Built 2026-11-25 on `repin-140`** (own files in `addon/hub-extra/`: `Windows.lua` H1/H5, `SearchBox.lua` H2,
+`ClearBox.lua` H3, `Links.lua` H7, `Materials.lua` H9, `Joined.lua` H10; `PackTweaks.lua` H6; `SettingsPlus.lua` H2
+index and H4; test `hub_alts.lua` H8). Differences from the text below: H4's switch is in Settings → Interface →
+"Member list" (the roster toolbar has no room), and the sort mixes by default since round U3. H3: "Reset" exists
+for the member list (its search field's "×" clears search, rank and class); the other panels keep their own
+controls. H7: recipes without an item (enchants) are not linked. H9: upstream's order quantity already multiplies
+the materials; only the bank count is new. In-game check: docs/dev/INGAME_TESTS.md "Hub round H".
+
 - **H1 (W11):** `hub-extra/Windows.lua`. The main window and every hub popup are top-level and come to the front
   when shown or clicked (wrap `UI:StylePopup` and the few creators that do not use it; the list comes from U1).
   The game's own dialogs still open above.
@@ -406,6 +414,11 @@ materials, item made) for the bot.
 catalogue item, with its source shown. **C4 Bot:** `/wish add` gets autocomplete from `items.json`.
 
 ### Phase X — Hub data to the server (W8, W9)
+
+**Built 2026-11-26** (`companion/guildledger/hubdata.py`, `shared/schema.md` 8, bot ingest and archive tables;
+tests `companion/tests/test_hubdata.py`, `bot/tests/test_hub_bot.py`). Checked against the admin's real
+AmazingHub.lua locally (counts only, nothing kept): ~1100 profession lines, 1 bank tab, money, 47 ledger lines,
+7 alt links. Equal ledger lines in one hour stay apart (`…#n`). Nothing is posted yet: that is D4 and D5.
 
 `companion/guildledger/hubdata.py`, same pattern as `loot.py` (which stays untouched). Write
 `shared/schema.md` 8 first. Rows, in files of their own (`…-hub.jsonl.gz`):

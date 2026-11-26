@@ -9,6 +9,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from guildledger.hubdata import ROW_TYPES as HUB_TYPES
 from guildledger.loot import ROW_TYPES as LOOT_TYPES
 
 MAX_ATTACHMENT = 1024 * 1024  # companion files are <= 500 KB
@@ -35,6 +36,7 @@ class GuildRows:
     roster: tuple[int, list[dict[str, Any]]] | None = None
     links: list[dict[str, Any]] = field(default_factory=list)
     loot: list[tuple[str, dict[str, Any]]] = field(default_factory=list)  # (type, row), shared/schema.md 7
+    hub: list[tuple[str, dict[str, Any]]] = field(default_factory=list)  # (type, row), shared/schema.md 8
 
 
 def parse_content(content: str) -> Header:
@@ -96,6 +98,8 @@ def decode(data: bytes, header: Header) -> dict[str, GuildRows]:
                 g.roster = (at, members)
         elif kind in LOOT_TYPES:
             g.loot.append((kind, obj))
+        elif kind in HUB_TYPES:
+            g.hub.append((kind, obj))
         else:
             pass  # a newer companion's row type: counted, not used (never reject a whole upload for it)
         count += 1

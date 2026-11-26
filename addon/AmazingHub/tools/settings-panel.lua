@@ -310,7 +310,7 @@ local annotate = find(chat, "check", "Annotate guild chat (class icon, level, al
 check(find(chat, "check", "Class icon").checkbox:IsEnabled(), "with the chat annotated, its parts can be chosen")
 annotate.checkbox.onChanged(annotate.checkbox, false)
 check(AmazingHub.db.chatTweaks.enabled == false and not find(chat, "check", "Class icon").checkbox:IsEnabled()
-  and not find(chat, "check", "Short tag: [M] on a main, [Main] on an alt").checkbox:IsEnabled(),
+  and not find(chat, "check", "Short tag: [M] on a main, the main's name on an alt").checkbox:IsEnabled(),
   "turned off, every part greys out")
 check(find(chat, "check", "Officer chat"), "an officer is offered officer chat")
 
@@ -365,7 +365,7 @@ end
 for _, label in ipairs({ "Show minimap button", "Guild button opens Amazing Hub", "Guild info on item tooltips",
   "Only while holding Shift", "Use the game's font", "Show login digest",
   "Annotate guild chat (class icon, level, alt tag)", "Class icon", "Level", "Alt tag",
-  "Short tag: [M] on a main, [Main] on an alt", "Alert me when my name or a watch-word comes up in chat",
+  "Short tag: [M] on a main, the main's name on an alt", "Alert me when my name or a watch-word comes up in chat",
   "My own name", "Guild chat", "Officer chat", "When somebody calls the officers in guild chat (officers only)",
   "Play a sound", "Tell me when a guildmate posts on the LFG board", "Debug logging",
   "Apply !note requests from guild chat on this client" }) do

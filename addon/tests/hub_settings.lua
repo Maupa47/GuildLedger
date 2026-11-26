@@ -340,4 +340,14 @@ check(mapOpened == 1, "open the world map from Settings")
 AmazingHub:RefreshSettingsPanel(content, "modules")
 check(shown("-  Tabs") and shown("+  Officer tools") and not shown("World map") and not shown("Chat messages"),
   "the modules page folds, and gets none of our sections")
+
+-- the title bar's search reads every page, and the headings and switches of the pages built so far
+local idx, found, pages = AmazingHub.SettingsPlus.Index(), nil, 0
+for _, e in ipairs(idx) do
+  if not e.section and not e.F then pages = pages + 1 end
+  if e.label == "Online members first, whatever column is sorted" then found = e end
+end
+check(pages == 6, "the search lists the six Settings pages")
+check(found and found.page == "interface" and found.section == "Member list" and found.obj ~= nil,
+  "and our switch with its page and section")
 return "ok"

@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-24. Keep this file current when something changes. Overview of the project: [README.md](README.md).
+Last updated: 2026-11-26. Keep this file current when something changes. Overview of the project: [README.md](README.md).
 
 ## What runs right now
 
@@ -34,7 +34,14 @@ then); the bot then holds chat 60 s before posting.
 5. **Re-pin the hub to GuildOS 1.40** (plan phase U): audit done (docs/addon/HUB_AUDIT.md section 10). U2 built on
    branch `repin-140` (HUB_AUDIT 10.11): the tools that act for the player are hidden in the CurseForge pack and
    shown with the developer addon `addon/AmazingHubDev` (admin's own install); saved data copied to the new key.
-   Next: the in-game hub round U3 (docs/dev/INGAME_TESTS.md), then merge into main.
+   Hub rounds U3, U3b done (fixes: whispers to surnames, Bulk "Next" line, tag texts, UI scale 60–140 %, sort
+   mixes online and offline). **Phase H built** on the branch (2026-11-25): windows in front, search box in the
+   title bar, "×" in search fields, roster reset, online-first setting, folded window reopens whole, chat
+   annotation defaults, Shift-click links, alt question tests, bank count beside materials, GuildLedger join
+   dates in the Joined column. Rounds U3c and H passed (2026-11-26) except fixes now waiting for round H-c
+   (H48–H52: item vs recipe links, recipe and "learned from" lines, Reset always shown, order whisper to one
+   crafter). **Phase X built** (hub professions, guild bank and alt links uploaded and archived, shared/schema.md 8);
+   needs the bot deployed before the new companion. Next: D4 (professions in Discord), then merge into main.
    Item catalogue (phase C): `tools/build-catalog.py` → `shared/catalog/` (bot `/wish add` suggestions) and
    `addon/hub-extra/Data/ItemCatalog.lua` (hub wishlist and search, wired in on the branch). Forever has no boss loot data.
 6. GLMeterProbe: run `/glmeter` (M1–M6) so the result can be recorded and the probe removed.

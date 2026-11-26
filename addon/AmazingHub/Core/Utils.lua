@@ -347,6 +347,16 @@ function AmazingHub:WhisperTarget(name)
     return name
 end
 
+-- Amazing Hub: the chat box opened on a whisper to `name`, `text` typed in; the player sends it.
+function AmazingHub:OpenWhisper(name, text)
+    if type(name) ~= "string" or name == "" or not ChatFrame_OpenChat then return false end
+    -- A member key may carry a realm ("First Surname-Realm": craft orders, U3c). Forever names never hold a
+    -- hyphen (LocalMemberKey), and the server finds a guild member by name alone there.
+    if self.Client.has.surnames then name = name:match("^([^-]+)") or name end
+    ChatFrame_OpenChat("/w " .. self:WhisperTarget(name) .. " " .. (text or ""))
+    return true
+end
+
 ----------------------------------------------------------------------
 -- The "No player named" line of our own addon whispers (issue #326).
 -- An addon whisper to somebody who has just logged off makes the client print ERR_CHAT_PLAYER_NOT_FOUND_S in every

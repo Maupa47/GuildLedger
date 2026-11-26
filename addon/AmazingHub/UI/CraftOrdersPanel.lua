@@ -45,7 +45,7 @@ local function itemInfo(id)
 end
 
 local function whisper(key)
-    if ChatFrame_OpenChat then ChatFrame_OpenChat("/w " .. nameOf(key) .. " ") end
+    AmazingHub:OpenWhisper(nameOf(key)) -- Amazing Hub: surname-safe
 end
 
 local STATE_TEXT = {

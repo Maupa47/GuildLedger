@@ -701,6 +701,17 @@ function Compat.TooltipSpell(tooltip)
     if TooltipUtil and TooltipUtil.GetDisplayedSpell then return TooltipUtil.GetDisplayedSpell(tooltip) end
 end
 
+-- Amazing Hub: a spell's chat link (a recipe is a spell), or nil. C_Spell.GetSpellLink is in Forever 1.60.1's
+-- SpellDocumentation; the global GetSpellLink is the older clients'.
+function Compat.SpellLink(spellID)
+    if type(spellID) ~= "number" then return nil end
+    local get = (C_Spell and C_Spell.GetSpellLink) or GetSpellLink
+    if not get then return nil end
+    local ok, link = pcall(get, spellID)
+    if ok and type(link) == "string" and link ~= "" then return link end
+    return nil
+end
+
 function Compat.TooltipUnit(tooltip)
     if tooltip.GetUnit then
         local name, unit = tooltip:GetUnit()
@@ -2301,6 +2312,31 @@ end
 -- guild member. Public channels, SAY, YELL and whispers to strangers are dropped here, at the choke point.
 local GUILD_ONLY = { GUILD = true, OFFICER = true, PARTY = true, RAID = true, RAID_WARNING = true,
     INSTANCE_CHAT = true }
+-- A whisper names a member as /w takes it: on Forever "First-Surname" for "First Surname" (WhisperTarget),
+-- elsewhere "Name" or "Name-Realm". So names are compared without case, spaces and hyphens, against the
+-- roster's names, their member keys and "name-realm" (U3, 2026-11-24: every whisper was dropped before).
+local function squash(s) return (s:lower():gsub("[%s%-]", "")) end
+local members, membersAt = {}, nil
+local function memberSet(force)
+    local t = (GetTime and GetTime()) or 0
+    if membersAt and t - membersAt < (force and 5 or 30) then return members end
+    if not (GetNumGuildMembers and GetGuildRosterInfo) then return members end
+    local n = GetNumGuildMembers() or 0
+    if Compat.IsSecret(n) or n == 0 then return members end
+    local set, realm = {}, GetRealmName and GetRealmName() or nil
+    if Compat.IsSecret(realm) or type(realm) ~= "string" then realm = nil end
+    for i = 1, n do
+        local rn = GetGuildRosterInfo(i)
+        if type(rn) == "string" and rn ~= "" and not Compat.IsSecret(rn) then
+            set[squash(rn)] = true
+            if realm and not rn:find("-", 1, true) then set[squash(rn .. realm)] = true end
+            local ok, key = pcall(AmazingHub.GetPlayerKey, AmazingHub, rn)
+            if ok and type(key) == "string" then set[squash(key)] = true end
+        end
+    end
+    members, membersAt = set, t
+    return members
+end
 function Compat.InOurGuild(name)
     if type(name) ~= "string" or name == "" or Compat.IsSecret(name) then return false end
     if C_GuildInfo and C_GuildInfo.MemberExistsByName then
@@ -2308,7 +2344,9 @@ function Compat.InOurGuild(name)
         if ok and not Compat.IsSecret(yes) and yes then return true end
     end
     local ok, yes = pcall(AmazingHub.IsGuildmate, AmazingHub, name)
-    return ok and yes == true
+    if ok and yes == true then return true end
+    local key = squash(name)
+    return memberSet()[key] == true or memberSet(true)[key] == true
 end
 function Compat.AllowedOutbound(channel, target)
     if GUILD_ONLY[channel] then return true end

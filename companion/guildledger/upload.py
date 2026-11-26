@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from . import discord, loot
+from . import discord, hubdata, loot
 from .store import Spool
 
 log = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ def build_file(guild: str, name: str | None, collector: str, chat: list[dict[str
     for kind, rows in (("chat", chat), ("event", events), ("link", links)):
         for r in rows:
             lines.append(json.dumps({"type": kind, "guild": guild, "collector": collector, **r}, ensure_ascii=False))
-    for kind, r in extra:  # loot data (shared/schema.md 7)
+    for kind, r in extra:  # loot and hub data (shared/schema.md 7, 8)
         lines.append(json.dumps({"type": kind, "guild": guild, "collector": collector, **r}, ensure_ascii=False))
     raw = ("\n".join(lines) + "\n").encode("utf-8")
     return gzip.compress(raw, compresslevel=9, mtime=0)
@@ -94,6 +94,7 @@ class Uploader:
                 res.files += 1
                 res.rows += len(links)
             res.rows += self._loot(guild, name, res)
+            res.rows += self._loot(guild, name, res, hubdata, "hub")  # shared/schema.md 8
             roster = self.spool.pending_roster(guild)
             if roster is not None:
                 data = build_file(guild, name if name != guild else None, self.collector, [], [], roster)
@@ -104,9 +105,10 @@ class Uploader:
                 res.rosters += 1
         return res
 
-    def _loot(self, guild: str, name: str, res: UploadResult) -> int:
-        """Loot rows go in files of their own, so a bot that does not know them yet rejects only those."""
-        rows = loot.pending(self.spool.db, guild)
+    def _loot(self, guild: str, name: str, res: UploadResult, source=loot, tag: str = "loot") -> int:
+        """Loot rows (and hub rows: source=hubdata, tag "hub") go in files of their own, so a bot that does not
+        know them yet rejects only those."""
+        rows = source.pending(self.spool.db, guild)
         sent, i, size = 0, 0, FIRST_CHUNK
         while i < len(rows):
             part = rows[i:i + size]
@@ -115,8 +117,8 @@ class Uploader:
                 size = max(1, size // 2)
                 continue
             stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(self.now()))
-            self.hook.post_file(describe(self.collector, len(part), data), f"gl-{guild}-{stamp}-loot.jsonl.gz", data)
-            loot.mark_uploaded(self.spool.db, guild, part)
+            self.hook.post_file(describe(self.collector, len(part), data), f"gl-{guild}-{stamp}-{tag}.jsonl.gz", data)
+            source.mark_uploaded(self.spool.db, guild, part)
             res.files += 1
             sent += len(part)
             i += len(part)
