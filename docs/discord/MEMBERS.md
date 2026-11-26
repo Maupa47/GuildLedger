@@ -35,6 +35,8 @@ choice removes that menu's roles.
 - right-click a member → **Apps** → **Characters**: all their characters
 - `/chars` your own characters; `/seen`, `/joined`, `/activity` for activity
 - the character forum: one post per member, titled with their main
+- `/craft recipe:` who can craft something and what it takes (start typing, recipes and items are suggested);
+  the profession forum lists every crafter and recipe
 
 ## Pinned post
 

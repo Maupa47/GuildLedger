@@ -437,6 +437,9 @@ still deploy the bot first.
 
 ### Phase D4 — Professions in Discord (W8)
 
+**Built 2026-11-26** (`bot/guildledger_bot/community/crafts.py`, `crafts_ui.py`; the directory's forum bookkeeping
+now serves any forum, `Directory.TABLE`; test `bot/tests/test_crafts.py`). Not deployed, not tried in Discord.
+
 `/setup professions forum:`. One post per profession: the first message lists the crafters with their skill;
 the following messages list recipes somebody knows, grouped, as "Recipe — Name, Name (+3)", edited in place by
 hash. `/craft query:` with autocomplete over recipes and the items they make → who can craft it, last seen, the

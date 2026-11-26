@@ -41,7 +41,9 @@ then); the bot then holds chat 60 s before posting.
    dates in the Joined column. Rounds U3c and H passed (2026-11-26) except fixes now waiting for round H-c
    (H48–H52: item vs recipe links, recipe and "learned from" lines, Reset always shown, order whisper to one
    crafter). **Phase X built** (hub professions, guild bank and alt links uploaded and archived, shared/schema.md 8);
-   needs the bot deployed before the new companion. Next: D4 (professions in Discord), then merge into main.
+   needs the bot deployed before the new companion. **D4 built** (profession forum, `/craft`). **Pack 0.7.0
+   packaged** (`dist\Amazing-Forever-Guild-Pack-0.7.0.zip`, docs/addon/CURSEFORGE.md). Next: upload to CurseForge,
+   merge into main, deploy the bot (then the companion release `v0.7.0`), D5 (guild bank in Discord).
    Item catalogue (phase C): `tools/build-catalog.py` → `shared/catalog/` (bot `/wish add` suggestions) and
    `addon/hub-extra/Data/ItemCatalog.lua` (hub wishlist and search, wired in on the branch). Forever has no boss loot data.
 6. GLMeterProbe: run `/glmeter` (M1–M6) so the result can be recorded and the probe removed.

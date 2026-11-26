@@ -160,6 +160,6 @@ def test_slash_commands_are_registered(tmp_path):
         names = sorted(c.name for c in bot.tree.get_commands())
         await shutdown(bot)
         return names
-    assert asyncio.run(go()) == ["Characters", "activity", "chars", "collector", "dkp", "inactive", "joined", "link",
+    assert asyncio.run(go()) == ["Characters", "activity", "chars", "collector", "craft", "dkp", "inactive", "joined", "link",
                                  "linkapprove", "linkstatus", "loot", "main", "roles", "seen", "setup", "unlink",
                                  "whois", "wish", "wishlist"]

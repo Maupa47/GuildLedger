@@ -31,7 +31,7 @@ DEFAULT_ARMORY = "https://worldofwarcraft.blizzard.com/en-us/forever/eu/armory/c
 BLOCKS = ["A-C", "D-F", "G-I", "J-L", "M-O", "P-R", "S-U", "V-Z", "#"]
 
 _DDL = """
-CREATE TABLE IF NOT EXISTS directory_posts(
+CREATE TABLE IF NOT EXISTS {table}(
   kind TEXT NOT NULL, key TEXT NOT NULL, thread_id INTEGER, message_ids TEXT NOT NULL DEFAULT '[]',
   hash TEXT, updated_at INTEGER, PRIMARY KEY (kind, key));
 """
@@ -123,10 +123,14 @@ HELP_TEXT = ("**Find a character**\n"
 
 
 class Directory:
+    """The character forum. Its bookkeeping (stored, plan, done, forget) serves any forum the bot keeps up to date:
+    a subclass sets TABLE and its own wanted() (crafts.CraftForum, D4)."""
+    TABLE = "directory_posts"
+
     def __init__(self, archive: Archive, now=time.time):
         self.a, self.now = archive, now
         self.db = archive.db
-        self.db.executescript(_DDL)
+        self.db.executescript(_DDL.format(table=self.TABLE))
 
     # ------------------------------------------------------------------ what the forum should show
 
@@ -180,7 +184,7 @@ class Directory:
     def stored(self) -> dict[tuple[str, str], dict[str, Any]]:
         return {(r["kind"], r["key"]): {"thread_id": r["thread_id"], "message_ids": json.loads(r["message_ids"]),
                                          "hash": r["hash"]}
-                for r in self.db.execute("SELECT * FROM directory_posts")}
+                for r in self.db.execute(f"SELECT * FROM {self.TABLE}")}
 
     def plan(self, posts: list[Post], limit: int = WRITES_PER_ROUND) -> list[Write]:
         """Writes for posts whose hash changed, new posts and posts no longer wanted; at most `limit`.
@@ -204,16 +208,16 @@ class Directory:
         """Record a write Discord confirmed."""
         with self.db:
             if w.action == "delete":
-                self.db.execute("DELETE FROM directory_posts WHERE kind=? AND key=?", (w.kind, w.key))
+                self.db.execute(f"DELETE FROM {self.TABLE} WHERE kind=? AND key=?", (w.kind, w.key))
                 return
-            self.db.execute("INSERT OR REPLACE INTO directory_posts VALUES(?,?,?,?,?,?)",
+            self.db.execute(f"INSERT OR REPLACE INTO {self.TABLE} VALUES(?,?,?,?,?,?)",
                             (w.kind, w.key, thread_id, json.dumps(message_ids or []), w.post.hash,
                              int(self.now())))
 
     def forget(self, kind: str, key: str) -> None:
         """The post was deleted in Discord: make it again next round."""
         with self.db:
-            self.db.execute("DELETE FROM directory_posts WHERE kind=? AND key=?", (kind, key))
+            self.db.execute(f"DELETE FROM {self.TABLE} WHERE kind=? AND key=?", (kind, key))
 
     def thread_of_user(self, user_id: int) -> int | None:
         r = self.db.execute("SELECT thread_id FROM directory_posts WHERE kind='user' AND key=?",

@@ -105,6 +105,14 @@ def register_setup(bot: "LedgerBot") -> None:
                             " 10 at a time. Tip: create forum tags named after the classes (Warrior, Mage, …);"
                             " posts get their main's class tag.") if forum else "Directory off (posts stay).")
 
+    @setup.command(name="professions", description="The forum with one post per profession: crafters and recipes")
+    @app_commands.describe(forum="A forum channel; members should not be able to post there. Empty: off")
+    async def professions(inter: dpy.Interaction, forum: dpy.ForumChannel | None = None):
+        await save("professions.forum", forum.id if forum else None)
+        await reply(inter, (f"Professions: {forum.mention}. One post per profession appears within 10 minutes,"
+                            " 10 at a time, and is kept up to date. Members look things up with /craft.")
+                    if forum else "Profession forum off (posts stay).")
+
     @setup.command(name="armory", description="Armory address with {name}; empty = no armory links")
     async def armory(inter: dpy.Interaction, url: str | None = None):
         if url and "{name}" not in url:
@@ -180,6 +188,7 @@ def register_setup(bot: "LedgerBot") -> None:
             f" {esc(s.get('addon.url')) if s.get('addon.url') else 'none'}",
             f"**Nicknames:** {'main character' if s.get('nickname', bot.cfg.set_nickname) else 'left alone'}",
             f"**First link announced in:** {ch('announce.channel')}",
+            f"**Profession forum:** {ch('professions.forum')}",
             f"**Directory forum:** {ch('directory.forum')}; armory: "
             + ("off" if s.get("armory.url") == "" else f"`{s.get('armory.url') or 'EU default'}`"),
         ]

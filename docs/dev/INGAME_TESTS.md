@@ -642,3 +642,16 @@ Order: deploy the bot first (`.\tools\deploy.ps1`), then run the companion from 
 | X3 | `/reload` again without changes | no new "hub:" line with numbers above 0, no new upload for it |
 
 Result: (pending)
+
+## Professions in Discord (D4, bot 0.7.0) — after deploying the bot and a collector running the 0.7.0 companion
+
+| # | Do | Expect |
+|---|---|---|
+| P1 | make a forum #professions (members cannot post), `/setup professions forum:#professions` | "Professions: #professions …"; `/setup show` lists it |
+| P2 | wait up to 10 minutes (a big guild: a few rounds) | a help post and one post per profession: crafters with skill and "seen …", then "Recipes known in the guild" |
+| P3 | a member learns a recipe, `/reload`, the companion uploads; wait 10 minutes | that profession's post is edited in place (no new post), the recipe line names them |
+| P4 | `/craft` and type `linen` | suggestions; "known in the guild" ones first |
+| P5 | pick one | recipe, profession, skill, what it makes, materials, crafters with last seen; only you see the answer |
+
+Result: (pending)
+

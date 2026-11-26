@@ -106,6 +106,11 @@ only the roles of that menu, never any other role. Roles with moderator permissi
   is the default (decision 11); an empty `url` switches the links off. Only characters level 10 and up get one.
   Names with a special letter (ä, é, …) get none until such a name has been checked once.
 - Members choose their main with `/main character:` (else the highest level counts).
+- **Profession forum (0.7.0):** `/setup professions forum:#professions` (a forum nobody but the bot posts in;
+  the bot needs the same rights there as in the character forum). One post per profession: the crafters with
+  their skill and last seen, then every recipe someone in the guild knows ("Recipe - Name, Name (+3)"), kept up
+  to date every 10 minutes. The data comes from Amazing Hub through the collectors' companions, so it needs the
+  0.7.0 bot deployed first and a collector who runs the 0.7.0 companion. Members look things up with `/craft`.
 
 ## 6. Checklist
 
@@ -115,6 +120,7 @@ only the roles of that menu, never any other role. Roles with moderator permissi
 - [ ] `/roles verified`, `/roles rank …`
 - [ ] `/setup rolemenu preset …`, `/setup rolemenu post`
 - [ ] `/setup directory`
+- [ ] Profession forum (members cannot post), `/setup professions`
 - [ ] Remove *Change Nickname* from the member roles if nicknames should stay equal to the main
 - [ ] Pin the text from [MEMBERS.md](MEMBERS.md) section "Pinned post"
 

@@ -23,19 +23,6 @@ async def armory_template(bot: "LedgerBot") -> str:
 
 async def directory_round(bot: "LedgerBot") -> int:
     """One round (every 10 minutes): work out the wanted posts, write what changed. Returns the writes done."""
-    forum_id = await bot._db(bot._settings.get_int, "directory.forum", 0)
-    if not forum_id:
-        return 0
-    forum = bot.get_channel(forum_id)
-    if forum is None:
-        try:
-            forum = await bot.fetch_channel(forum_id)
-        except dpy.DiscordException as e:
-            log.error("directory forum %s: %s", forum_id, e)
-            return 0
-    if not isinstance(forum, dpy.ForumChannel):
-        log.error("directory: channel %s is not a forum", forum_id)
-        return 0
     template = await armory_template(bot)
 
     def plan():
@@ -46,19 +33,38 @@ async def directory_round(bot: "LedgerBot") -> int:
                 mains[uid] = m["guid"]
         return bot._directory.plan(bot._directory.wanted(template, bot.cfg.grace_days, mains))
 
+    return await forum_round(bot, "directory.forum", bot._directory, plan, "directory")
+
+
+async def forum_round(bot: "LedgerBot", setting: str, planner, plan, label: str) -> int:
+    """A forum the bot keeps up to date (the directory, the profession forum): the channel from `setting`,
+    the writes from `plan()` (run in the worker pool), applied and recorded through `planner`."""
+    forum_id = await bot._db(bot._settings.get_int, setting, 0)
+    if not forum_id:
+        return 0
+    forum = bot.get_channel(forum_id)
+    if forum is None:
+        try:
+            forum = await bot.fetch_channel(forum_id)
+        except dpy.DiscordException as e:
+            log.error("%s forum %s: %s", label, forum_id, e)
+            return 0
+    if not isinstance(forum, dpy.ForumChannel):
+        log.error("%s: channel %s is not a forum", label, forum_id)
+        return 0
     writes = await bot._db(plan)
     done = 0
     tags = {t.name.lower(): t for t in forum.available_tags}
     for w in writes:
         try:
-            await _apply(bot, forum, tags, w)
+            await _apply(bot, forum, tags, w, planner)
             done += 1
         except dpy.Forbidden as e:
-            log.error("directory: Discord refused a write (needs Create Posts, Send Messages in Threads, Manage"
-                      " Threads in the forum): %s", e)
+            log.error("%s: Discord refused a write (needs Create Posts, Send Messages in Threads, Manage"
+                      " Threads in the forum): %s", label, e)
             break
         except dpy.DiscordException as e:
-            log.warning("directory: %s %s/%s failed: %s", w.action, w.kind, w.key, e)
+            log.warning("%s: %s %s/%s failed: %s", label, w.action, w.kind, w.key, e)
     return done
 
 
@@ -72,12 +78,13 @@ async def _thread(bot: "LedgerBot", thread_id: int) -> dpy.Thread | None:
     return t if isinstance(t, dpy.Thread) else None
 
 
-async def _apply(bot: "LedgerBot", forum: dpy.ForumChannel, tags: dict, w: Write) -> None:
+async def _apply(bot: "LedgerBot", forum: dpy.ForumChannel, tags: dict, w: Write, planner=None) -> None:
+    planner = planner or bot._directory
     if w.action == "delete":
         t = await _thread(bot, w.thread_id) if w.thread_id else None
         if t is not None:
             await t.delete()
-        await bot._db(bot._directory.done, w)
+        await bot._db(planner.done, w)
         return
     p = w.post
     applied = [tags[p.tag.lower()]] if p.tag and p.tag.lower() in tags else []
@@ -93,7 +100,7 @@ async def _apply(bot: "LedgerBot", forum: dpy.ForumChannel, tags: dict, w: Write
                 await made.thread.edit(pinned=True)
             except dpy.DiscordException:
                 pass
-        await bot._db(bot._directory.done, w, made.thread.id, ids)
+        await bot._db(planner.done, w, made.thread.id, ids)
         return
     if t.archived or t.name != p.title or {x.id for x in t.applied_tags} != {x.id for x in applied}:
         await t.edit(archived=False, name=p.title, applied_tags=applied)
@@ -113,4 +120,4 @@ async def _apply(bot: "LedgerBot", forum: dpy.ForumChannel, tags: dict, w: Write
             await t.get_partial_message(extra).delete()
         except dpy.DiscordException:
             pass
-    await bot._db(bot._directory.done, w, t.id, ids[:len(p.messages)])
+    await bot._db(planner.done, w, t.id, ids[:len(p.messages)])
