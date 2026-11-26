@@ -462,6 +462,9 @@ still opens no listening port (`CLAUDE.md` 7.5 stands).
 
 ### Phase D7 — Bots (W10)
 
+**Built** with the 0.7.0 community work (`community/counters.py`, SERVER.md section 7); 2026-11-26: a second
+`/setup counters` moves the existing channels instead of making another pair, `/setup show` lists them.
+
 Section 9 goes into `docs/discord/SERVER.md` as the admin's checklist. Only one optional feature is built:
 `/setup counters category:` keeps channel names such as "Guild members: N" and "Linked: N" current (a change at
 most every 15 minutes), for the case that ServerStats is removed.

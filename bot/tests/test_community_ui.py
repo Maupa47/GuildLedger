@@ -131,6 +131,13 @@ def test_counter_names():
     assert names({"members": 512, "linked": 140}) == {"members": "Guild members: 512", "linked": "Linked: 140"}
 
 
+def test_counters_set_up_twice_make_no_second_pair():
+    from guildledger_bot.community.counters import plan_setup
+    assert plan_setup({}, set()) == ({}, ["members", "linked"])
+    assert plan_setup({"members": 1, "linked": 2}, {1, 2, 3}) == ({"members": 1, "linked": 2}, [])
+    assert plan_setup({"members": 1, "linked": 2}, {2}) == ({"linked": 2}, ["members"])   # one deleted by hand
+
+
 # ------------------------------------------------------------------------------------------- forum
 
 class FakeThread(dpy.Thread):

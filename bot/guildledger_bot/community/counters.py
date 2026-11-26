@@ -26,21 +26,34 @@ def names(status: dict) -> dict[str, str]:
     return {"members": f"Guild members: {status['members']}", "linked": f"Linked: {status['linked']}"}
 
 
+def plan_setup(stored: dict, existing: set[int]) -> tuple[dict[str, int], list[str]]:
+    """Which counter channels to keep (they still exist: moved, not made again) and which kinds to make."""
+    keep = {k: int(v) for k, v in (stored or {}).items() if k in KINDS and int(v) in existing}
+    return keep, [k for k in KINDS if k not in keep]
+
+
 async def setup_counters(bot: "LedgerBot", category: dpy.CategoryChannel) -> str:
+    """Make the counter channels in `category`; a second run moves the existing ones there instead of making a
+    second pair."""
     guild = category.guild
-    status = await bot._db(bot._links.status)
-    want = names(status)
+    want = names(await bot._db(bot._links.status))
     locked = {guild.default_role: dpy.PermissionOverwrite(connect=False, view_channel=True)}
-    made = {}
+    stored = await bot.setting("counters.channels") or {}
+    keep, make = plan_setup(stored, {c.id for c in guild.channels})
     try:
-        for kind in KINDS:
+        for kind, cid in keep.items():
+            ch = guild.get_channel(cid)
+            if ch is not None and ch.category_id != category.id:
+                await ch.edit(category=category, reason="GuildLedger counters")
+        for kind in make:
             ch = await guild.create_voice_channel(want[kind], category=category, overwrites=locked,
                                                   reason="GuildLedger counters")
-            made[kind] = ch.id
+            keep[kind] = ch.id
     except dpy.Forbidden:
-        return "I need *Manage Channels* in that category to make the counter channels."
-    await bot._db(bot._settings.set, "counters.channels", made)
-    return "Counter channels made: " + ", ".join(f"<#{i}>" for i in made.values()) + ". They update every 15 minutes."
+        return "I need *Manage Channels* in that category to make or move the counter channels."
+    await bot._db(bot._settings.set, "counters.channels", keep)
+    return ("Counter channels: " + ", ".join(f"<#{keep[k]}>" for k in KINDS if k in keep)
+            + ". They update every 15 minutes. To remove them, delete the two channels in Discord.")
 
 
 async def counters_round(bot: "LedgerBot") -> int:

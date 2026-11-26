@@ -209,6 +209,9 @@ def register_setup(bot: "LedgerBot") -> None:
             f"**First link announced in:** {ch('announce.channel')}",
             f"**Profession forum:** {ch('professions.forum')}",
             f"**Guild bank:** {ch('bank.channel')}; ledger (officers): {ch('bank.ledger')}",
+            "**Counter channels:** " + (", ".join(f"<#{i}>" for i in s["counters.channels"].values())
+                                        if isinstance(s.get("counters.channels"), dict) and s["counters.channels"]
+                                        else "not set"),
             f"**Directory forum:** {ch('directory.forum')}; armory: "
             + ("off" if s.get("armory.url") == "" else f"`{s.get('armory.url') or 'EU default'}`"),
         ]
