@@ -447,6 +447,10 @@ materials. Names come from `shared/catalog/recipes.json`; an unknown ID is shown
 
 ### Phase D5 — Guild bank in Discord (W9)
 
+**Built 2026-11-26** (`bot/guildledger_bot/community/bank.py`, `bank_ui.py`; item names for anything in the bank
+from `shared/catalog/names.json`, new output of `tools/build-catalog.py`; test `bot/tests/test_bank.py`). Not
+deployed, not tried in Discord.
+
 `/setup bank channel: [ledger_channel:]`. One message per tab, edited in place: items by name with counts, when
 and by whom it was read; the money. `/bank item:` with autocomplete → how many, in which tab. Ledger lines (who
 put in or took out what) go only to the ledger channel, which should be officers only.

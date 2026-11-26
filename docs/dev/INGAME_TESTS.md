@@ -655,3 +655,15 @@ Result: (pending)
 
 Result: (pending)
 
+## Guild bank in Discord (D5, bot 0.7.0) — after deploying the bot and a collector running the 0.7.0 companion
+
+| # | Do | Expect |
+|---|---|---|
+| G1 | channels #guild-bank (members read only) and #bank-ledger (officers only); `/setup bank channel:#guild-bank ledger_channel:#bank-ledger` | the answer names both, no warning; `/setup show` lists them |
+| G2 | a member with Amazing Hub opens the guild bank in game, `/reload`; the companion uploads; wait 5 minutes | #guild-bank: a gold message and one message per tab with item names and counts, "Read … by …" |
+| G3 | someone deposits or takes something, opens the bank again, `/reload`; wait 5 minutes | the tab's message is edited (no new message); #bank-ledger gets the new line(s), e.g. "**Name** deposited 20x Linen Cloth (Mats)" |
+| G4 | `/bank` and type `lin` | suggestions with counts; pick one: how many in which tab, read when |
+| G5 | `/setup bank` with a ledger channel everyone can see | the answer warns that the ledger should be officers only |
+
+Result: (pending)
+

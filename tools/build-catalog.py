@@ -10,6 +10,7 @@ Writes:
     addon/hub-extra/Data/ItemCatalog.lua   items players may wish for (equippable, uncommon or better), Forever only
     shared/catalog/items.json              the same items, for the bot (/wish add autocomplete)
     shared/catalog/recipes.json            profession recipes: spell, name, profession, materials, item made
+    shared/catalog/names.json              every item's English name by ID, for the bot (bank, materials)
 
     python tools/build-catalog.py [--build 1.60.1.71037] [--cache DIR]
 
@@ -135,6 +136,10 @@ def main(argv: list[str] | None = None) -> int:
     meta = {"build": args.build, "source": "wago.tools exports of Blizzard game data"}
     (cat / "items.json").write_text(json.dumps({**meta, "items": items}, ensure_ascii=False, separators=(",", ":")),
                                     "utf-8", newline="\n")
+    names = {num(r["ID"]): (r.get("Display_lang") or "").strip() for r in t["ItemSparse"]
+             if (r.get("Display_lang") or "").strip()}
+    (cat / "names.json").write_text(json.dumps({**meta, "names": {str(k): v for k, v in sorted(names.items())}},
+                                               ensure_ascii=False, separators=(",", ":")), "utf-8", newline="\n")
     (cat / "recipes.json").write_text(json.dumps({**meta, "recipes": recipes}, ensure_ascii=False,
                                                  separators=(",", ":")), "utf-8", newline="\n")
     print(f"build {args.build}: {len(items)} items ({len(lua) // 1024} KB Lua), {len(recipes)} recipes")

@@ -37,6 +37,8 @@ choice removes that menu's roles.
 - the character forum: one post per member, titled with their main
 - `/craft recipe:` who can craft something and what it takes (start typing, recipes and items are suggested);
   the profession forum lists every crafter and recipe
+- `/bank item:` how many of an item the guild bank holds, and in which tab (names are suggested); the bank
+  channel shows everything in it
 
 ## Pinned post
 

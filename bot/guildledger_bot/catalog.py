@@ -23,7 +23,7 @@ def _dirs() -> list[Path]:
     return out
 
 
-def _load(name: str, key: str) -> list[dict]:
+def _load(name: str, key: str):
     for d in _dirs():
         f = d / name
         if f.is_file():
@@ -44,9 +44,16 @@ def recipes() -> list[dict]:
     return _load("recipes.json", "recipes")
 
 
+@lru_cache(maxsize=1)
+def names() -> dict[int, str]:
+    """Every item's name by ID (names.json): materials, crafted goods, anything in the guild bank."""
+    raw = _load("names.json", "names")
+    return {int(k): v for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+
 def name_of(item_id: int) -> str | None:
     i = items().get(int(item_id))
-    return i["name"] if i else None
+    return i["name"] if i else names().get(int(item_id))
 
 
 QUALITY = {2: "uncommon", 3: "rare", 4: "epic", 5: "legendary"}

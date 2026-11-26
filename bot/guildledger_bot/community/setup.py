@@ -113,6 +113,25 @@ def register_setup(bot: "LedgerBot") -> None:
                             " 10 at a time, and is kept up to date. Members look things up with /craft.")
                     if forum else "Profession forum off (posts stay).")
 
+    @setup.command(name="bank", description="Where the guild bank is shown, and the officers' ledger channel")
+    @app_commands.describe(channel="A channel for the bank's contents (one message per tab). Empty: off",
+                           ledger_channel="An officers-only channel for who put in or took out what. Empty: off")
+    async def bank(inter: dpy.Interaction, channel: dpy.TextChannel | None = None,
+                   ledger_channel: dpy.TextChannel | None = None):
+        await save("bank.channel", channel.id if channel else None)
+        await save("bank.ledger", ledger_channel.id if ledger_channel else None)
+        lines = [f"Bank: {channel.mention}, one message per tab, edited in place within 5 minutes." if channel
+                 else "Bank channel off (messages stay)."]
+        if ledger_channel:
+            everyone = inter.guild.default_role if inter.guild else None
+            public = everyone is not None and ledger_channel.permissions_for(everyone).view_channel
+            lines.append(f"Ledger: {ledger_channel.mention}; new lines only (earlier ones are archived, not posted)."
+                         + (" **Warning:** everyone can see that channel; the ledger should be officers only."
+                            if public else ""))
+        else:
+            lines.append("Ledger off.")
+        await reply(inter, "\n".join(lines))
+
     @setup.command(name="armory", description="Armory address with {name}; empty = no armory links")
     async def armory(inter: dpy.Interaction, url: str | None = None):
         if url and "{name}" not in url:
@@ -189,6 +208,7 @@ def register_setup(bot: "LedgerBot") -> None:
             f"**Nicknames:** {'main character' if s.get('nickname', bot.cfg.set_nickname) else 'left alone'}",
             f"**First link announced in:** {ch('announce.channel')}",
             f"**Profession forum:** {ch('professions.forum')}",
+            f"**Guild bank:** {ch('bank.channel')}; ledger (officers): {ch('bank.ledger')}",
             f"**Directory forum:** {ch('directory.forum')}; armory: "
             + ("off" if s.get("armory.url") == "" else f"`{s.get('armory.url') or 'EU default'}`"),
         ]

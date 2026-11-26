@@ -111,6 +111,12 @@ only the roles of that menu, never any other role. Roles with moderator permissi
   their skill and last seen, then every recipe someone in the guild knows ("Recipe - Name, Name (+3)"), kept up
   to date every 10 minutes. The data comes from Amazing Hub through the collectors' companions, so it needs the
   0.7.0 bot deployed first and a collector who runs the 0.7.0 companion. Members look things up with `/craft`.
+- **Guild bank (0.7.0):** `/setup bank channel:#guild-bank ledger_channel:#bank-ledger`. The bank channel gets one
+  message for the gold and one per tab (items by name with counts, when and by whom it was read), edited in
+  place every 5 minutes; members should only read it. The ledger channel (who put in or took out what) must be
+  **officers only**: the bot warns when everyone can see it, and posts only lines that arrive after it was set.
+  The bot needs Send Messages and Read Message History in both. The picture comes from Amazing Hub: it is as
+  new as the last time a member with the hub opened the bank. Members ask with `/bank item:`.
 
 ## 6. Checklist
 
@@ -121,6 +127,7 @@ only the roles of that menu, never any other role. Roles with moderator permissi
 - [ ] `/setup rolemenu preset …`, `/setup rolemenu post`
 - [ ] `/setup directory`
 - [ ] Profession forum (members cannot post), `/setup professions`
+- [ ] Bank channel (read only for members) and an officers-only ledger channel, `/setup bank`
 - [ ] Remove *Change Nickname* from the member roles if nicknames should stay equal to the main
 - [ ] Pin the text from [MEMBERS.md](MEMBERS.md) section "Pinned post"
 

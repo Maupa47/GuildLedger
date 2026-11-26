@@ -19,7 +19,8 @@ from discord import app_commands
 from .collection import collectors, ingest
 from .collection.ops import Ops
 from .collection.post import make_loot_poster, make_poster, post_loot_once, post_once
-from .community import commands, counters, crafts_ui, directory_ui, onboarding_ui, roles, rolemenus_ui, setup
+from .community import bank_ui, commands, counters, crafts_ui, directory_ui, onboarding_ui, roles, rolemenus_ui, setup
+from .community.bank import Board
 from .community.crafts import CraftForum
 from .community.directory import Directory
 from .community.link import Links
@@ -56,10 +57,12 @@ class LedgerBot(dpy.Client):
         self._menus: RoleMenus | None = None
         self._directory: Directory | None = None
         self._crafts: CraftForum | None = None
+        self._bank: Board | None = None
         self._owner_nick_logged: set[int] = set()
         self._menu_refusal_logged = False
         self._directory_at = 0.0
         self._crafts_at = 0.0
+        self._bank_at = 0.0
         self._counters_at = 0.0
         self._hooks: dict[int, str] = dict(cfg.collectors)  # webhook ID -> collector name (config + registry)
         self.tree = app_commands.CommandTree(self)
@@ -87,12 +90,14 @@ class LedgerBot(dpy.Client):
             self._menus = RoleMenus(self._archive)
             self._directory = Directory(self._archive)
             self._crafts = CraftForum(self._archive)
+            self._bank = Board(self._archive)
         await self._db(open_archive)
         await self.refresh_collectors()
         commands.register(self)
         collectors.register(self)
         setup.register_setup(self)
         crafts_ui.register_crafts(self)
+        bank_ui.register_bank(self)
         self.add_dynamic_items(commands.LinkButton, collectors.PackageButton, onboarding_ui.VerifyButton,
                                onboarding_ui.PickButton, onboarding_ui.CodeButton, rolemenus_ui.RoleSelect)
         if not self.once:
@@ -149,6 +154,7 @@ class LedgerBot(dpy.Client):
                 await self._link_round()
                 await self._directory_round()
                 await self._crafts_round()
+                await self._bank_round()
                 await counters.counters_round(self)
             except Exception:  # noqa: BLE001 - keep the loop alive; the next round retries
                 log.exception("posting round failed")
@@ -194,6 +200,15 @@ class LedgerBot(dpy.Client):
         n = await crafts_ui.crafts_round(self)
         if n:
             log.info("professions: %d forum write(s)", n)
+
+    async def _bank_round(self) -> None:
+        """Guild bank (D5): every 5 minutes, the tab messages edited in place and new ledger lines."""
+        if time.monotonic() - self._bank_at < 300:
+            return
+        self._bank_at = time.monotonic()
+        n = await bank_ui.bank_round(self)
+        if n:
+            log.info("bank: %d write(s)", n)
 
     async def ops_line(self, text: str) -> None:
         """One line to #gl-ops when configured (never raises)."""
