@@ -1,4 +1,4 @@
-"""The guild bank in Discord (docs/dev/PLAN_COMMUNITY.md D5), from the hub data the collectors upload (bank_tabs,
+"""The guild bank in Discord (docs/dev/archive/PLAN_COMMUNITY.md D5), from the hub data the collectors upload (bank_tabs,
 bank_money, bank_log; shared/schema.md 8) and the item catalogue for names.
 
 Pure logic, no Discord: what the bank channel shows (`Board.wanted`: one message per tab, items by name with

@@ -1,4 +1,4 @@
-"""Discord roles and nickname of linked members (decision 5, docs/dev/PACK_PLAN.md): /roles and sync_roles."""
+"""Discord roles and nickname of linked members (decision 5, docs/dev/archive/PACK_PLAN.md): /roles and sync_roles."""
 
 from __future__ import annotations
 

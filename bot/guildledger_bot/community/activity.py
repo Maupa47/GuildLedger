@@ -1,4 +1,4 @@
-"""Activity (docs/dev/PACK_PLAN.md section 11): /seen, /joined, /activity, /inactive. Counts and times only, never
+"""Activity (docs/dev/archive/PACK_PLAN.md section 11): /seen, /joined, /activity, /inactive. Counts and times only, never
 message text. "Last seen online" comes from the newest roster snapshot that showed the member online, so it
 is approximate (as good as the times a collector was online)."""
 

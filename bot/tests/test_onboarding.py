@@ -1,4 +1,4 @@
-"""D1 bot check and welcome (docs/dev/PLAN_COMMUNITY.md). No Discord."""
+"""D1 bot check and welcome (docs/dev/archive/PLAN_COMMUNITY.md). No Discord."""
 
 import random
 

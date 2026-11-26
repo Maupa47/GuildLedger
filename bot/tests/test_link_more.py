@@ -1,4 +1,4 @@
-"""D1 link additions (docs/dev/PLAN_COMMUNITY.md): /main, /link approve, "!link CODE" in guild chat, masking."""
+"""D1 link additions (docs/dev/archive/PLAN_COMMUNITY.md): /main, /link approve, "!link CODE" in guild chat, masking."""
 
 from guildledger.discord import chat_line, mask_link_code
 from guildledger_bot.community.link import CHAT_CODE_TTL, Links

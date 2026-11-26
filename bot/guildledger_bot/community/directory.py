@@ -1,4 +1,4 @@
-"""Character directory (docs/dev/PLAN_COMMUNITY.md D3): every guild character listed in a Discord forum.
+"""Character directory (docs/dev/archive/PLAN_COMMUNITY.md D3): every guild character listed in a Discord forum.
 
 Pure logic, no Discord: what each forum post should say (`wanted`), and which writes bring the forum there
 (`plan`). The Discord side (client) applies at most WRITES_PER_ROUND writes per round and stores each post's

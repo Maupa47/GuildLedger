@@ -1,4 +1,4 @@
-"""The three parts stay apart (docs/dev/PLAN_COMMUNITY.md 3): collection/ never imports from community/."""
+"""The three parts stay apart (docs/dev/archive/PLAN_COMMUNITY.md 3): collection/ never imports from community/."""
 
 import ast
 from pathlib import Path

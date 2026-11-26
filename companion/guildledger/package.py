@@ -4,7 +4,7 @@ Two uses, one builder:
 - unpersonalised (`config_text=None`): `GuildLedger-companion.zip`, published with every release and
   fetched by update.py. Holds nothing personal.
 - personalised: the same files plus a ready `config.toml` for one officer. The bot builds it for
-  `/collector invite` (bot/guildledger_bot/collectors.py) and hands it to that officer only.
+  `/collector invite` (bot/guildledger_bot/collection/collectors.py) and hands it to that officer only.
 """
 
 from __future__ import annotations

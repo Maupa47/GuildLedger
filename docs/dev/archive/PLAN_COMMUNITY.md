@@ -2,13 +2,14 @@
 
 Revision 3, 2026-11-24: decision 9 answered: Linked Roles are not built; phase D6 dropped.
 Revision 2, 2026-11-24: decisions 1, 4, 8 and 11 answered by the admin (section 4), armory address confirmed.
-Revision 1, 2026-11-24. Extends `CLAUDE.md` and `docs/dev/PACK_PLAN.md`; it replaces neither.
+Archived 2026-11-26: all phases built (pack and bot 0.7.0). Decisions: docs/dev/DECISIONS.md; what is still to check in game: docs/dev/INGAME_TESTS.md.
+Revision 1, 2026-11-24. Extends `CLAUDE.md` and `docs/dev/archive/PACK_PLAN.md`; it replaces neither.
 Checked against this repository at commit `f68542a` (pack 0.6.0; `pytest addon/tests companion/tests bot/tests`:
 270 passed, 1 skipped because `vendor-ref/GuildOS` is not checked out) and against upstream GuildOS **1.40.0**
 (commit `1f9fa9d4d9b9c9bd0b4061e4dbfd1dde940235fb`, 2026-11-23).
 
 You (Claude Code) are extending the project in three directions at once: a Discord sign-up and community side,
-a newer guild window, and a clearer repository. Save this file as `docs/dev/PLAN_COMMUNITY.md` and read it whole,
+a newer guild window, and a clearer repository. Save this file as `docs/dev/archive/PLAN_COMMUNITY.md` and read it whole,
 then `CLAUDE.md`, `STATUS.md`, `shared/schema.md`, `docs/dev/API_FINDINGS.md` and `docs/addon/HUB_AUDIT.md`.
 Sections 4 and 5 are hard constraints. One phase per session; stop after each phase as section 5 rule 10 says.
 
@@ -141,22 +142,7 @@ GuildLedger; what the hub already syncs and shows stays in the hub.
 
 ## 4. Decisions the admin must make
 
-Ask each at the phase named; until answered use the default and say so in `STATUS.md`.
-
-| # | Question | Default | Phase |
-|---|---|---|---|
-| 1 | Which role does the bot check give (the role Pandez gives today)? In which channel is the Verify button? | **Answered:** keep the two roles Pandez Guard set up, the one members get after the check and the one for bots. The admin renames the members' role; a rename keeps the role's ID, so channel permissions stay. `/setup gate role:` points at that role; the bots' role is not touched. Channel: the one Pandez uses today (assumed, confirm at D1) | D1 |
-| 2 | Nickname: "Firstname Surname" of the main, or first name only? | whole name | D1 |
-| 3 | Interest list | Raids, Dungeons, PvP, Levelling, Crafting, Social | D2 |
-| 4 | Language list (which languages get a role) | **Answered:** all major European languages; the list is in D2 | D2 |
-| 5 | Who may see other members' characters (right-click, forum)? | everyone with the linked-member role | D3 |
-| 6 | Joined column for officers only (as upstream), or for every member (then the dates must also be synced to members' clients: extra work)? | officers | H10 |
-| 7 | Which new upstream features that act for the player stay on (section 2 item 4)? | all off | U |
-| 8 | Alt tag rule: shown only when the member chose a tag text or linked the alts themselves; a link only an officer entered shows no tag. Correct? | **Answered:** yes; revised 2026-11-24: both count the same (U1 found they cannot be told apart) | H6 |
-| 9 | Linked Roles need a public web address on the server. Build it? | **Answered:** no. Not built: the nickname and the Characters command cover it, and the bot keeps opening no listening port | — |
-| 10 | Which bots to remove (section 9) | none removed by us | D7 |
-| 11 | Open your own character on the EU armory and paste the address | **Answered:** template `https://worldofwarcraft.blizzard.com/en-us/forever/eu/armory/character/{name}` (section 2 item 13) | D3 |
-| 12 | A public line "X joined, main Y" after the first link: which channel? | none | D1 |
+Moved to [docs/dev/DECISIONS.md](../DECISIONS.md) (section "Community plan, pack 0.7").
 
 ## 5. Rules (additions to `CLAUDE.md` 10 and `PACK_PLAN.md` 5, which all stay)
 

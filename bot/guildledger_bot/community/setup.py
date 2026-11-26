@@ -1,6 +1,6 @@
 """/setup: bot settings an admin changes in Discord (Manage Server). Saved in the archive (settings.py).
 
-docs/dev/PLAN_COMMUNITY.md 5.5: config.toml keeps only secrets and what the process needs to start.
+docs/dev/archive/PLAN_COMMUNITY.md 5.5: config.toml keeps only secrets and what the process needs to start.
 """
 
 from __future__ import annotations

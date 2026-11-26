@@ -1,4 +1,4 @@
--- API: the bridge for other addons, the global GuildLedgerAPI (docs/dev/PACK_PLAN.md section 8; Amazing Hub's Ledger tab).
+-- API: the bridge for other addons, the global GuildLedgerAPI (docs/dev/archive/PACK_PLAN.md section 8; Amazing Hub's Ledger tab).
 -- Everything returned is a fresh plain table (strings, numbers, booleans): callers cannot reach our data.
 -- The only calls that change anything are the settings switches (map, messages, collector role) and RequestLink (the same as the /gl map commands
 -- and /gl link CODE, but without a chat line).

@@ -1,4 +1,4 @@
-"""Discord link (docs/dev/PACK_PLAN.md section 10): characters <-> Discord users. Pure database logic, no Discord.
+"""Discord link (docs/dev/archive/PACK_PLAN.md section 10): characters <-> Discord users. Pure database logic, no Discord.
 
 Flow: /link gives the Discord user a one-time code -> in game `/gl link CODE` -> a collector records it ->
 upload -> `process()` checks it and opens a *confirmation* for that Discord user -> only the user's click

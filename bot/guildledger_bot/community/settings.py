@@ -1,6 +1,6 @@
 """Bot settings an admin changes in Discord (/setup ...), kept in the archive's `state` table.
 
-Rule (docs/dev/PLAN_COMMUNITY.md 5.5): config.toml keeps only secrets and what the process needs to start;
+Rule (docs/dev/archive/PLAN_COMMUNITY.md 5.5): config.toml keeps only secrets and what the process needs to start;
 everything else is set live. A setting not made in Discord falls back to the given default (often config.toml).
 Pure database logic, no Discord.
 """

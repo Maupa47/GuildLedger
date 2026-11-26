@@ -1,4 +1,4 @@
-"""D3 character directory (docs/dev/PLAN_COMMUNITY.md). No Discord. Synthetic names only."""
+"""D3 character directory (docs/dev/archive/PLAN_COMMUNITY.md). No Discord. Synthetic names only."""
 
 import random
 

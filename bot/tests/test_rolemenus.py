@@ -1,4 +1,4 @@
-"""D2 role menus (docs/dev/PLAN_COMMUNITY.md). No Discord."""
+"""D2 role menus (docs/dev/archive/PLAN_COMMUNITY.md). No Discord."""
 
 import pytest
 

@@ -28,7 +28,7 @@ NO_MENTIONS = {"parse": []}
 USER_AGENT = "GuildLedger-Companion/0.1 (python urllib)"
 
 NO_TEXT = "*(text not captured)*"
-# "!link CODE" typed in guild chat links a character to Discord (bot, docs/dev/PLAN_COMMUNITY.md D1): the log
+# "!link CODE" typed in guild chat links a character to Discord (bot, docs/dev/archive/PLAN_COMMUNITY.md D1): the log
 # channels never show the code.
 LINK_CODE = re.compile(r"(?i)^(\s*!link\s+)\S+")
 

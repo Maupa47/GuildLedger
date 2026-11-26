@@ -49,14 +49,28 @@ that is not yours. `/unlink` in Discord removes the link.
 
 A guild window with:
 
-- **Roster** with last seen, alts and ranks
-- **Professions**: every member's professions and known recipes, and who can craft an item (`/amazing craft <item>`)
+- **Search everything** in the title bar: members, recipes, items, the guild bank, settings and tabs as you type.
+  Click a line to go there (Enter opens the marked one); Shift + click links an item into chat.
+  `/amazing search <text>` opens it with the text filled in.
+- **Roster** with last seen, alts and ranks. Sorting by a column mixes online and offline members (*Settings →
+  Interface → Member list* to keep online members first); **Reset** puts rank, class, search and sort back.
+- **Crafts**: every member's professions and known recipes, and who can craft an item (`/amazing craft <item>`).
+  An opened recipe shows its materials (times the quantity you order), how many the guild bank holds, the
+  recipe itself and what teaches it (plans, pattern, formula ...). Shift + click links the item, an enchant's
+  recipe, or the plans. **Craft orders**: send one to everyone or to one crafter, who then also gets a whisper.
+- **Bank**: the guild bank's contents from the last member with the hub who opened it.
 - **Guild**: calendar, activity, polls
 - **Ledger**: what GuildLedger is doing and the Discord link box
 - **Settings**: every section folds open and closed; *Chat messages* switches the pack's chat lines on (off by
   default: the pack stays quiet, only answers to your own commands and clicks show); *World map* has the map switches and the look of the guild
-  members' dots: round or square, size, outline, a colour per class
+  members' dots: round or square, size, outline, a colour per class; *Chat → Guild chat* sets the tag others see
+  in front of your guild chat lines ("My own tag"); *Interface → UI scale* from 60 % to 140 %.
 - **Raids, Loot, Trials**: off by default; tick them in *Settings → Modules* if your guild uses them
+
+Shift + click links items from any hub list (materials, wishlists, loot, search results). Every search field has
+an × to empty it. A hub window comes to the front when it opens or is clicked; a window closed while folded to
+its bar opens full size again. Guild chat shows each member's level and alt tag in front of their lines (on by
+default; *Settings → Chat*).
 
 The window looks like the game's own windows (**Classic**); *Settings → Interface style* switches to a flat
 **Modern** look (or `/amazing style modern`). `/amazing help` lists all commands.
@@ -71,8 +85,9 @@ officer switches them on.
 Collectors are the officers whose PCs send the guild log to Discord. That needs two things that are not part
 of this download:
 
-1. In game: `/gl collector on`, then `/reload`. The addon then also reads the guild chat history, tracks joins,
-   leaves and kicks, and asks members for lines it missed.
+1. In game: *Settings → Profile → Collector (officers)* in the hub (or `/gl collector on`), then `/reload`. The
+   addon then also reads the guild chat history, tracks joins, leaves and kicks, and asks members for lines it
+   missed.
 2. The **GuildLedger companion** (a small program for your PC) and your personal upload link. Ask your guild's
    GuildLedger admin for the collector package; it contains a step-by-step guide (`COLLECTOR.md`).
 

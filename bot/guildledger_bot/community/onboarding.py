@@ -1,4 +1,4 @@
-"""Sign-up in Discord (docs/dev/PLAN_COMMUNITY.md D1): the bot check behind the Verify button and the welcome.
+"""Sign-up in Discord (docs/dev/archive/PLAN_COMMUNITY.md D1): the bot check behind the Verify button and the welcome.
 
 Pure database logic, no Discord. A click on Verify gives a small task: five buttons in random order, the text
 names one. The right answer stays here (table gate_tasks), never in a button's id: the buttons only carry their

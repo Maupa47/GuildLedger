@@ -1,4 +1,4 @@
-"""Role menus (docs/dev/PLAN_COMMUNITY.md D2): interest and language roles a member picks from a panel.
+"""Role menus (docs/dev/archive/PLAN_COMMUNITY.md D2): interest and language roles a member picks from a panel.
 
 Pure database logic, no Discord. One group = one multi-select on the panel (at most 25 entries). A member's
 selection adds and removes only roles registered in that group, never any other role. Language roles from the

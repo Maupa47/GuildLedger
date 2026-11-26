@@ -45,7 +45,7 @@ collector upload.
 | `docs/addon/` | 1 | player README (shipped in the zip), CurseForge text and publishing, how the hub is built (`HUB_AUDIT.md`) |
 | `docs/collection/` | 2 | admin guide (the officer guide `COLLECTOR.md` is in `companion/`, it ships in every package) |
 | `docs/discord/` | 3 | the server admin guide (`SERVER.md`) and the members' guide (`MEMBERS.md`) |
-| `docs/dev/` | — | development notes: measured game behaviour, in-game test checklists, the plans (`PACK_PLAN.md`, `PLAN_COMMUNITY.md`) |
+| `docs/dev/` | — | development notes: measured game behaviour, in-game test checklists, every admin decision (`DECISIONS.md`), finished plans (`archive/`) |
 | `STATUS.md` | — | what runs right now and what is next |
 | `CLAUDE.md` | — | full specification and rules (for Claude Code) |
 

@@ -1,6 +1,7 @@
 # Combined guild addon — build instructions for Claude Code (Phases 8–14)
 
 Revision 2, 2026-11-13 (decisions and corrections in section 0; they override the rest).
+Archived 2026-11-26: finished (packs 0.4.0 to 0.6.0). The decisions are in docs/dev/DECISIONS.md.
 Revision 1, 2026-11-13. Extends `CLAUDE.md`; it does not replace it.
 Working names: package **Amazing**, hub folder **AmazingHub** (rename freely, see section 3).
 
@@ -13,28 +14,7 @@ section 5 lists the only intended changes; everything else in `CLAUDE.md` still 
 
 ## 0. Revision 2 — decisions taken and corrections (overrides sections 1–14 where they differ)
 
-**Decisions by the admin (2026-11-13)**
-- **Name:** CurseForge project **"Amazing Forever Guild Pack"** (under review). The addon folder stays
-  `GuildLedger`, its SavedVariables `GuildLedgerDB`, its slash command `/gl`: nothing to rename, no
-  `sv_path` changes for collectors.
-- **No fork for now (decision 3).** Map, Discord link and activity are built **inside GuildLedger**. The hub
-  (GuildOS fork, sections 7–8) is postponed; decide after the new modules run. Members who want the hub's
-  features can install GuildOS itself from CurseForge next to the pack.
-- **Version 0.4.0** for the first pack release (GuildLedger is already 0.3.0).
-- **Testing:** the in-game relay check is not a precondition any more (section 2); relay, map, link and
-  activity are tested together in one combined test round when the modules are built.
-- **2026-11-14:** licence **MIT** (decision 2, `LICENSE`). Decision 5: linked guild members get the existing
-  Discord role **guild-member**; rank roles are many and change (and use emojis), so the bot reads the server's
-  roles and the guild ranks and officers set the mapping with `/roles` in Discord (saved in the archive, not in
-  config.toml); nicknames: decided later (left alone). Decision 6: map sharing **on by default** with
-  `/gl map share off` (overrides rule 8 "opt-in" for the map; positions are still never stored or uploaded).
-  Decision 4 (GuildOS courtesy) and 7 (hub chat behaviour) only matter with a fork.
-- **2026-11-14, decision 3 revised: fork GuildOS after all** (the admin wants its guild window: professions,
-  recipes, recipe browser, roster). Phase 8 audit: docs/addon/HUB_AUDIT.md. Hub decisions: folder `AmazingHub`, title
-  "Amazing Hub", slash `/amazing`; chat-posting features **off, officers can enable** (decision 7); the hub's own
-  guild chat log, roster log and map are **off** - GuildLedger's are used (bridge in Phase 10); the admin contacts the
-  GuildOS author before publishing (decision 4). Sections 7–8 (Phase 9 fork, Phase 10 bridge) apply again; pack
-  version with the hub: 0.5.0.
+**Decisions by the admin (2026-11-13 and 14)**: moved to [docs/dev/DECISIONS.md](../DECISIONS.md) (section "Pack 0.4–0.5").
 
 **Corrections**
 1. **Roster data must reach the server** before link and activity can work: today collectors upload chat

@@ -46,4 +46,4 @@ choice removes that menu's roles.
 > press **Get my link code** in the bot's message (or type `/link`), then in WoW type `/gl link CODE`
 > (with the Amazing Forever Guild Pack) or write `!link CODE` in guild chat. Confirm in the bot's message.
 > Your nickname and rank role follow by themselves. Roles: #pick-roles. Find someone: `/whois`, or right-click →
-> Apps → Characters.
+> Apps → Characters. Who can craft something: `/craft`. What the guild bank holds: `/bank`.

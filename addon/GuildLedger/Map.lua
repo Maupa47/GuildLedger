@@ -1,4 +1,4 @@
--- Map (docs/dev/PACK_PLAN.md section 9): guild members who share their position, as dots on the world map.
+-- Map (docs/dev/archive/PACK_PLAN.md section 9): guild members who share their position, as dots on the world map.
 -- Demand-driven, so an idle guild sends nothing (budget in shared/schema.md 5):
 --   V mapID        a viewer: "my world map shows this map" (while it is open, at most every 30 s)
 --   P mapID x y    a sharer: "I am here" (x, y 0..9999) - only while a V for their map or a parent map was

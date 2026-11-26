@@ -1,4 +1,4 @@
-"""Counter channels (docs/dev/PLAN_COMMUNITY.md D7): channel names such as "Guild members: 512", "Linked: 140",
+"""Counter channels (docs/dev/archive/PLAN_COMMUNITY.md D7): channel names such as "Guild members: 512", "Linked: 140",
 kept current for the case that ServerStats is removed. `/setup counters category:` makes two locked voice
 channels in that category; a round renames them when the number changed, at most every 15 minutes (Discord
 allows only two renames of a channel per 10 minutes). Needs Manage Channels in that category only.

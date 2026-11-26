@@ -1,4 +1,4 @@
-"""Professions in Discord (docs/dev/PLAN_COMMUNITY.md D4): who can craft what, from the hub data the collectors
+"""Professions in Discord (docs/dev/archive/PLAN_COMMUNITY.md D4): who can craft what, from the hub data the collectors
 upload (hub_profs, shared/schema.md 8) and the recipe catalogue (shared/catalog/recipes.json).
 
 Pure logic, no Discord: the forum posts (`CraftForum.wanted`, one per profession, kept up to date through the

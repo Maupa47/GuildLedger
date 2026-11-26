@@ -1,4 +1,4 @@
-"""Build addon/AmazingHub from a GuildOS checkout (docs/addon/HUB_AUDIT.md section 7, docs/dev/PACK_PLAN.md Phase 9).
+"""Build addon/AmazingHub from a GuildOS checkout (docs/addon/HUB_AUDIT.md section 7, docs/dev/archive/PACK_PLAN.md Phase 9).
 
     python tools/rebrand-hub.py [--src vendor-ref/GuildOS] [--out addon/AmazingHub] [--any-commit]
 

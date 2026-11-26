@@ -311,7 +311,7 @@ function S.PruneMember(clubId, now)
 end
 
 ---------------------------------------------------------------------------------------------------
--- Discord link requests heard by a collector (schema 3; docs/dev/PACK_PLAN.md section 10)
+-- Discord link requests heard by a collector (schema 3; docs/dev/archive/PACK_PLAN.md section 10)
 ---------------------------------------------------------------------------------------------------
 
 -- row = { id, t, k = "link"|"alt", code?, tag, n = sender, g = GUID if known }. Returns true when new.

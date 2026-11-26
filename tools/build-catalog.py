@@ -1,4 +1,4 @@
-"""Item and recipe catalogue for WoW: Forever (docs/dev/PLAN_COMMUNITY.md phase C, W20).
+"""Item and recipe catalogue for WoW: Forever (docs/dev/archive/PLAN_COMMUNITY.md phase C, W20).
 
 Source: Blizzard's game tables as exported by wago.tools (product `wowf`), one CSV per table:
     https://wago.tools/db2/<Table>/csv?build=<build>
