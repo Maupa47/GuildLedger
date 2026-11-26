@@ -96,6 +96,33 @@ Made by **Maupa**. Amazing Hub is based on the MIT-licensed guild addon *GuildOS
 Licence: MIT (see `LICENSE.txt` and `AmazingHub/THIRD_PARTY.md`).
 ```
 
+## Changelog for 0.7.0
+
+```
+Amazing Hub, rebuilt on the newest version of its base (big update):
+- Search box in the title bar ("Search everything"): members, recipes, items, bank, settings and tabs
+  as you type. Click a line to go there; Enter opens the marked line; Shift + click links an item.
+- Crafts: an opened recipe shows how many of each material the guild bank holds, the recipe itself and
+  what teaches it (plans, pattern, formula ...). Shift + click links the item, the recipe or the plans.
+- Craft orders: send an order to one crafter and they also get a whisper telling them about it.
+- Members list: a Reset button (rank, class, search and sort back to normal); sorting by a column mixes
+  online and offline members (Settings -> Interface -> Member list to keep online first).
+- Every search field has an x to empty it. Windows of the hub come to the front when opened or clicked.
+- A window closed while folded to the bar opens full size again.
+- Shift + click links items from materials, wishlists, loot and search results into chat.
+- Guild chat annotation on by default: level and alt tag, no class icon (once; your own choice stays).
+  Set your own tag in Settings -> Chat -> Guild chat ("My own tag").
+- UI scale from 60 % to 140 %.
+- Whispers from the hub (warnings, add-on reminders, order notes) now reach members with a surname.
+- The officers' Joined column also uses GuildLedger's earlier join dates (marked ~).
+- Your saved hub data is carried over to the new format automatically.
+
+GuildLedger:
+- The login greeting with the message of the day comes 30 seconds after login.
+- Guild members' dots on the world map move more often and glide.
+- Join dates worked out from a member's first guild chat line.
+```
+
 ## Changelog for 0.6.0
 
 ```

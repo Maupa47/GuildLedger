@@ -1,5 +1,5 @@
 ----------------------------------------------------------------------
--- Amazing Hub - how many of each material the guild bank holds (Amazing Forever Guild Pack 0.8.0; our own file)
+-- Amazing Hub - how many of each material the guild bank holds (Amazing Forever Guild Pack 0.7.0; our own file)
 --
 -- H9 (PLAN_COMMUNITY W19). The opened recipe (UI/CraftOrdersPanel.lua CreateCraftDetail) already multiplies its
 -- materials by the order's quantity ("MATERIALS × N", the - and + buttons) and shows "have / need" from the

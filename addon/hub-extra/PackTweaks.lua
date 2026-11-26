@@ -88,7 +88,7 @@ for _, name in ipairs({ "CreateButton", "CreateCheckbox" }) do
 end
 
 ----------------------------------------------------------------------
--- Guild chat annotation defaults (0.8.0, H6 / PLAN_COMMUNITY W16): once per guild's saved data, marked with
+-- Guild chat annotation defaults (0.7.0, H6 / PLAN_COMMUNITY W16): once per guild's saved data, marked with
 -- settings.packChatDefaults = 1: annotation on, class icon off, level on, alt tag on. What the player changes
 -- afterwards is kept. Applied just before ChatTweaks starts, which reads `enabled` once at login.
 ----------------------------------------------------------------------

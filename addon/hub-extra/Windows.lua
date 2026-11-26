@@ -1,5 +1,5 @@
 ----------------------------------------------------------------------
--- Amazing Hub - windows in front, folded window reopens whole (Amazing Forever Guild Pack 0.8.0; our own file)
+-- Amazing Hub - windows in front, folded window reopens whole (Amazing Forever Guild Pack 0.7.0; our own file)
 --
 -- H1 (PLAN_COMMUNITY W11): the main window and every hub popup are top-level: a click on one brings it to the
 -- front of the others in its layer, and each comes to the front when it is shown. Popups styled through

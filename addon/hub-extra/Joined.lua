@@ -1,5 +1,5 @@
 ----------------------------------------------------------------------
--- Amazing Hub - join dates from GuildLedger (Amazing Forever Guild Pack 0.8.0; our own file, not upstream)
+-- Amazing Hub - join dates from GuildLedger (Amazing Forever Guild Pack 0.7.0; our own file, not upstream)
 --
 -- H10 (PLAN_COMMUNITY W21). The hub's member history (Modules/MemberHistory.lua, officers only) knows when a
 -- member joined only when an officer's hub saw it. GuildLedger knows more (GuildLedgerAPI.GetJoined, G4): its

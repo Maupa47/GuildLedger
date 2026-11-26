@@ -1,5 +1,5 @@
 ----------------------------------------------------------------------
--- Amazing Hub - Shift + click links an item into chat everywhere in the hub (Amazing Forever Guild Pack 0.8.0;
+-- Amazing Hub - Shift + click links an item into chat everywhere in the hub (Amazing Forever Guild Pack 0.7.0;
 -- our own file, not upstream)
 --
 -- H7 (PLAN_COMMUNITY W17). Upstream already links on Shift + click in the bank, Professions, Recipes and craft

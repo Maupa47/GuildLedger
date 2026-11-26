@@ -1,5 +1,5 @@
 ----------------------------------------------------------------------
--- Amazing Hub - a craft order sent to one crafter also whispers them (Amazing Forever Guild Pack 0.8.0; our own
+-- Amazing Hub - a craft order sent to one crafter also whispers them (Amazing Forever Guild Pack 0.7.0; our own
 -- file, not upstream)
 --
 -- Asked by the admin in round H-b (2026-11-26). An order goes to the guild's crafters through the hub

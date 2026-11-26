@@ -84,7 +84,7 @@ local function recordSections(F)
         self.__amzHeads[#self.__amzHeads + 1] = { title = title, first = first, row = #self.rows, fs = fs }
         return fs
     end
-    -- and every switch with its label, for the title bar's search (0.8.0, SearchBox.lua)
+    -- and every switch with its label, for the title bar's search (0.7.0, SearchBox.lua)
     local check = Form.Check
     if type(check) == "function" then
         Form.Check = function(self, label, ...)
@@ -99,7 +99,7 @@ local function recordSections(F)
 end
 
 ----------------------------------------------------------------------
--- What Settings holds, for the title bar's search (0.8.0, SearchBox.lua): every page, and on each page built
+-- What Settings holds, for the title bar's search (0.7.0, SearchBox.lua): every page, and on each page built
 -- so far its section headings and switches. Plus.Reveal opens one: the page, its section, scrolled to it,
 -- and the line blinks.
 ----------------------------------------------------------------------
@@ -256,7 +256,7 @@ function Plus.BuildCollector(F)
 end
 
 ----------------------------------------------------------------------
--- Member list (0.8.0, H4): a column sort mixes online and offline members unless this is on
+-- Member list (0.7.0, H4): a column sort mixes online and offline members unless this is on
 -- (tools/rebrand-hub.py patches UI/RosterFrame.lua's sort to read the setting).
 ----------------------------------------------------------------------
 function Plus.BuildRoster(F)

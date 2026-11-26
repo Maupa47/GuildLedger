@@ -1,5 +1,5 @@
 ----------------------------------------------------------------------
--- Amazing Hub - a search box in the title bar with results as you type (Amazing Forever Guild Pack 0.8.0;
+-- Amazing Hub - a search box in the title bar with results as you type (Amazing Forever Guild Pack 0.7.0;
 -- our own file, not upstream)
 --
 -- H2 (PLAN_COMMUNITY W12). The title bar's Search button becomes a box. Typing two letters or more opens a list

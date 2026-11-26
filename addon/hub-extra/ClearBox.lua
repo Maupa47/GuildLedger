@@ -1,6 +1,6 @@
 ----------------------------------------------------------------------
 -- Amazing Hub - "×" to clear a search, and one click back to the whole member list (Amazing Forever Guild Pack
--- 0.8.0; our own file, not upstream)
+-- 0.7.0; our own file, not upstream)
 --
 -- H3 (PLAN_COMMUNITY W13). Every one-line field with a grey hint text (UI:CreateInput with `placeholder`: the
 -- search fields) shows an "×" at its right end while it holds text; a click empties it, which runs the field's
